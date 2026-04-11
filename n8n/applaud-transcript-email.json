@@ -1,0 +1,255 @@
+{
+  "name": "Applaud — Summarize transcript & email",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Applaud → Claude → Email\n\nThis flow receives Applaud webhook events, filters for `transcript_ready`, summarizes the transcript with Claude, and emails the result.\n\n**Before running:**\n1. Open the **Config** node and edit the values (recipient, sender, model, subject prefix).\n2. Assign an **Anthropic API** credential to the *Summarize with Claude* node.\n3. Assign an **SMTP** credential to the *Email Summary* node.\n4. Activate the workflow and copy the webhook URL into Applaud's Settings → Webhook.",
+        "height": 320,
+        "width": 420
+      },
+      "id": "579202dd-15e0-43f4-99a5-d42cc59fa39e",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -336,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Edit me ⬆️\n\nAll user-editable variables live in this one **Config** node. Downstream nodes read from it — you don't need to open every node to change the recipient, sender, model, or subject.",
+        "height": 200,
+        "width": 280
+      },
+      "id": "3c835fe1-741f-4f07-aff8-5f6261e9f14d",
+      "name": "Edit me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        336,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "applaud",
+        "options": {}
+      },
+      "id": "461deda0-ece9-4ddc-ad20-9cfe6d8a2b2e",
+      "name": "Applaud Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        144,
+        368
+      ],
+      "webhookId": "8a7b6c5d-1234-5678-90ab-cdef12345678"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-1",
+              "name": "recipient_email",
+              "value": "you@example.com",
+              "type": "string"
+            },
+            {
+              "id": "cfg-2",
+              "name": "from_email",
+              "value": "applaud@example.com",
+              "type": "string"
+            },
+            {
+              "id": "cfg-3",
+              "name": "subject_prefix",
+              "value": "[Applaud]",
+              "type": "string"
+            },
+            {
+              "id": "cfg-4",
+              "name": "claude_model",
+              "value": "claude-sonnet-4-6",
+              "type": "string"
+            },
+            {
+              "id": "cfg-5",
+              "name": "max_summary_tokens",
+              "value": 4096,
+              "type": "number"
+            },
+            {
+              "id": "cfg-6",
+              "name": "summarize_prompt",
+              "value": "Summarize the following meeting/voice-memo transcript in 3–5 concise bullet points, then end with a one-sentence takeaway. Use markdown.",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "b9e5531c-4f89-4229-97f8-2e94d06b2bdf",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        368,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "transcript_ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "cond-2",
+              "leftValue": "={{ $json.body.content?.transcript_text }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c1a11376-5957-483c-b467-297480c332c3",
+      "name": "Is Transcript Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        608,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.claude_model, max_tokens: $json.max_summary_tokens, messages: [{ role: 'user', content: $json.summarize_prompt + \"\\n\\n---\\n\\n\" + $json.body.content.transcript_text }] }) }}",
+        "options": {}
+      },
+      "id": "4cccfca8-aeca-40a4-a36c-551c3c84f8c1",
+      "name": "Summarize with Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        848,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').item.json.from_email }}",
+        "toEmail": "={{ $('Config').item.json.recipient_email }}",
+        "subject": "={{ $('Config').item.json.subject_prefix }} {{ $('Applaud Webhook').item.json.body.recording.filename }}",
+        "emailFormat": "text",
+        "text": "={{ $json.content[0].text }}\n\n---\nRecording: {{ $('Applaud Webhook').item.json.body.recording.filename }}\nDuration (ms): {{ $('Applaud Webhook').item.json.body.recording.duration_ms }}\nAudio: {{ $('Applaud Webhook').item.json.body.http_urls.audio }}\nTranscript: {{ $('Applaud Webhook').item.json.body.http_urls.transcript }}\nSummary: {{ $('Applaud Webhook').item.json.body.http_urls.summary }}",
+        "options": {}
+      },
+      "id": "b5f18508-a7ec-45dd-a907-27dcf238d753",
+      "name": "Email Summary",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1088,
+        288
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Applaud Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Is Transcript Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Transcript Ready?": {
+      "main": [
+        [
+          {
+            "node": "Summarize with Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize with Claude": {
+      "main": [
+        [
+          {
+            "node": "Email Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

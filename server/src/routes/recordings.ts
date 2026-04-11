@@ -1,0 +1,94 @@
+import { Router } from "express";
+import { readFileSync, existsSync, rmSync } from "node:fs";
+import path from "node:path";
+import {
+  listRecordingRows,
+  getRecordingById,
+  deleteRecording,
+} from "../sync/state.js";
+import { loadConfig } from "../config.js";
+import type { RecordingDetail } from "@applaud/shared";
+
+export const recordingsRouter = Router();
+
+recordingsRouter.get("/", (req, res) => {
+  const limit = Number(req.query.limit ?? 100);
+  const offset = Number(req.query.offset ?? 0);
+  const search = typeof req.query.search === "string" ? req.query.search : undefined;
+  const result = listRecordingRows({ limit, offset, ...(search ? { search } : {}) });
+  res.json(result);
+});
+
+recordingsRouter.get("/:id", (req, res) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({ error: "missing id" });
+    return;
+  }
+  const row = getRecordingById(id);
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const cfg = loadConfig();
+  const base = cfg.recordingsDir ?? "";
+
+  let transcriptText: string | null = null;
+  let summaryMarkdown: string | null = null;
+  let metadata: Record<string, unknown> | null = null;
+
+  try {
+    if (row.transcriptPath) {
+      const txtPath = path.join(path.dirname(row.transcriptPath), "transcript.txt");
+      if (existsSync(txtPath)) transcriptText = readFileSync(txtPath, "utf8");
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (row.summaryPath && existsSync(row.summaryPath)) {
+      summaryMarkdown = readFileSync(row.summaryPath, "utf8");
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (row.metadataPath && existsSync(row.metadataPath)) {
+      metadata = JSON.parse(readFileSync(row.metadataPath, "utf8")) as Record<string, unknown>;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const detail: RecordingDetail = {
+    ...row,
+    transcriptText,
+    summaryMarkdown,
+    metadata,
+  };
+  res.json({ recording: detail, mediaBase: `/media/${encodeURI(row.folder)}`, recordingsDir: base });
+});
+
+recordingsRouter.delete("/:id", (req, res) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({ error: "missing id" });
+    return;
+  }
+  const row = getRecordingById(id);
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const cfg = loadConfig();
+  if (cfg.recordingsDir) {
+    const folder = path.join(cfg.recordingsDir, row.folder);
+    try {
+      rmSync(folder, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+  deleteRecording(id);
+  res.json({ ok: true });
+});

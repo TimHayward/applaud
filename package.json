@@ -1,0 +1,23 @@
+{
+  "name": "applaud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted server that mirrors Plaud recordings to local disk and triggers webhooks on new uploads.",
+  "type": "module",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -n web,srv -c cyan,magenta \"pnpm -C web dev\" \"pnpm -C server dev\"",
+    "build": "pnpm -C shared build && pnpm -C web build && pnpm -C server build",
+    "start": "pnpm build && node server/dist/index.js",
+    "start:nobuild": "node server/dist/index.js",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "typescript": "^5.6.0"
+  }
+}
