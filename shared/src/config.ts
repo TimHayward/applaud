@@ -31,6 +31,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   recordingsDir: null,
   webhook: null,
   pollIntervalMinutes: 10,
-  bind: { host: "127.0.0.1", port: 7528 },
+  bind: { host: "127.0.0.1", port: 44471 },
   lanToken: null,
 };

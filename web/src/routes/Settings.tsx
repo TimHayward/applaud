@@ -2,6 +2,19 @@ import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
 
+function formatRelative(ts: number | null): string {
+  if (!ts) return "never";
+  const diff = Date.now() - ts;
+  if (diff < 10_000) return "just now";
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return `${Math.floor(diff / 3_600_000)}h ago`;
+}
+
+function daysUntil(epochSec: number): number {
+  return Math.max(0, Math.ceil((epochSec * 1000 - Date.now()) / (1000 * 60 * 60 * 24)));
+}
+
 export function Settings(): JSX.Element {
   const qc = useQueryClient();
   const cfg = useQuery({ queryKey: ["config"], queryFn: api.config });
@@ -63,69 +76,102 @@ export function Settings(): JSX.Element {
     }
   };
 
+  const s = syncStatus.data;
+  const isHealthy = s && !s.authRequired && !s.lastError;
+
   return (
-    <div className="max-w-3xl space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-on-surface">Settings</h1>
+    <div className="max-w-[48rem] mx-auto space-y-8">
+      {/* Page Header */}
+      <div className="space-y-2 mb-12">
+        <h1 className="text-5xl font-extrabold tracking-tighter text-on-surface">Configuration</h1>
+        <p className="text-on-surface-variant">Manage your local ingestion engine and cloud synchronization.</p>
       </div>
 
-      <section className="card p-6">
-        <h2 className="font-semibold text-on-surface font-label">Sync status</h2>
-        <dl className="mt-4 grid grid-cols-2 gap-y-3 text-sm">
-          <dt className="text-on-surface-variant">Last poll</dt>
-          <dd className="text-on-surface">
-            {syncStatus.data?.lastPollAt
-              ? new Date(syncStatus.data.lastPollAt).toLocaleString()
-              : "never"}
-          </dd>
-          <dt className="text-on-surface-variant">Pending transcripts</dt>
-          <dd className="text-on-surface">{syncStatus.data?.pendingTranscripts ?? 0}</dd>
-          <dt className="text-on-surface-variant">Errors (24h)</dt>
-          <dd className="text-on-surface">{syncStatus.data?.errorsLast24h ?? 0}</dd>
-          {syncStatus.data?.lastError && (
-            <>
-              <dt className="text-on-surface-variant">Last error</dt>
-              <dd className="text-error">{syncStatus.data.lastError}</dd>
-            </>
-          )}
-          {syncStatus.data?.authRequired && (
-            <>
-              <dt className="text-on-surface-variant">Auth</dt>
-              <dd className="text-error">Token expired or revoked — re-authenticate</dd>
-            </>
-          )}
-        </dl>
+      {/* Sync Status */}
+      <section className="bg-surface-container-low rounded-xl p-8 transition-all hover:bg-surface-container">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className={`w-2.5 h-2.5 rounded-full ${isHealthy ? "bg-secondary shadow-[0_0_8px_rgba(157,223,46,0.4)]" : "bg-error shadow-[0_0_8px_rgba(255,180,171,0.4)]"}`} />
+              <span className="font-label text-xs font-bold tracking-widest uppercase text-secondary">
+                {isHealthy ? "All systems operational" : s?.authRequired ? "Auth required" : "Error detected"}
+              </span>
+            </div>
+            <div>
+              <h2 className="text-3xl font-bold tracking-tight text-on-surface">Sync Status</h2>
+              <p className="text-on-surface-variant text-sm mt-1">Real-time health of your local applaud instance.</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 w-full md:w-auto">
+            <div className="bg-surface-container-highest/50 border border-outline-variant/20 p-4 rounded-lg">
+              <p className="font-label text-[10px] text-on-surface-variant uppercase tracking-widest mb-1">Last poll</p>
+              <p className="font-bold text-lg text-on-surface">{formatRelative(s?.lastPollAt ?? null)}</p>
+            </div>
+            <div className="bg-surface-container-highest/50 border border-outline-variant/20 p-4 rounded-lg">
+              <p className="font-label text-[10px] text-on-surface-variant uppercase tracking-widest mb-1">Pending</p>
+              <p className="font-bold text-lg text-tertiary">
+                {s?.pendingTranscripts ?? 0} transcript{(s?.pendingTranscripts ?? 0) !== 1 ? "s" : ""}
+              </p>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <section className="card p-6">
-        <h2 className="font-semibold text-on-surface font-label">Account</h2>
-        <dl className="mt-4 space-y-2 text-sm">
-          <div className="flex justify-between">
-            <dt className="text-on-surface-variant">Signed in as</dt>
-            <dd className="text-on-surface">{c.tokenEmail ?? "unknown"}</dd>
+      {/* Account Details */}
+      <section className="card p-8 space-y-6">
+        <div className="flex items-center gap-3">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+          <h2 className="text-xl font-bold text-on-surface">Account Details</h2>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-2">
+            <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Email Address</label>
+            <div className="bg-surface-container-low rounded-lg p-4 text-on-surface text-sm">
+              {c.tokenEmail ?? "unknown"}
+            </div>
           </div>
-          <div className="flex justify-between">
-            <dt className="text-on-surface-variant">Token expires</dt>
-            <dd className="text-on-surface">
-              {c.tokenExp ? new Date(c.tokenExp * 1000).toLocaleDateString() : "—"}
-            </dd>
+          <div className="space-y-2">
+            <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Token Expiration</label>
+            <div className="bg-surface-container-highest/50 border border-outline-variant/20 rounded-lg p-4 flex items-center justify-between">
+              <span className="text-sm text-on-surface">
+                {c.tokenExp ? `Expires in ${daysUntil(c.tokenExp)} days` : "—"}
+              </span>
+            </div>
           </div>
-          <div className="flex justify-between">
-            <dt className="text-on-surface-variant">Recordings folder</dt>
-            <dd className="font-mono text-xs text-on-surface">{c.recordingsDir}</dd>
+        </div>
+        <div className="space-y-2">
+          <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Local Storage Path</label>
+          <div className="relative">
+            <div className="bg-surface-container-low rounded-lg p-4 font-mono text-sm text-primary pr-12">
+              {c.recordingsDir ?? "(not set)"}
+            </div>
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
           </div>
-        </dl>
+        </div>
       </section>
 
-      <section className="card p-6">
-        <h2 className="font-semibold text-on-surface font-label">Webhook</h2>
-        <div className="mt-4 space-y-3">
-          <label className="block text-sm font-medium text-on-surface-variant">URL</label>
-          <div className="flex gap-2">
+      {/* Webhook Outbound */}
+      <section className="card p-8 space-y-6">
+        <div className="flex items-center gap-3">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
+          <h2 className="text-xl font-bold text-on-surface">Webhook Outbound</h2>
+        </div>
+        <div className="space-y-4">
+          <div className="flex gap-3">
             <input
-              className="input"
+              className="input py-3 border-transparent"
               type="url"
-              placeholder="https://n8n.example.com/webhook/plaud"
+              placeholder="https://api.yourdomain.com/v1/ingest"
               value={webhookUrl}
               onChange={(e) => {
                 setWebhookUrl(e.target.value);
@@ -133,25 +179,66 @@ export function Settings(): JSX.Element {
                 setTestResult(null);
               }}
             />
-            <button className="btn-secondary" onClick={() => void test()} disabled={!webhookUrl}>
+            <button
+              className="btn-primary px-6 py-3"
+              onClick={() => void test()}
+              disabled={!webhookUrl}
+            >
               Test
             </button>
           </div>
           {testResult && (
             <div
-              className={`rounded-lg p-2 text-xs ${
-                testResult.ok ? "bg-primary/10 text-primary" : "bg-error/10 text-error"
+              className={`rounded-lg p-4 flex items-center gap-3 ${
+                testResult.ok
+                  ? "bg-secondary/10 border border-secondary/20"
+                  : "bg-error/10 border border-error/20"
               }`}
             >
-              {testResult.message}
+              {testResult.ok ? (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-secondary flex-shrink-0">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                  <polyline points="22 4 12 14.01 9 11.01" />
+                </svg>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-error flex-shrink-0">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="15" y1="9" x2="9" y2="15" />
+                  <line x1="9" y1="9" x2="15" y2="15" />
+                </svg>
+              )}
+              <div>
+                <p className={`font-bold text-sm ${testResult.ok ? "text-secondary" : "text-error"}`}>
+                  {testResult.ok ? "Connection Success" : "Connection Failed"}
+                </p>
+                <p className={`text-xs ${testResult.ok ? "text-secondary/70" : "text-error/70"}`}>
+                  {testResult.message}
+                </p>
+              </div>
             </div>
           )}
         </div>
       </section>
 
-      <section className="card p-6">
-        <h2 className="font-semibold text-on-surface font-label">Poll interval</h2>
-        <div className="mt-4 flex items-center gap-4">
+      {/* Poll Interval */}
+      <section className="card p-8 space-y-6">
+        <div className="flex justify-between items-end">
+          <div className="space-y-1">
+            <div className="flex items-center gap-3">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <h2 className="text-xl font-bold text-on-surface">Poll Interval</h2>
+            </div>
+            <p className="text-on-surface-variant text-sm">Frequency of transcript synchronization cycles.</p>
+          </div>
+          <div className="text-right">
+            <span className="text-5xl font-black text-primary tracking-tighter">{pollMinutes}</span>
+            <span className="font-label text-sm font-bold text-on-surface-variant uppercase ml-2">minutes</span>
+          </div>
+        </div>
+        <div className="space-y-3">
           <input
             type="range"
             min={1}
@@ -161,23 +248,29 @@ export function Settings(): JSX.Element {
               setPollMinutes(Number(e.target.value));
               setDirty(true);
             }}
-            className="flex-1 accent-primary"
+            className="w-full accent-primary"
           />
-          <span className="w-20 text-right font-mono text-sm text-on-surface">
-            {pollMinutes} min
-          </span>
+          <div className="flex justify-between font-label text-[10px] text-on-surface-variant font-bold tracking-widest uppercase">
+            <span>1 min</span>
+            <span>30 mins</span>
+            <span>60 mins</span>
+          </div>
         </div>
       </section>
 
-      <div className="flex justify-end">
+      {/* Save Footer */}
+      <footer className="pt-4 flex flex-col items-center">
         <button
-          className="btn-primary"
+          className="w-full max-w-md btn-primary py-4 text-base font-black shadow-lg shadow-primary/10"
           onClick={() => void save()}
           disabled={!dirty || saving}
         >
-          {saving ? "Saving…" : "Save changes"}
+          {saving ? "Saving…" : "Save Settings"}
         </button>
-      </div>
+        <p className="mt-4 font-label text-[10px] text-on-surface-variant uppercase tracking-[0.15em]">
+          Changes take effect immediately on local engine.
+        </p>
+      </footer>
     </div>
   );
 }
