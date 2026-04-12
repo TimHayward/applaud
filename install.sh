@@ -35,6 +35,19 @@ detect_os() {
   esac
 }
 
+ensure_xcode_cli() {
+  # Native modules (better-sqlite3, classic-level) need a C compiler.
+  # On macOS this comes from the Xcode Command Line Tools.
+  if [ "$(detect_os)" != "macos" ]; then return; fi
+  if xcode-select -p >/dev/null 2>&1; then
+    say "Xcode CLI tools detected"
+    return
+  fi
+  say "installing Xcode Command Line Tools (may prompt for confirmation)"
+  xcode-select --install 2>/dev/null || true
+  fail "Xcode Command Line Tools are installing. Re-run this script when the installation finishes."
+}
+
 ensure_git() {
   if ! have git; then
     fail "git is required but not installed. Install git and re-run."
@@ -127,6 +140,7 @@ main() {
     fail "unsupported OS. applaud supports macOS, Linux, and WSL."
   fi
   say "installing applaud (os: $OS)"
+  ensure_xcode_cli
   ensure_git
   ensure_pnpm
   ensure_node
