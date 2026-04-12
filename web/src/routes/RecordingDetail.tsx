@@ -152,6 +152,7 @@ export function RecordingDetailPage(): JSX.Element {
   const [currentTime, setCurrentTime] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
   const id = params.id ?? "";
   const q = useQuery({
     queryKey: ["recording", id],
@@ -301,15 +302,66 @@ export function RecordingDetailPage(): JSX.Element {
         {/* Sidebar */}
         <aside className="lg:col-span-3 space-y-6">
           {r.summaryMarkdown && (
-            <section className="bg-surface-container-high rounded-xl p-6 shadow-lg border border-outline-variant/20">
-              <h2 className="text-sm font-label uppercase tracking-widest text-tertiary mb-4 flex items-center gap-2 font-semibold">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
-                AI Summary
-              </h2>
-              <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed text-on-surface [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-on-surface [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-on-surface [&_h3]:text-sm [&_h3]:font-bold [&_h3]:text-on-surface [&_p]:text-on-surface-variant [&_li]:text-on-surface-variant [&_strong]:text-on-surface [&_a]:text-primary [&_ul]:space-y-1 [&_ol]:space-y-1">
-                <Markdown>{r.summaryMarkdown}</Markdown>
-              </div>
-            </section>
+            <>
+              <section className="bg-surface-container-high rounded-xl p-6 shadow-lg border border-outline-variant/20 relative">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-label uppercase tracking-widest text-tertiary flex items-center gap-2 font-semibold">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
+                    AI Summary
+                  </h2>
+                  <button
+                    onClick={() => setSummaryExpanded(true)}
+                    className="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors"
+                    title="Expand summary"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" />
+                      <line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="overflow-hidden relative" style={{ maxHeight: "50vh" }}>
+                  <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed text-on-surface [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-on-surface [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-on-surface [&_h3]:text-sm [&_h3]:font-bold [&_h3]:text-on-surface [&_p]:text-on-surface-variant [&_li]:text-on-surface-variant [&_strong]:text-on-surface [&_a]:text-primary [&_ul]:space-y-1 [&_ol]:space-y-1">
+                    <Markdown>{r.summaryMarkdown}</Markdown>
+                  </div>
+                  {/* Fade overlay at bottom */}
+                  <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-surface-container-high to-transparent pointer-events-none" />
+                </div>
+              </section>
+
+              {/* Expanded modal */}
+              {summaryExpanded && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-6" onClick={() => setSummaryExpanded(false)}>
+                  <div className="absolute inset-0 bg-surface/80 backdrop-blur-sm" />
+                  <div
+                    className="relative bg-surface-container-high rounded-2xl border border-outline-variant/20 shadow-2xl w-full max-w-4xl"
+                    style={{ maxHeight: "90vh" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between p-6 border-b border-outline-variant/30">
+                      <h2 className="text-sm font-label uppercase tracking-widest text-tertiary flex items-center gap-2 font-semibold">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
+                        AI Summary
+                      </h2>
+                      <button
+                        onClick={() => setSummaryExpanded(false)}
+                        className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors"
+                        title="Close"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="overflow-y-auto p-6" style={{ maxHeight: "calc(90vh - 73px)" }}>
+                      <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed text-on-surface [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-on-surface [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-on-surface [&_h3]:text-sm [&_h3]:font-bold [&_h3]:text-on-surface [&_p]:text-on-surface-variant [&_li]:text-on-surface-variant [&_strong]:text-on-surface [&_a]:text-primary [&_ul]:space-y-1 [&_ol]:space-y-1">
+                        <Markdown>{r.summaryMarkdown}</Markdown>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
           <section className="card p-6 text-sm">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Details</h2>

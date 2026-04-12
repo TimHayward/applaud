@@ -1,4 +1,6 @@
 import { plaudJson } from "./client.js";
+import { gunzipSync } from "node:zlib";
+import type { ContentListItem } from "./detail.js";
 
 export interface TranscriptSegment {
   start_time: number;
@@ -77,6 +79,52 @@ function formatTimestamp(ms: number): string {
   const mm = String(m).padStart(2, "0");
   const ss = String(s).padStart(2, "0");
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/**
+ * Fetch transcript segments from the S3 `data_link` in the file detail
+ * `content_list`. Older recordings store transcripts here instead of the
+ * transsumm endpoint.
+ */
+export async function fetchTranscriptFromContentList(
+  contentList: ContentListItem[],
+): Promise<{ segments: TranscriptSegment[]; summaryMd: string | null }> {
+  const transItem = contentList.find((c) => c.data_type === "transaction" && c.data_link);
+  const summItem = contentList.find((c) => c.data_type === "auto_sum_note" && c.data_link);
+
+  let segments: TranscriptSegment[] = [];
+  if (transItem?.data_link) {
+    const res = await fetch(transItem.data_link);
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      let text: string;
+      // Some links are gzipped, some aren't — try gunzip, fall back to raw
+      try {
+        text = gunzipSync(buf).toString("utf8");
+      } catch {
+        text = buf.toString("utf8");
+      }
+      const parsed = JSON.parse(text) as TranscriptSegment[] | Record<string, TranscriptSegment>;
+      const arr = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      segments = arr as TranscriptSegment[];
+    }
+  }
+
+  let summaryMd: string | null = null;
+  if (summItem?.data_link) {
+    const res = await fetch(summItem.data_link);
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      try {
+        summaryMd = gunzipSync(buf).toString("utf8");
+      } catch {
+        summaryMd = buf.toString("utf8");
+      }
+      if (summaryMd && summaryMd.trim().length === 0) summaryMd = null;
+    }
+  }
+
+  return { segments, summaryMd };
 }
 
 export function extractSummaryMarkdown(resp: TranssummResponse): string | null {

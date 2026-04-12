@@ -7,6 +7,7 @@ import {
   getTranscriptAndSummary,
   flattenTranscript,
   extractSummaryMarkdown,
+  fetchTranscriptFromContentList,
 } from "../plaud/transcript.js";
 import { getFileDetail } from "../plaud/detail.js";
 import { PlaudAuthError } from "../plaud/client.js";
@@ -204,16 +205,37 @@ class Poller {
     if (!row) return;
     const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
+    // Try the transsumm endpoint first (works for newer recordings).
     const resp = await getTranscriptAndSummary(id);
-    if (!resp.data_result || resp.data_result.length === 0) {
-      // Not actually transcribed yet; leave pending.
+    if (resp.data_result && resp.data_result.length > 0) {
+      writeFileSync(paths.transcriptJsonPath, JSON.stringify(resp, null, 2));
+      const txtContent = flattenTranscript(resp.data_result);
+      writeFileSync(paths.transcriptTxtPath, txtContent);
+      const md = extractSummaryMarkdown(resp);
+      if (md) writeFileSync(paths.summaryMdPath, md);
+      markTranscriptDownloaded(id, txtContent);
+      emit("recording_downloaded", { recordingId: id });
+
+      const fresh = getRecordingById(id);
+      if (fresh) {
+        const fired = await fireWebhookForRecording("transcript_ready", fresh);
+        if (fired) markWebhookFired(id, "transcript_ready");
+      }
       return;
     }
-    writeFileSync(paths.transcriptJsonPath, JSON.stringify(resp, null, 2));
-    const txtContent = flattenTranscript(resp.data_result);
+
+    // Fallback: older recordings store transcripts in S3 via the file detail endpoint.
+    logger.info({ id }, "transsumm returned no data, trying file detail fallback");
+    const detail = await getFileDetail(id);
+    if (!detail.content_list || detail.content_list.length === 0) return;
+
+    const { segments, summaryMd } = await fetchTranscriptFromContentList(detail.content_list);
+    if (segments.length === 0) return;
+
+    writeFileSync(paths.transcriptJsonPath, JSON.stringify(segments, null, 2));
+    const txtContent = flattenTranscript(segments);
     writeFileSync(paths.transcriptTxtPath, txtContent);
-    const md = extractSummaryMarkdown(resp);
-    if (md) writeFileSync(paths.summaryMdPath, md);
+    if (summaryMd) writeFileSync(paths.summaryMdPath, summaryMd);
     markTranscriptDownloaded(id, txtContent);
     emit("recording_downloaded", { recordingId: id });
 

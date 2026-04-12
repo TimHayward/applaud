@@ -1,23 +1,40 @@
-# applaud
+# Applaud
 
 A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recordings to disk and fires webhooks when new recordings or transcripts arrive. Runs on your machine, uses your existing Plaud browser session for auth, and ships with a React web UI for setup and browsing.
 
-> applaud is not affiliated with Plaud. It talks to the same undocumented web API that the Plaud web app uses, via your own logged-in session.
+> Applaud is not affiliated with Plaud. It talks to the same undocumented web API that the Plaud web app uses, via your own logged-in session.
+
+![Recordings dashboard](assets/Screenshot%202026-04-11%20203407.png)
+
+## Features
+
+- **Automatic sync** — polls Plaud every 10 minutes (configurable) and downloads audio, transcripts, and AI summaries to local disk
+- **Full-text search** — search recordings by filename or transcript content
+- **Audio player** — custom player with waveform visualization, play/pause, skip -10s/+30s, click-to-seek
+- **Transcript viewer** — speaker-labeled, timestamped, color-coded blocks with auto-scroll during playback, click-to-seek, and full-text search within transcripts
+- **AI summaries** — rendered markdown with expandable full-screen modal for long summaries
+- **Webhooks** — POST JSON payloads on `audio_ready` and `transcript_ready` events for n8n, Zapier, or custom integrations
+- **Dark & light mode** — toggle between themes, defaults to system preference
+- **Setup wizard** — guided 5-step onboarding (auth, folder, webhook, review)
+
+![Recording detail](assets/Screenshot%202026-04-11%20203843.png)
 
 ## Install
+
+First, you should never run commands you find on the internet that end in `| sh`. With that said, here's the easiest way to install Applaud:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rsteckler/applaud/main/install.sh | sh
 ```
 
-The installer bootstraps [pnpm](https://pnpm.io) and Node.js (if missing), clones this repo to `~/applaud`, and runs the build. Then:
+The installer does everything needed to install Applaud into a subfolder named `./applaud`. To run it:
 
 ```bash
-cd ~/applaud
+cd applaud
 pnpm start
 ```
 
-Your browser will open to `http://127.0.0.1:7528/setup` (T9 for "PLAU"). Walk through the 5-step wizard and you're done.
+Your browser will open to `http://127.0.0.1:44471/setup`. Walk through the 5-step wizard and you're done.
 
 ### Manual install
 
@@ -29,15 +46,15 @@ pnpm build
 pnpm start
 ```
 
-Requires Node.js ≥ 20 and pnpm ≥ 9.
+Requires Node.js >= 20 and pnpm >= 9.
 
 ## How it works
 
-1. **Auth:** applaud reads your existing Plaud session from Chrome (or Edge / Brave / Arc / Vivaldi) by copying the browser's `Local Storage/leveldb` directory to a temp path (which sidesteps Chrome's file lock) and pulling the JWT bearer from the `tokenstr` key for `web.plaud.ai`. No passwords, no OAuth, no Playwright — just your existing session. Tokens are good for ~10 months.
+1. **Auth:** Applaud reads your existing Plaud session from Chrome (or Edge / Brave / Arc / Vivaldi) by copying the browser's `Local Storage/leveldb` directory to a temp path (which sidesteps Chrome's file lock) and pulling the JWT bearer from the `tokenstr` key for `web.plaud.ai`. No passwords, no OAuth, no Playwright — just your existing session. Tokens are good for ~10 months.
 
-2. **Sync:** every 10 minutes (configurable), the server calls `/file/simple/web` on `api.plaud.ai` to list your latest recordings. New ones get a per-recording subfolder, their audio streamed down from S3, and — once Plaud finishes transcribing — transcript + summary pulled via `/ai/transsumm/`.
+2. **Sync:** every 10 minutes (configurable), the server calls `/file/simple/web` on `api.plaud.ai` to list your latest recordings. New ones get a per-recording subfolder, their audio streamed down from S3, and — once Plaud finishes transcribing — transcript + summary pulled via `/ai/transsumm/` (with S3 fallback for older recordings).
 
-3. **Webhook:** if configured, applaud POSTs a JSON payload to your URL whenever a new `audio_ready` or `transcript_ready` event happens. Includes file paths (relative to your recordings dir) plus ready-to-fetch HTTP URLs that the local media server serves, and — on `transcript_ready` — the flattened transcript text and summary markdown inline so n8n-style workflows don't need a second fetch.
+3. **Webhook:** if configured, Applaud POSTs a JSON payload to your URL whenever a new `audio_ready` or `transcript_ready` event happens. Includes file paths (relative to your recordings dir) plus ready-to-fetch HTTP URLs that the local media server serves, and — on `transcript_ready` — the flattened transcript text and summary markdown inline so n8n-style workflows don't need a second fetch.
 
 ## Folder layout
 
@@ -57,7 +74,7 @@ Each recording gets its own folder under your chosen recordings directory:
 
 ```json
 {
-  "event": "audio_ready" | "transcript_ready",
+  "event": "audio_ready | transcript_ready",
   "recording": {
     "id": "74560101636422f79bacd66696bab17b",
     "filename": "04-11 Validation of Automated Transcription...",
@@ -73,9 +90,9 @@ Each recording gets its own folder under your chosen recordings directory:
     "summary": "2026-04-11_...__74560101/summary.md"
   },
   "http_urls": {
-    "audio": "http://127.0.0.1:7528/media/2026-04-11_...__74560101/audio.ogg",
-    "transcript": "http://127.0.0.1:7528/media/2026-04-11_...__74560101/transcript.json",
-    "summary": "http://127.0.0.1:7528/media/2026-04-11_...__74560101/summary.md"
+    "audio": "http://127.0.0.1:44471/media/2026-04-11_...__74560101/audio.ogg",
+    "transcript": "http://127.0.0.1:44471/media/2026-04-11_...__74560101/transcript.json",
+    "summary": "http://127.0.0.1:44471/media/2026-04-11_...__74560101/summary.md"
   },
   "content": {
     "transcript_text": "[00:01] Speaker: ...",
@@ -88,9 +105,15 @@ Each recording gets its own folder under your chosen recordings directory:
 - Webhook consumers should treat `(id, event)` as idempotent. `audio_ready` always fires before `transcript_ready`; on recordings that are already fully transcribed when first seen, both fire back-to-back in the same poll cycle.
 - Custom headers on every webhook: `User-Agent: applaud/0.1.0` and `X-Applaud-Event: audio_ready|transcript_ready`.
 
+## n8n workflows
+
+The `n8n/` folder contains importable n8n workflow templates. To use one, open n8n, create a new workflow, then **Import from File** and select the JSON file. See [`n8n/README.md`](n8n/README.md) for setup details.
+
+![Settings](assets/Screenshot%202026-04-11%20203904.png)
+
 ## Running in the background
 
-applaud is a foreground process. To keep it running without a terminal:
+Applaud is a foreground process. To keep it running without a terminal:
 
 **macOS (launchd):** create `~/Library/LaunchAgents/dev.applaud.plist` pointing to `pnpm start` in the install dir.
 
@@ -110,7 +133,7 @@ The bearer token is stored as plaintext in `settings.json` (with `chmod 600`). T
 pnpm dev
 ```
 
-Runs the Vite dev server (for the React UI) on port 5173 with a proxy for `/api` and `/media` to the Express server on 7528. The server runs in `tsx watch` mode. Hot reload works on both sides.
+Runs the Vite dev server on port 44470 with a proxy for `/api` and `/media` to the Express server on port 44471. The server runs in `tsx watch` mode. Hot reload works on both sides.
 
 ## License
 

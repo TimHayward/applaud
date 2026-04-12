@@ -17,6 +17,7 @@ export function SetupWizard(): JSX.Element {
   const [step, setStep] = useState<Step>("Welcome");
 
   const idx = STEPS.indexOf(step);
+  const pct = Math.round(((idx + 1) / STEPS.length) * 100);
   const next = (): void => {
     const n = STEPS[idx + 1];
     if (n) setStep(n);
@@ -34,14 +35,46 @@ export function SetupWizard(): JSX.Element {
 
   return (
     <div className="min-h-screen bg-surface">
-      <div className="mx-auto max-w-2xl px-6 py-12">
-        <div className="mb-10 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 font-semibold tracking-tight text-on-surface">
-            Applaud
-            <span className="inline-block h-2 w-2 rounded-full bg-primary" />
+      <div className="mx-auto max-w-[42rem] px-6 py-12">
+        {/* Header */}
+        <header className="space-y-6 mb-10">
+          <div className="flex items-center justify-between">
+            <span className="text-2xl font-black text-on-surface">
+              Applaud<span className="text-primary">.</span>
+            </span>
+            <span className="font-label text-xs uppercase tracking-widest text-on-surface-variant">
+              Setup Wizard &bull; {pct}%
+            </span>
           </div>
-          <StepIndicator currentIndex={idx} />
-        </div>
+          {/* Progress bars */}
+          <div className="grid grid-cols-5 gap-2 h-1.5 w-full">
+            {STEPS.map((_, i) => (
+              <div
+                key={i}
+                className={`rounded-full ${
+                  i <= idx ? "bg-primary" : "bg-surface-container-highest"
+                }`}
+              />
+            ))}
+          </div>
+          {/* Step labels */}
+          <div className="hidden md:grid grid-cols-5 gap-2 text-center">
+            {STEPS.map((label, i) => (
+              <span
+                key={label}
+                className={`font-label text-[10px] ${
+                  i === idx
+                    ? "text-primary font-bold"
+                    : i < idx
+                      ? "text-primary"
+                      : "text-on-surface-variant"
+                }`}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        </header>
         <div className="card p-8">
           {step === "Welcome" && <WelcomeStep onNext={next} />}
           {step === "Auth" && <AuthStep onNext={next} onBack={prev} />}
@@ -50,21 +83,6 @@ export function SetupWizard(): JSX.Element {
           {step === "Review" && <ReviewStep onFinish={finish} onBack={prev} />}
         </div>
       </div>
-    </div>
-  );
-}
-
-function StepIndicator({ currentIndex }: { currentIndex: number }): JSX.Element {
-  return (
-    <div className="flex items-center gap-1">
-      {STEPS.map((_, i) => (
-        <div
-          key={i}
-          className={`h-1.5 w-8 rounded-full ${
-            i <= currentIndex ? "bg-primary" : "bg-surface-container-highest"
-          }`}
-        />
-      ))}
     </div>
   );
 }
