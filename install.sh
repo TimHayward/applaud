@@ -55,14 +55,12 @@ ensure_git() {
 }
 
 ensure_pnpm() {
-  if have pnpm; then
-    say "pnpm already installed ($(pnpm --version))"
-    return
+  if ! have pnpm; then
+    say "installing pnpm via get.pnpm.io"
+    curl -fsSL https://get.pnpm.io/install.sh | sh -
   fi
-  say "installing pnpm via get.pnpm.io"
-  curl -fsSL https://get.pnpm.io/install.sh | sh -
-  # The pnpm installer updates the user's shell rc but won't be on PATH for
-  # this process. Detect where it landed and add it to PATH.
+  # Ensure PNPM_HOME is on PATH for this process, whether pnpm was just
+  # installed or was installed in a previous run.
   if [ -z "${PNPM_HOME:-}" ]; then
     if [ -d "$HOME/Library/pnpm" ]; then
       PNPM_HOME="$HOME/Library/pnpm"
@@ -75,7 +73,7 @@ ensure_pnpm() {
   if ! have pnpm; then
     fail "pnpm installation finished but the binary isn't on PATH. Open a new terminal and re-run."
   fi
-  say "pnpm installed ($(pnpm --version))"
+  say "pnpm $(pnpm --version) ready"
 }
 
 ensure_node() {
