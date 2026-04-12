@@ -112,13 +112,13 @@ export function markAudioDownloaded(id: string, sizeBytes: number): void {
     .run(now, sizeBytes, id);
 }
 
-export function markTranscriptDownloaded(id: string): void {
+export function markTranscriptDownloaded(id: string, transcriptText?: string): void {
   const now = Date.now();
   getDb()
     .prepare(
-      "UPDATE recordings SET transcript_downloaded_at = ?, last_error = NULL WHERE id = ?",
+      "UPDATE recordings SET transcript_downloaded_at = ?, transcript_text = ?, last_error = NULL WHERE id = ?",
     )
-    .run(now, id);
+    .run(now, transcriptText ?? null, id);
 }
 
 export function markWebhookFired(id: string, event: "audio_ready" | "transcript_ready"): void {
@@ -149,15 +149,15 @@ export function listRecordingRows(
   if (search) {
     const like = `%${search}%`;
     aggRow = db
-      .prepare<[string], { c: number; b: number }>(
-        "SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE filename LIKE ?",
+      .prepare<[string, string], { c: number; b: number }>(
+        "SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ?",
       )
-      .get(like);
+      .get(like, like);
     rows = db
-      .prepare<[string, number, number], RecordingDbRow>(
-        "SELECT * FROM recordings WHERE filename LIKE ? ORDER BY start_time DESC LIMIT ? OFFSET ?",
+      .prepare<[string, string, number, number], RecordingDbRow>(
+        "SELECT * FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ? ORDER BY start_time DESC LIMIT ? OFFSET ?",
       )
-      .all(like, limit, offset);
+      .all(like, like, limit, offset);
   } else {
     aggRow = db.prepare<[], { c: number; b: number }>("SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings").get();
     rows = db

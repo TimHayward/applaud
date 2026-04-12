@@ -166,13 +166,10 @@ class Poller {
     const cfg = loadConfig();
     if (!cfg.recordingsDir) return;
 
-    const existing = getRecordingById(item.id);
-    if (!existing) {
-      // New recording. Create folder, persist state, download audio.
-      const row = upsertFromPlaud(item);
+    const row = upsertFromPlaud(item);
+    if (!row.audioDownloadedAt) {
       const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
-      // Fetch + stash the detail metadata.
       try {
         const detail = await getFileDetail(item.id);
         writeFileSync(paths.metadataPath, JSON.stringify(detail, null, 2));
@@ -213,10 +210,11 @@ class Poller {
       return;
     }
     writeFileSync(paths.transcriptJsonPath, JSON.stringify(resp, null, 2));
-    writeFileSync(paths.transcriptTxtPath, flattenTranscript(resp.data_result));
+    const txtContent = flattenTranscript(resp.data_result);
+    writeFileSync(paths.transcriptTxtPath, txtContent);
     const md = extractSummaryMarkdown(resp);
     if (md) writeFileSync(paths.summaryMdPath, md);
-    markTranscriptDownloaded(id);
+    markTranscriptDownloaded(id, txtContent);
     emit("recording_downloaded", { recordingId: id });
 
     const fresh = getRecordingById(id);

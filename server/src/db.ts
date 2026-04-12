@@ -1,4 +1,6 @@
 import Database from "better-sqlite3";
+import { readFileSync, existsSync } from "node:fs";
+import path from "node:path";
 import { ensureConfigDir, dbPath } from "./paths.js";
 import type { RecordingRow, RecordingStatus } from "@applaud/shared";
 
@@ -60,6 +62,32 @@ function migrate(d: Database.Database): void {
   } catch {
     // column already exists — ignore
   }
+
+  // v3: add transcript_text column for full-text search
+  try {
+    d.exec("ALTER TABLE recordings ADD COLUMN transcript_text TEXT");
+  } catch {
+    // column already exists — ignore
+  }
+
+  // Backfill transcript_text from existing transcript.txt files on disk
+  const pending = d
+    .prepare("SELECT id, transcript_path FROM recordings WHERE transcript_downloaded_at IS NOT NULL AND transcript_text IS NULL")
+    .all() as { id: string; transcript_path: string | null }[];
+  if (pending.length > 0) {
+    const update = d.prepare("UPDATE recordings SET transcript_text = ? WHERE id = ?");
+    for (const row of pending) {
+      if (!row.transcript_path) continue;
+      const txtPath = path.join(path.dirname(row.transcript_path), "transcript.txt");
+      try {
+        if (existsSync(txtPath)) {
+          update.run(readFileSync(txtPath, "utf8"), row.id);
+        }
+      } catch {
+        /* best effort */
+      }
+    }
+  }
 }
 
 interface RecordingDbRow {
@@ -83,6 +111,7 @@ interface RecordingDbRow {
   is_historical: number;
   last_error: string | null;
   metadata_json: string | null;
+  transcript_text: string | null;
 }
 
 function statusOf(row: RecordingDbRow): RecordingStatus {

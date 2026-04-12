@@ -40,13 +40,11 @@ function parseTimestamp(ts: string): number {
   if (parts.length === 3) {
     return (parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0);
   }
-  // MM:SS
   return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
 }
 
 function parseTranscript(raw: string): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
-  // Matches [MM:SS] or [H:MM:SS] followed by Speaker: text
   const regex = /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s+(.+?):\s+([\s\S]*?)(?=\n\n\[|\s*$)/gm;
   let match;
   while ((match = regex.exec(raw)) !== null) {
@@ -62,21 +60,10 @@ function parseTranscript(raw: string): TranscriptBlock[] {
 }
 
 const SPEAKER_COLORS = [
-  "#00c7ae", // teal
-  "#a3e635", // lime
-  "#ffbe9c", // peach
-  "#818cf8", // indigo
-  "#fb7185", // coral
-  "#fbbf24", // amber
-  "#38bdf8", // sky
-  "#a78bfa", // violet
-  "#34d399", // emerald
-  "#fb923c", // orange
-  "#94a3b8", // slate
-  "#fda4af", // rose
+  "#00c7ae", "#a3e635", "#ffbe9c", "#818cf8", "#fb7185", "#fbbf24",
+  "#38bdf8", "#a78bfa", "#34d399", "#fb923c", "#94a3b8", "#fda4af",
 ];
-
-const UNKNOWN_COLOR = "#94a3b8"; // slate gray
+const UNKNOWN_COLOR = "#94a3b8";
 
 function isUnknownSpeaker(speaker: string): boolean {
   return /^speaker\s*\d*$/i.test(speaker.trim());
@@ -89,6 +76,71 @@ function speakerColor(speaker: string, map: Map<string, string>): string {
   }
   return map.get(speaker) ?? SPEAKER_COLORS[0]!;
 }
+
+// --- Search helpers ---
+
+interface SearchMatch {
+  blockIndex: number;
+  startChar: number;
+  length: number;
+}
+
+function findAllMatches(blocks: TranscriptBlock[], query: string): SearchMatch[] {
+  if (!query) return [];
+  const lower = query.toLowerCase();
+  const matches: SearchMatch[] = [];
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const text = (blocks[bi]?.text ?? "").toLowerCase();
+    let pos = 0;
+    while (pos < text.length) {
+      const idx = text.indexOf(lower, pos);
+      if (idx === -1) break;
+      matches.push({ blockIndex: bi, startChar: idx, length: query.length });
+      pos = idx + 1;
+    }
+  }
+  return matches;
+}
+
+function HighlightedText({
+  text,
+  matches,
+  activeMatchIndex,
+  globalOffset,
+}: {
+  text: string;
+  matches: SearchMatch[];
+  activeMatchIndex: number;
+  globalOffset: number;
+}): JSX.Element {
+  if (matches.length === 0) return <>{text}</>;
+  const parts: JSX.Element[] = [];
+  let cursor = 0;
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i]!;
+    if (m.startChar > cursor) {
+      parts.push(<span key={`t${cursor}`}>{text.slice(cursor, m.startChar)}</span>);
+    }
+    const isActive = globalOffset + i === activeMatchIndex;
+    parts.push(
+      <mark
+        key={`m${m.startChar}`}
+        className={`rounded px-0.5 ${
+          isActive ? "bg-primary text-on-primary" : "bg-primary/25 text-on-surface"
+        }`}
+      >
+        {text.slice(m.startChar, m.startChar + m.length)}
+      </mark>,
+    );
+    cursor = m.startChar + m.length;
+  }
+  if (cursor < text.length) {
+    parts.push(<span key={`t${cursor}`}>{text.slice(cursor)}</span>);
+  }
+  return <>{parts}</>;
+}
+
+// --- Main page ---
 
 export function RecordingDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
@@ -138,9 +190,7 @@ export function RecordingDetailPage(): JSX.Element {
     return (
       <div>
         <p className="text-error">Not found.</p>
-        <Link to="/" className="btn-ghost mt-3 inline-flex">
-          ← Back
-        </Link>
+        <Link to="/" className="btn-ghost mt-3 inline-flex">← Back</Link>
       </div>
     );
 
@@ -155,18 +205,10 @@ export function RecordingDetailPage(): JSX.Element {
 
   const togglePlay = (): void => {
     if (!audioRef.current) return;
-    if (audioRef.current.paused) {
-      audioRef.current.play();
-    } else {
-      audioRef.current.pause();
-    }
+    if (audioRef.current.paused) { audioRef.current.play(); } else { audioRef.current.pause(); }
   };
-  const skipBack = (): void => {
-    if (audioRef.current) audioRef.current.currentTime -= 10;
-  };
-  const skipForward = (): void => {
-    if (audioRef.current) audioRef.current.currentTime += 30;
-  };
+  const skipBack = (): void => { if (audioRef.current) audioRef.current.currentTime -= 10; };
+  const skipForward = (): void => { if (audioRef.current) audioRef.current.currentTime += 30; };
 
   const isComplete = !!r.audioDownloadedAt && !!r.transcriptDownloadedAt;
 
@@ -176,51 +218,29 @@ export function RecordingDetailPage(): JSX.Element {
       <div className="mb-8">
         <nav className="flex items-center gap-2 text-xs font-label uppercase tracking-widest text-on-surface-variant mb-4">
           <Link to="/" className="hover:text-on-surface transition-colors">Recordings</Link>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
           <span className="text-primary truncate max-w-md">{r.filename}</span>
         </nav>
-
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
-            <h1 className="text-4xl md:text-5xl font-black text-on-surface tracking-tight mb-2">
-              {r.filename}
-            </h1>
+            <h1 className="text-4xl md:text-5xl font-black text-on-surface tracking-tight mb-2">{r.filename}</h1>
             <div className="flex items-center gap-4 text-on-surface-variant font-label text-sm">
               <div className="flex items-center gap-1.5">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                  <line x1="16" y1="2" x2="16" y2="6" />
-                  <line x1="8" y1="2" x2="8" y2="6" />
-                  <line x1="3" y1="10" x2="21" y2="10" />
-                </svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
                 <span>{formatDate(r.startTime)}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10" />
-                  <polyline points="12 6 12 12 16 14" />
-                </svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
                 <span>{formatDuration(r.durationMs)}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                  <circle cx="12" cy="7" r="4" />
-                </svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                 <span>{(r.filesizeBytes / 1024 / 1024).toFixed(1)} MB</span>
               </div>
             </div>
           </div>
-          <button
-            className="flex items-center gap-2 px-4 py-2 border border-error/20 hover:border-error/50 text-error text-sm font-semibold rounded-lg transition-all active:scale-95 whitespace-nowrap"
-            onClick={() => void del()}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-            </svg>
+          <button className="flex items-center gap-2 px-4 py-2 border border-error/20 hover:border-error/50 text-error text-sm font-semibold rounded-lg transition-all active:scale-95 whitespace-nowrap" onClick={() => void del()}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
             Delete Recording
           </button>
         </div>
@@ -228,82 +248,35 @@ export function RecordingDetailPage(): JSX.Element {
 
       {/* Layout */}
       <div className="grid gap-6 lg:grid-cols-10">
-        {/* Main Column */}
         <div className="lg:col-span-7 space-y-6">
           {/* Audio */}
           {r.audioDownloadedAt && (
             <section className="card p-6 overflow-hidden">
-              {/* Controls row */}
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
-                  {/* Play/Pause button */}
-                  <button
-                    onClick={togglePlay}
-                    className="w-12 h-12 flex items-center justify-center bg-primary rounded-xl text-on-primary shadow-lg shadow-primary/20 active:scale-90 transition-transform"
-                  >
+                  <button onClick={togglePlay} className="w-12 h-12 flex items-center justify-center bg-primary rounded-xl text-on-primary shadow-lg shadow-primary/20 active:scale-90 transition-transform">
                     {isPlaying ? (
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <rect x="6" y="4" width="4" height="16" rx="1" />
-                        <rect x="14" y="4" width="4" height="16" rx="1" />
-                      </svg>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
                     ) : (
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <polygon points="6 3 20 12 6 21 6 3" />
-                      </svg>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3" /></svg>
                     )}
                   </button>
-                  {/* Skip controls */}
-                  <button
-                    onClick={skipBack}
-                    className="p-2 text-on-surface-variant hover:text-primary transition-colors"
-                    title="Skip back 10 seconds"
-                  >
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M1 4v6h6" />
-                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                      <text x="12" y="15.5" textAnchor="middle" fill="currentColor" stroke="none" fontSize="7" fontWeight="bold" fontFamily="sans-serif">10</text>
-                    </svg>
+                  <button onClick={skipBack} className="p-2 text-on-surface-variant hover:text-primary transition-colors" title="Skip back 10 seconds">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /><text x="12" y="15.5" textAnchor="middle" fill="currentColor" stroke="none" fontSize="7" fontWeight="bold" fontFamily="sans-serif">10</text></svg>
                   </button>
-                  <button
-                    onClick={skipForward}
-                    className="p-2 text-on-surface-variant hover:text-primary transition-colors"
-                    title="Skip forward 30 seconds"
-                  >
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M23 4v6h-6" />
-                      <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" />
-                      <text x="12" y="15.5" textAnchor="middle" fill="currentColor" stroke="none" fontSize="7" fontWeight="bold" fontFamily="sans-serif">30</text>
-                    </svg>
+                  <button onClick={skipForward} className="p-2 text-on-surface-variant hover:text-primary transition-colors" title="Skip forward 30 seconds">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" /><text x="12" y="15.5" textAnchor="middle" fill="currentColor" stroke="none" fontSize="7" fontWeight="bold" fontFamily="sans-serif">30</text></svg>
                   </button>
                 </div>
-                {/* Time display */}
                 <div className="flex items-center gap-2 font-label text-sm">
                   <span className="text-primary font-bold">{formatTimeCompact(currentTime)}</span>
                   <span className="text-on-surface-variant">/ {formatTimeCompact(audioDuration)}</span>
                 </div>
               </div>
-              {/* Waveform */}
-              <Waveform
-                recordingId={r.id}
-                progress={audioDuration > 0 ? currentTime / audioDuration : 0}
-                onSeek={(frac) => {
-                  if (audioRef.current && audioDuration > 0) {
-                    audioRef.current.currentTime = frac * audioDuration;
-                  }
-                }}
-              />
-              {/* Hidden native audio element */}
-              <audio
-                ref={audioRef}
-                src={`${mediaBase}/audio.ogg`}
-                preload="metadata"
-                className="hidden"
-              />
-              {/* Download link */}
+              <Waveform recordingId={r.id} progress={audioDuration > 0 ? currentTime / audioDuration : 0} onSeek={(frac) => { if (audioRef.current && audioDuration > 0) audioRef.current.currentTime = frac * audioDuration; }} />
+              <audio ref={audioRef} src={`${mediaBase}/audio.ogg`} preload="metadata" className="hidden" />
               <div className="mt-3 flex justify-end">
-                <a href={`${mediaBase}/audio.ogg`} className="btn-ghost text-xs" download>
-                  Download .ogg
-                </a>
+                <a href={`${mediaBase}/audio.ogg`} className="btn-ghost text-xs" download>Download .ogg</a>
               </div>
             </section>
           )}
@@ -315,21 +288,12 @@ export function RecordingDetailPage(): JSX.Element {
               currentTime={currentTime}
               transcriptRef={transcriptRef}
               blockRefs={blockRefs}
-              onSeek={(sec) => {
-                if (audioRef.current) {
-                  audioRef.current.currentTime = sec;
-                  audioRef.current.play();
-                }
-              }}
+              onSeek={(sec) => { if (audioRef.current) { audioRef.current.currentTime = sec; audioRef.current.play(); } }}
             />
           ) : r.audioDownloadedAt ? (
             <section className="card p-6">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">
-                Transcript
-              </h2>
-              <p className="text-sm text-on-surface-variant">
-                Transcript is still pending on Plaud's side. We'll pull it on the next sync cycle.
-              </p>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Transcript</h2>
+              <p className="text-sm text-on-surface-variant">Transcript is still pending on Plaud's side. We'll pull it on the next sync cycle.</p>
             </section>
           ) : null}
         </div>
@@ -339,9 +303,7 @@ export function RecordingDetailPage(): JSX.Element {
           {r.summaryMarkdown && (
             <section className="bg-surface-container-high rounded-xl p-6 shadow-lg border border-outline-variant/20">
               <h2 className="text-sm font-label uppercase tracking-widest text-tertiary mb-4 flex items-center gap-2 font-semibold">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                </svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
                 AI Summary
               </h2>
               <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed text-on-surface [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-on-surface [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-on-surface [&_h3]:text-sm [&_h3]:font-bold [&_h3]:text-on-surface [&_p]:text-on-surface-variant [&_li]:text-on-surface-variant [&_strong]:text-on-surface [&_a]:text-primary [&_ul]:space-y-1 [&_ol]:space-y-1">
@@ -349,17 +311,12 @@ export function RecordingDetailPage(): JSX.Element {
               </div>
             </section>
           )}
-
           <section className="card p-6 text-sm">
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">
-              Details
-            </h2>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Details</h2>
             <dl className="space-y-3">
               <div>
                 <dt className="text-[10px] font-label text-on-surface-variant uppercase tracking-wider">Recording ID</dt>
-                <dd className="mt-1">
-                  <span className="font-label text-xs text-primary bg-primary/10 px-2 py-1 rounded">{r.id}</span>
-                </dd>
+                <dd className="mt-1"><span className="font-label text-xs text-primary bg-primary/10 px-2 py-1 rounded">{r.id}</span></dd>
               </div>
               <Meta label="Device" value={r.serialNumber} mono />
               <Meta label="Folder" value={r.folder} mono />
@@ -368,9 +325,7 @@ export function RecordingDetailPage(): JSX.Element {
               {r.lastError && <Meta label="Last error" value={r.lastError} />}
               <div className="pt-3 border-t border-outline-variant/30 flex items-center justify-between">
                 <span className="text-[10px] font-label text-on-surface-variant uppercase tracking-wider">Last Synced</span>
-                <span className={`text-xs font-bold ${isComplete ? "text-secondary" : "text-tertiary"}`}>
-                  {isComplete ? "COMPLETE" : "PENDING"}
-                </span>
+                <span className={`text-xs font-bold ${isComplete ? "text-secondary" : "text-tertiary"}`}>{isComplete ? "COMPLETE" : "PENDING"}</span>
               </div>
             </dl>
           </section>
@@ -379,6 +334,8 @@ export function RecordingDetailPage(): JSX.Element {
     </div>
   );
 }
+
+// --- Transcript card with search ---
 
 function TranscriptCard({
   text,
@@ -396,7 +353,72 @@ function TranscriptCard({
   const blocks = useMemo(() => parseTranscript(text), [text]);
   const speakerMap = useMemo(() => new Map<string, string>(), []);
 
-  // Find current active block
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeMatch, setActiveMatch] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const allMatches = useMemo(() => findAllMatches(blocks, searchQuery), [blocks, searchQuery]);
+
+  useEffect(() => { setActiveMatch(0); }, [searchQuery]);
+
+  // Scroll to active search match
+  useEffect(() => {
+    if (allMatches.length === 0 || activeMatch < 0) return;
+    const m = allMatches[activeMatch];
+    if (!m) return;
+    const el = blockRefs.current.get(m.blockIndex);
+    if (el && transcriptRef.current) {
+      const container = transcriptRef.current;
+      const elTop = el.offsetTop - container.offsetTop;
+      container.scrollTo({ top: elTop - 60, behavior: "smooth" });
+    }
+  }, [activeMatch, allMatches, blockRefs, transcriptRef]);
+
+  const goNext = useCallback(() => {
+    if (allMatches.length === 0) return;
+    setActiveMatch((a) => (a + 1) % allMatches.length);
+  }, [allMatches.length]);
+
+  const goPrev = useCallback(() => {
+    if (allMatches.length === 0) return;
+    setActiveMatch((a) => (a - 1 + allMatches.length) % allMatches.length);
+  }, [allMatches.length]);
+
+  // Ctrl/Cmd+F to open search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.key === "Escape") { setSearchOpen(false); setSearchQuery(""); }
+    else if (e.key === "Enter" && e.shiftKey) { goPrev(); }
+    else if (e.key === "Enter") { goNext(); }
+  };
+
+  // Per-block match data with global offset
+  const blockMatchMap = useMemo(() => {
+    const map = new Map<number, { matches: SearchMatch[]; globalOffset: number }>();
+    let offset = 0;
+    for (let bi = 0; bi < blocks.length; bi++) {
+      const bm = allMatches.filter((m) => m.blockIndex === bi);
+      if (bm.length > 0) {
+        map.set(bi, { matches: bm, globalOffset: offset });
+        offset += bm.length;
+      }
+    }
+    return map;
+  }, [allMatches, blocks.length]);
+
+  // Active playback block
   const activeIndex = useMemo(() => {
     if (blocks.length === 0) return -1;
     for (let i = blocks.length - 1; i >= 0; i--) {
@@ -405,8 +427,9 @@ function TranscriptCard({
     return -1;
   }, [blocks, currentTime]);
 
-  // Auto-scroll to active block
+  // Auto-scroll to active playback block (only when not searching)
   useEffect(() => {
+    if (searchQuery) return;
     if (activeIndex < 0) return;
     const el = blockRefs.current.get(activeIndex);
     if (el && transcriptRef.current) {
@@ -415,14 +438,13 @@ function TranscriptCard({
       const elBottom = elTop + el.offsetHeight;
       const scrollTop = container.scrollTop;
       const viewHeight = container.clientHeight;
-      // Only scroll if the block is not in view
       if (elTop < scrollTop || elBottom > scrollTop + viewHeight) {
         container.scrollTo({ top: elTop - 40, behavior: "smooth" });
       }
     }
-  }, [activeIndex, blockRefs, transcriptRef]);
+  }, [activeIndex, blockRefs, transcriptRef, searchQuery]);
 
-  // Fallback: if parsing fails, show raw text
+  // Fallback for unparseable transcripts
   if (blocks.length === 0) {
     return (
       <section className="card overflow-hidden flex flex-col" style={{ maxHeight: "600px" }}>
@@ -438,35 +460,76 @@ function TranscriptCard({
 
   return (
     <section className="card overflow-hidden flex flex-col" style={{ maxHeight: "600px" }}>
-      <div className="p-6 bg-surface-container-high flex justify-between items-center border-b border-outline-variant/30 flex-shrink-0">
+      {/* Header with search */}
+      <div className="p-6 bg-surface-container-high flex justify-between items-center border-b border-outline-variant/30 flex-shrink-0 gap-3">
         <h2 className="text-sm font-label uppercase tracking-widest text-primary font-semibold">Transcript</h2>
+        {searchOpen ? (
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <input
+                ref={searchInputRef}
+                type="text"
+                className="input py-1.5 pl-8 pr-3 text-sm w-48 border-transparent"
+                placeholder="Search…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                autoFocus
+              />
+              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+            </div>
+            {searchQuery && (
+              <span className="text-xs text-on-surface-variant font-label whitespace-nowrap">
+                {allMatches.length > 0 ? `${activeMatch + 1}/${allMatches.length}` : "0/0"}
+              </span>
+            )}
+            <button onClick={goPrev} className="p-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Previous (Shift+Enter)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15" /></svg>
+            </button>
+            <button onClick={goNext} className="p-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Next (Enter)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+            </button>
+            <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Close (Esc)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }}
+            className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors"
+            title="Search transcript (Ctrl+F)"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+          </button>
+        )}
       </div>
+
+      {/* Transcript body */}
       <div ref={transcriptRef as React.RefObject<HTMLDivElement>} className="flex-1 overflow-y-auto p-6 space-y-6">
         {blocks.map((block, i) => {
           const isActive = i === activeIndex;
           const color = speakerColor(block.speaker, speakerMap);
+          const bm = blockMatchMap.get(i);
           return (
             <div
               key={i}
               ref={(el) => { if (el) blockRefs.current.set(i, el); }}
               className={`flex gap-6 cursor-pointer group transition-opacity duration-200 ${
-                activeIndex >= 0 && !isActive ? "opacity-50" : "opacity-100"
+                activeIndex >= 0 && !isActive && !searchQuery ? "opacity-50" : "opacity-100"
               }`}
               onClick={() => onSeek(block.seconds)}
             >
               <div className="w-20 shrink-0 text-right">
-                <p className="text-[10px] font-label text-on-surface-variant/60 leading-tight">
-                  {block.timestamp}
-                </p>
-                <p className="text-xs font-bold tracking-tight mt-1 uppercase" style={{ color }}>
-                  {block.speaker}
-                </p>
+                <p className="text-[10px] font-label text-on-surface-variant/60 leading-tight">{block.timestamp}</p>
+                <p className="text-xs font-bold tracking-tight mt-1 uppercase" style={{ color }}>{block.speaker}</p>
               </div>
               <div className="flex-1">
-                <p className={`text-on-surface leading-relaxed text-base ${
-                  isActive ? "font-medium" : ""
-                }`}>
-                  {block.text}
+                <p className={`text-on-surface leading-relaxed text-base ${isActive && !searchQuery ? "font-medium" : ""}`}>
+                  {bm ? (
+                    <HighlightedText text={block.text} matches={bm.matches} activeMatchIndex={activeMatch} globalOffset={bm.globalOffset} />
+                  ) : (
+                    block.text
+                  )}
                 </p>
               </div>
             </div>
