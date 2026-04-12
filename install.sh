@@ -48,9 +48,16 @@ ensure_pnpm() {
   fi
   say "installing pnpm via get.pnpm.io"
   curl -fsSL https://get.pnpm.io/install.sh | sh -
-  # The pnpm installer writes to ~/.local/share/pnpm and updates the user's
-  # shell rc. It won't be on PATH for this process, so source-load it.
-  export PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"
+  # The pnpm installer updates the user's shell rc but won't be on PATH for
+  # this process. Detect where it landed and add it to PATH.
+  if [ -z "${PNPM_HOME:-}" ]; then
+    if [ -d "$HOME/Library/pnpm" ]; then
+      PNPM_HOME="$HOME/Library/pnpm"
+    else
+      PNPM_HOME="$HOME/.local/share/pnpm"
+    fi
+  fi
+  export PNPM_HOME
   export PATH="$PNPM_HOME:$PATH"
   if ! have pnpm; then
     fail "pnpm installation finished but the binary isn't on PATH. Open a new terminal and re-run."
