@@ -66,6 +66,12 @@ export interface RecordingDetail extends RecordingRow {
   transcriptText: string | null;
   summaryMarkdown: string | null;
   metadata: Record<string, unknown> | null;
+  attachments: RecordingAttachment[];
+}
+
+export interface RecordingAttachment {
+  filename: string;
+  url: string;
 }
 
 export type SyncEventType =

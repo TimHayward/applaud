@@ -395,6 +395,26 @@ export function RecordingDetailPage(): JSX.Element {
               )}
             </>
           )}
+          {r.attachments && r.attachments.length > 0 && (
+            <section className="card p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Attachments</h2>
+              </div>
+              <div className="space-y-2">
+                {r.attachments.map((attachment) => (
+                  <a
+                    key={attachment.filename}
+                    href={attachment.url}
+                    className="block rounded-lg border border-outline-variant/20 bg-surface-container-highest p-3 text-sm text-primary hover:bg-surface-container focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {attachment.filename}
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
           <section className="card p-6 text-sm">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Details</h2>
             <dl className="space-y-3">

@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { listRecordings } from "../plaud/list.js";
@@ -20,9 +21,10 @@ import {
   getRecordingById,
   findPendingTranscriptIds,
 } from "./state.js";
-import { ensureRecordingFolder } from "./layout.js";
+import { ensureRecordingFolder, sanitizeFilename } from "./layout.js";
 import { fireWebhookForRecording } from "../webhook/post.js";
 import { emit } from "./events.js";
+import type { FileDetailData } from "../plaud/detail.js";
 import type { PlaudRawRecording } from "@applaud/shared";
 
 export interface PollerStatus {
@@ -171,12 +173,7 @@ class Poller {
     if (!row.audioDownloadedAt) {
       const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
-      try {
-        const detail = await getFileDetail(item.id);
-        writeFileSync(paths.metadataPath, JSON.stringify(detail, null, 2));
-      } catch (err) {
-        logger.warn({ err, id: item.id }, "file detail fetch failed (non-fatal)");
-      }
+      await this.fetchAndPersistDetail(item.id, paths);
 
       const bytes = await downloadAudio(item.id, paths.audioPath);
       markAudioDownloaded(item.id, bytes || item.filesize);
@@ -213,6 +210,8 @@ class Poller {
       writeFileSync(paths.transcriptTxtPath, txtContent);
       const md = extractSummaryMarkdown(resp);
       if (md) writeFileSync(paths.summaryMdPath, md);
+      const detail = await this.fetchAndPersistDetail(id, paths);
+      if (detail) await this.downloadAttachments(detail, paths);
       markTranscriptDownloaded(id, txtContent);
       emit("recording_downloaded", { recordingId: id });
 
@@ -226,8 +225,8 @@ class Poller {
 
     // Fallback: older recordings store transcripts in S3 via the file detail endpoint.
     logger.info({ id }, "transsumm returned no data, trying file detail fallback");
-    const detail = await getFileDetail(id);
-    if (!detail.content_list || detail.content_list.length === 0) return;
+    const detail = await this.fetchAndPersistDetail(id, paths);
+    if (!detail || !detail.content_list || detail.content_list.length === 0) return;
 
     const { segments, summaryMd } = await fetchTranscriptFromContentList(detail.content_list);
     if (segments.length === 0) return;
@@ -236,6 +235,7 @@ class Poller {
     const txtContent = flattenTranscript(segments);
     writeFileSync(paths.transcriptTxtPath, txtContent);
     if (summaryMd) writeFileSync(paths.summaryMdPath, summaryMd);
+    await this.downloadAttachments(detail, paths);
     markTranscriptDownloaded(id, txtContent);
     emit("recording_downloaded", { recordingId: id });
 
@@ -243,6 +243,78 @@ class Poller {
     if (fresh) {
       const fired = await fireWebhookForRecording("transcript_ready", fresh);
       if (fired) markWebhookFired(id, "transcript_ready");
+    }
+  }
+
+  private async downloadAttachments(detail: FileDetailData, paths: ReturnType<typeof ensureRecordingFolder>): Promise<void> {
+    const downloads = new Map<string, string>();
+
+    for (const [remotePath, url] of Object.entries(detail.download_path_mapping ?? {})) {
+      if (!url || typeof url !== "string") continue;
+      const name = sanitizeFilename(path.basename(remotePath));
+      if (path.extname(name).toLowerCase() === ".gz") continue;
+      if (!name) continue;
+      downloads.set(name, url);
+    }
+
+    for (const item of detail.content_list ?? []) {
+      if (!item.data_link || typeof item.data_link !== "string") continue;
+
+      const tabName = sanitizeFilename(item.data_tab_name ?? "");
+      let candidate = "";
+      if (tabName) {
+        candidate = `${tabName}.md`;
+      } else {
+        try {
+          const u = new URL(item.data_link);
+          candidate = sanitizeFilename(decodeURIComponent(path.basename(u.pathname)));
+        } catch {
+          candidate = "";
+        }
+      }
+      if (path.extname(candidate).toLowerCase() === ".gz") continue;
+
+      const fallback = sanitizeFilename(`${item.data_type}_${item.data_id}`) || `${item.data_type}.bin`;
+      const baseName = candidate || fallback;
+      if (path.extname(baseName).toLowerCase() === ".gz") continue;
+      let finalName = baseName;
+      let collision = 1;
+      while (downloads.has(finalName)) {
+        const ext = path.extname(baseName);
+        const stem = ext ? baseName.slice(0, -ext.length) : baseName;
+        finalName = ext ? `${stem}_${collision}${ext}` : `${stem}_${collision}`;
+        collision += 1;
+      }
+      downloads.set(finalName, item.data_link);
+    }
+
+    for (const [name, url] of downloads) {
+      const filePath = path.join(paths.folder, name);
+      try {
+        const res = await fetch(url);
+        if (!res.ok) {
+          logger.warn({ id: detail.file_id, name, status: res.status }, "failed to download attachment");
+          continue;
+        }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        writeFileSync(filePath, buffer);
+      } catch (err) {
+        logger.warn({ err, id: detail.file_id, name }, "attachment download failed");
+      }
+    }
+  }
+
+  private async fetchAndPersistDetail(
+    id: string,
+    paths: ReturnType<typeof ensureRecordingFolder>,
+  ): Promise<FileDetailData | null> {
+    try {
+      const detail = await getFileDetail(id);
+      writeFileSync(paths.metadataPath, JSON.stringify(detail, null, 2));
+      return detail;
+    } catch (err) {
+      logger.warn({ err, id }, "file detail fetch failed (non-fatal)");
+      return null;
     }
   }
 

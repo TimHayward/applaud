@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   listRecordingRows,
@@ -62,11 +62,25 @@ recordingsRouter.get("/:id", (req, res) => {
     /* ignore */
   }
 
+  const attachments: { filename: string; url: string }[] = [];
+  if (row.folder && base) {
+    const folderAbs = path.join(base, row.folder);
+    if (existsSync(folderAbs)) {
+      for (const item of readdirSync(folderAbs)) {
+        if (["audio.ogg", "transcript.json", "transcript.txt", "summary.md", "metadata.json"].includes(item)) continue;
+        const abs = path.join(folderAbs, item);
+        if (!existsSync(abs) || !statSync(abs).isFile()) continue;
+        attachments.push({ filename: item, url: `/media/${encodeURIComponent(row.folder)}/${encodeURIComponent(item)}` });
+      }
+    }
+  }
+
   const detail: RecordingDetail = {
     ...row,
     transcriptText,
     summaryMarkdown,
     metadata,
+    attachments,
   };
   res.json({ recording: detail, mediaBase: `/media/${encodeURI(row.folder)}`, recordingsDir: base });
 });
