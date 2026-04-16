@@ -160,6 +160,9 @@ export function RecordingDetailPage(): JSX.Element {
     enabled: !!id,
   });
 
+  const [isResyncing, setIsResyncing] = useState(false);
+  const [resyncError, setResyncError] = useState<string | null>(null);
+
   const onTimeUpdate = useCallback(() => {
     if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
   }, []);
@@ -204,6 +207,20 @@ export function RecordingDetailPage(): JSX.Element {
     navigate("/");
   };
 
+  const resync = async (): Promise<void> => {
+    setResyncError(null);
+    setIsResyncing(true);
+    try {
+      await api.resyncRecording(r.id);
+      await qc.invalidateQueries({ queryKey: ["recording", id] });
+      await qc.invalidateQueries({ queryKey: ["recordings"] });
+    } catch (err) {
+      setResyncError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsResyncing(false);
+    }
+  };
+
   const togglePlay = (): void => {
     if (!audioRef.current) return;
     if (audioRef.current.paused) { audioRef.current.play(); } else { audioRef.current.pause(); }
@@ -240,10 +257,25 @@ export function RecordingDetailPage(): JSX.Element {
               </div>
             </div>
           </div>
-          <button className="flex items-center gap-2 px-4 py-2 border border-error/20 hover:border-error/50 text-error text-sm font-semibold rounded-lg transition-all active:scale-95 whitespace-nowrap" onClick={() => void del()}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-            Delete Recording
-          </button>
+          <div className="flex flex-wrap gap-3">
+            <button
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary text-sm font-semibold rounded-lg hover:bg-primary/90 transition-all active:scale-95 whitespace-nowrap disabled:opacity-50 disabled:pointer-events-none"
+              onClick={() => void resync()}
+              disabled={isResyncing || !r.audioDownloadedAt}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 4v6h6" />
+                <path d="M20 20v-6h-6" />
+                <path d="M5 9a9 9 0 0 1 14 6" />
+                <path d="M19 15a9 9 0 0 1-14-6" />
+              </svg>
+              {isResyncing ? "Resyncing…" : "Resync Recording"}
+            </button>
+            <button className="flex items-center gap-2 px-4 py-2 border border-error/20 hover:border-error/50 text-error text-sm font-semibold rounded-lg transition-all active:scale-95 whitespace-nowrap" onClick={() => void del()}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              Delete Recording
+            </button>
+          </div>
         </div>
       </div>
 
@@ -383,6 +415,11 @@ export function RecordingDetailPage(): JSX.Element {
           </section>
         </aside>
       </div>
+      {resyncError && (
+        <div className="mt-6 rounded-xl border border-error/30 bg-error/10 p-4 text-sm text-error">
+          {resyncError}
+        </div>
+      )}
     </div>
   );
 }

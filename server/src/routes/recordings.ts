@@ -5,8 +5,10 @@ import {
   listRecordingRows,
   getRecordingById,
   deleteRecording,
+  recordError,
 } from "../sync/state.js";
 import { loadConfig } from "../config.js";
+import { poller } from "../sync/poller.js";
 import type { RecordingDetail } from "@applaud/shared";
 
 export const recordingsRouter = Router();
@@ -91,4 +93,29 @@ recordingsRouter.delete("/:id", (req, res) => {
   }
   deleteRecording(id);
   res.json({ ok: true });
+});
+
+recordingsRouter.post("/:id/resync", async (req, res) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({ error: "missing id" });
+    return;
+  }
+  const row = getRecordingById(id);
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (!row.audioDownloadedAt) {
+    res.status(400).json({ error: "recording audio is not downloaded yet" });
+    return;
+  }
+  try {
+    await poller.refreshRecording(id);
+    res.json({ ok: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    recordError(id, message);
+    res.status(500).json({ error: message });
+  }
 });

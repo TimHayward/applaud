@@ -245,6 +245,10 @@ class Poller {
       if (fired) markWebhookFired(id, "transcript_ready");
     }
   }
+
+  public async refreshRecording(id: string): Promise<void> {
+    await this.tryTranscript(id);
+  }
 }
 
 export const poller = new Poller();

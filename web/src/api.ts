@@ -87,6 +87,8 @@ export const api = {
     jsonFetch<{ recording: RecordingDetail; mediaBase: string }>(`/api/recordings/${id}`),
   deleteRecording: (id: string) =>
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}`, { method: "DELETE" }),
+  resyncRecording: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/resync`, { method: "POST", body: "{}" }),
   syncStatus: () => jsonFetch<SyncStatusResponse>("/api/sync/status"),
   syncTrigger: () =>
     jsonFetch<{ ok: boolean }>("/api/sync/trigger", { method: "POST", body: "{}" }),
