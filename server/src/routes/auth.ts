@@ -2,7 +2,13 @@ import { Router } from "express";
 import { z } from "zod";
 import { findToken } from "../auth/chrome-leveldb.js";
 import { startBrowserWatch, subscribeWatch } from "../auth/browser-watch.js";
-import { plaudFetch, PlaudAuthError } from "../plaud/client.js";
+import {
+  plaudFetch,
+  PlaudAuthError,
+  PLAUD_API_BASES,
+  getPlaudApiBaseForRegion,
+  getPlaudRegionForBase,
+} from "../plaud/client.js";
 import { updateConfig } from "../config.js";
 import { logger } from "../logger.js";
 import type { AuthDetectResponse, AuthValidateResponse } from "@applaud/shared";
@@ -31,26 +37,45 @@ function parseJwt(jwt: string): { iat: number | null; exp: number | null; email:
   }
 }
 
-async function validateToken(token: string): Promise<AuthValidateResponse> {
-  try {
-    const res = await plaudFetch(
-      "/file/simple/web?skip=0&limit=1&is_trash=2&sort_by=start_time&is_desc=true",
-      { authOverride: token },
-    );
-    if (res.status !== 200) {
-      const body = await res.text().catch(() => "");
-      return { ok: false, error: `Plaud returned HTTP ${res.status}: ${body.slice(0, 200)}` };
+async function validateToken(token: string): Promise<AuthValidateResponse & { region?: string }> {
+  const { exp, region: jwtRegion } = parseJwt(token);
+  const defaultBase = getPlaudApiBaseForRegion(jwtRegion);
+  const candidateBases = [
+    defaultBase,
+    ...PLAUD_API_BASES.filter((base) => base !== defaultBase),
+  ];
+
+  let lastError = "Plaud returned msg=user region mismatch";
+  for (const apiBase of candidateBases) {
+    try {
+      const res = await plaudFetch(
+        "/file/simple/web?skip=0&limit=1&is_trash=2&sort_by=start_time&is_desc=true",
+        { authOverride: token, apiBase },
+      );
+      if (res.status !== 200) {
+        const body = await res.text().catch(() => "");
+        lastError = `Plaud returned HTTP ${res.status}: ${body.slice(0, 200)}`;
+        continue;
+      }
+      const body = (await res.json()) as { msg?: string; status?: number };
+      if (body.status === 0) {
+        const validatedRegion = getPlaudRegionForBase(apiBase) ?? jwtRegion;
+        return { ok: true, exp: exp ?? undefined, region: validatedRegion ?? undefined };
+      }
+      const error = `Plaud returned msg=${body.msg}`;
+      if (typeof body.msg === "string" && body.msg.toLowerCase().includes("region mismatch")) {
+        lastError = error;
+        continue;
+      }
+      return { ok: false, error };
+    } catch (err) {
+      if (err instanceof PlaudAuthError) return { ok: false, error: err.message };
+      lastError = err instanceof Error ? err.message : String(err);
+      continue;
     }
-    const body = (await res.json()) as { msg?: string; status?: number };
-    if (body.status !== 0) {
-      return { ok: false, error: `Plaud returned msg=${body.msg}` };
-    }
-    const { exp } = parseJwt(token);
-    return { ok: true, exp: exp ?? undefined };
-  } catch (err) {
-    if (err instanceof PlaudAuthError) return { ok: false, error: err.message };
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+
+  return { ok: false, error: lastError };
 }
 
 authRouter.post("/detect", async (_req, res) => {
@@ -95,10 +120,7 @@ authRouter.post("/accept", async (req, res) => {
     res.status(400).json({ error: "no JWT found in the provided string" });
     return;
   }
-  // Extract region from JWT and store it before validation so plaudFetch
-  // hits the correct regional API endpoint.
-  const { email: jwtEmail, exp, region } = parseJwt(jwt);
-  if (region) updateConfig({ plaudRegion: region });
+  const { email: jwtEmail, exp, region: jwtRegion } = parseJwt(jwt);
 
   const v = await validateToken(jwt);
   if (!v.ok) {
@@ -108,7 +130,12 @@ authRouter.post("/accept", async (req, res) => {
   // Prefer client-provided email (comes from LevelDB scan in the detect flow);
   // fall back to anything the JWT itself carries.
   const email = parsed.data.email ?? jwtEmail ?? null;
-  updateConfig({ token: jwt, tokenExp: exp, tokenEmail: email, plaudRegion: region });
+  updateConfig({
+    token: jwt,
+    tokenExp: exp,
+    tokenEmail: email,
+    plaudRegion: v.region ?? jwtRegion,
+  });
   res.json({ ok: true, email, exp });
 });
 

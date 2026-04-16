@@ -9,7 +9,18 @@ let db: Database.Database | null = null;
 export function getDb(): Database.Database {
   if (db) return db;
   ensureConfigDir();
-  db = new Database(dbPath());
+  try {
+    db = new Database(dbPath());
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Could not locate the bindings file")) {
+      throw new Error(
+        `${message} — native SQLite bindings are missing or were not built. ` +
+        `Run \`pnpm install\` from the repository root, then restart the server.`,
+      );
+    }
+    throw err;
+  }
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");

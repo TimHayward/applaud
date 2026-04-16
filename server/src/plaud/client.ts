@@ -1,16 +1,30 @@
 import { logger } from "../logger.js";
 import { loadConfig, updateConfig } from "../config.js";
 
-const REGION_API_BASES: Record<string, string> = {
+const REGION_API_BASES = {
   "aws:us-west-2": "https://api.plaud.ai",
   "aws:eu-central-1": "https://api-euc1.plaud.ai",
-};
+} as const;
 const DEFAULT_API_BASE = "https://api.plaud.ai";
+
+export const PLAUD_API_BASES = Object.values(REGION_API_BASES);
+
+export function getPlaudApiBaseForRegion(region: string | null): string {
+  if (region && region in REGION_API_BASES) {
+    return REGION_API_BASES[region as keyof typeof REGION_API_BASES];
+  }
+  return DEFAULT_API_BASE;
+}
+
+export function getPlaudRegionForBase(base: string): string | null {
+  const match = Object.entries(REGION_API_BASES).find(([, value]) => value === base);
+  return match?.[0] ?? null;
+}
 
 export function getPlaudApiBase(): string {
   const cfg = loadConfig();
-  if (cfg.plaudRegion) {
-    return REGION_API_BASES[cfg.plaudRegion] ?? DEFAULT_API_BASE;
+  if (cfg.plaudRegion && cfg.plaudRegion in REGION_API_BASES) {
+    return REGION_API_BASES[cfg.plaudRegion as keyof typeof REGION_API_BASES];
   }
   return DEFAULT_API_BASE;
 }
@@ -36,6 +50,7 @@ export class PlaudApiError extends Error {
 type FetchInit = Omit<RequestInit, "headers"> & {
   headers?: Record<string, string>;
   authOverride?: string;
+  apiBase?: string;
 };
 
 function getToken(): string {
@@ -47,7 +62,8 @@ function getToken(): string {
 const USER_AGENT = "applaud/0.1.0 (+https://github.com/rsteckler/applaud)";
 
 export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promise<Response> {
-  const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${getPlaudApiBase()}${pathOrUrl}`;
+  const base = init.apiBase ?? getPlaudApiBase();
+  const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${base}${pathOrUrl}`;
   const token = init.authOverride ?? getToken();
   const headers: Record<string, string> = {
     accept: "application/json",
