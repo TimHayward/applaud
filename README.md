@@ -171,5 +171,4 @@ pnpm dev
 Runs the Vite dev server on port 44470 with a proxy for `/api` and `/media` to the Express server on port 44471. The server runs in `tsx watch` mode. Hot reload works on both sides.
 
 ## License
-
-MIT
+ MIT see [`LICENSE`](LICENSE)
