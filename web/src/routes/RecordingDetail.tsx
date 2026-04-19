@@ -2,6 +2,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import Markdown from "react-markdown";
+import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 import { api } from "../api.js";
 import { Waveform } from "../components/Waveform.js";
 
@@ -160,6 +161,16 @@ export function RecordingDetailPage(): JSX.Element {
     enabled: !!id,
   });
 
+  const summaryMarkdownDisplay = useMemo(() => {
+    const raw = q.data?.recording.summaryMarkdown;
+    const rec = q.data?.recording;
+    if (!raw || !rec) return null;
+    return sanitizePlaudSummaryMarkdown(raw, {
+      startTimeMs: rec.startTime,
+      endTimeMs: rec.endTime,
+    });
+  }, [q.data]);
+
   const onTimeUpdate = useCallback(() => {
     if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
   }, []);
@@ -198,10 +209,41 @@ export function RecordingDetailPage(): JSX.Element {
   const { recording: r, mediaBase } = q.data;
 
   const del = async (): Promise<void> => {
-    if (!confirm("Delete the local copy of this recording? (Plaud is unaffected.)")) return;
+    if (
+      !confirm(
+        "Move this recording to Trash? Local files stay until automatic purge (~7 days). You can restore from Trash until then. Nothing is deleted in Plaud.",
+      )
+    ) {
+      return;
+    }
     await api.deleteRecording(r.id);
     await qc.invalidateQueries({ queryKey: ["recordings"] });
-    navigate("/");
+    await qc.invalidateQueries({ queryKey: ["recordings-trash"] });
+    navigate("/trash");
+  };
+
+  const restore = async (): Promise<void> => {
+    await api.restoreRecording(r.id);
+    await qc.invalidateQueries({ queryKey: ["recordings"] });
+    await qc.invalidateQueries({ queryKey: ["recordings-trash"] });
+    await qc.invalidateQueries({ queryKey: ["recording", id] });
+    void q.refetch();
+  };
+
+  const purgeNow = async (): Promise<void> => {
+    if (
+      !confirm(
+        "Permanently delete this recording now? Local files will be removed immediately and the Plaud id will be added to the sync blocklist (same as after the 7-day wait). This cannot be undone.",
+      )
+    ) {
+      return;
+    }
+    await api.purgeRecordingFromTrash(r.id);
+    await qc.invalidateQueries({ queryKey: ["recordings"] });
+    await qc.invalidateQueries({ queryKey: ["recordings-trash"] });
+    await qc.invalidateQueries({ queryKey: ["sync-blocklist"] });
+    await qc.invalidateQueries({ queryKey: ["recording", id] });
+    navigate("/trash");
   };
 
   const togglePlay = (): void => {
@@ -211,10 +253,37 @@ export function RecordingDetailPage(): JSX.Element {
   const skipBack = (): void => { if (audioRef.current) audioRef.current.currentTime -= 10; };
   const skipForward = (): void => { if (audioRef.current) audioRef.current.currentTime += 30; };
 
-  const isComplete = !!r.audioDownloadedAt && !!r.transcriptDownloadedAt;
+  const isComplete =
+    !!r.audioDownloadedAt && (!!r.transcriptDownloadedAt || r.isTrash);
 
   return (
     <div>
+      {r.userDeletedAt && (
+        <div className="mb-6 rounded-xl border border-tertiary/30 bg-tertiary/10 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <p className="text-sm text-on-surface">
+            This recording is in Trash.
+            {r.userPurgeAt ? (
+              <>
+                {" "}
+                Local files will be removed after{" "}
+                <span className="font-semibold text-on-surface">{formatDate(r.userPurgeAt)}</span> unless you restore it.
+              </>
+            ) : null}
+          </p>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={() => void restore()}>
+              Restore
+            </button>
+            <button
+              type="button"
+              className="px-4 py-2 text-sm rounded-lg border border-error/30 text-error font-semibold hover:bg-error/10 transition-colors"
+              onClick={() => void purgeNow()}
+            >
+              Delete permanently
+            </button>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="mb-8">
         <nav className="flex items-center gap-2 text-xs font-label uppercase tracking-widest text-on-surface-variant mb-4">
@@ -240,10 +309,12 @@ export function RecordingDetailPage(): JSX.Element {
               </div>
             </div>
           </div>
-          <button className="flex items-center gap-2 px-4 py-2 border border-error/20 hover:border-error/50 text-error text-sm font-semibold rounded-lg transition-all active:scale-95 whitespace-nowrap" onClick={() => void del()}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-            Delete Recording
-          </button>
+          {!r.userDeletedAt ? (
+            <button className="flex items-center gap-2 px-4 py-2 border border-error/20 hover:border-error/50 text-error text-sm font-semibold rounded-lg transition-all active:scale-95 whitespace-nowrap" onClick={() => void del()}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              Move to Trash
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -294,14 +365,18 @@ export function RecordingDetailPage(): JSX.Element {
           ) : r.audioDownloadedAt ? (
             <section className="card p-6">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Transcript</h2>
-              <p className="text-sm text-on-surface-variant">Transcript is still pending on Plaud's side. We'll pull it on the next sync cycle.</p>
+              <p className="text-sm text-on-surface-variant">
+                {r.isTrash
+                  ? "This file is deleted in Plaud. Applaud always pulls audio; transcript and summary are checked periodically in the background when Plaud has them again (they do not count as pending sync work)."
+                  : "Transcript is still pending on Plaud's side. We'll pull it on the next sync cycle."}
+              </p>
             </section>
           ) : null}
         </div>
 
         {/* Sidebar */}
         <aside className="lg:col-span-3 space-y-6">
-          {r.summaryMarkdown && (
+          {summaryMarkdownDisplay && (
             <>
               <section className="bg-surface-container-high rounded-xl p-6 shadow-lg border border-outline-variant/20 relative">
                 <div className="flex items-center justify-between mb-4">
@@ -322,7 +397,7 @@ export function RecordingDetailPage(): JSX.Element {
                 </div>
                 <div className="overflow-hidden relative" style={{ maxHeight: "50vh" }}>
                   <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed text-on-surface [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-on-surface [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-on-surface [&_h3]:text-sm [&_h3]:font-bold [&_h3]:text-on-surface [&_p]:text-on-surface-variant [&_li]:text-on-surface-variant [&_strong]:text-on-surface [&_a]:text-primary [&_ul]:space-y-1 [&_ol]:space-y-1">
-                    <Markdown>{r.summaryMarkdown}</Markdown>
+                    <Markdown>{summaryMarkdownDisplay}</Markdown>
                   </div>
                   {/* Fade overlay at bottom */}
                   <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-surface-container-high to-transparent pointer-events-none" />
@@ -355,7 +430,7 @@ export function RecordingDetailPage(): JSX.Element {
                     </div>
                     <div className="overflow-y-auto p-6" style={{ maxHeight: "calc(90vh - 73px)" }}>
                       <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed text-on-surface [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-on-surface [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-on-surface [&_h3]:text-sm [&_h3]:font-bold [&_h3]:text-on-surface [&_p]:text-on-surface-variant [&_li]:text-on-surface-variant [&_strong]:text-on-surface [&_a]:text-primary [&_ul]:space-y-1 [&_ol]:space-y-1">
-                        <Markdown>{r.summaryMarkdown}</Markdown>
+                        <Markdown>{summaryMarkdownDisplay}</Markdown>
                       </div>
                     </div>
                   </div>

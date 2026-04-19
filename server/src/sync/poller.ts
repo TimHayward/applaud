@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { listRecordings } from "../plaud/list.js";
-import { downloadAudio, md5File } from "../plaud/audio.js";
+import { downloadAudio } from "../plaud/audio.js";
 import {
   getTranscriptAndSummary,
   flattenTranscript,
@@ -20,11 +20,21 @@ import {
   recordError,
   getRecordingById,
   findRecordingsNeedingAssets,
+  purgeExpiredSoftDeletes,
+  isSyncIgnoredId,
+  findPlaudTrashAssetProbeCandidates,
+  markTrashAssetProbed,
+  PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS,
+  PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT,
+  PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT,
+  clearError,
+  resetPlaudTrashAssetProbeTimestamps,
 } from "./state.js";
 import { ensureRecordingFolder } from "./layout.js";
 import { fireWebhookForRecording } from "../webhook/post.js";
 import { emit } from "./events.js";
 import type { RecordingRow } from "@applaud/shared";
+import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 
 export interface PollerStatus {
   lastPollAt: number | null;
@@ -38,6 +48,8 @@ class Poller {
   private interval: NodeJS.Timeout | null = null;
   private inFlight = false;
   private queuedTrigger = false;
+  /** Set by trigger(); consumed on next poll past config gate — manual reset + higher Phase 3 probe cap. */
+  private pendingManualSync = false;
   lastPollAt: number | null = null;
   nextPollAt: number | null = null;
   lastError: string | null = null;
@@ -67,6 +79,7 @@ class Poller {
   }
 
   async trigger(): Promise<void> {
+    this.pendingManualSync = true;
     if (this.inFlight) {
       this.queuedTrigger = true;
       return;
@@ -116,7 +129,22 @@ class Poller {
   private async pollAndProcess(): Promise<void> {
     const cfg = loadConfig();
     if (!cfg.token || !cfg.recordingsDir || !cfg.setupComplete) return;
+
+    const isManualSync = this.pendingManualSync;
+    if (isManualSync) this.pendingManualSync = false;
+
+    if (isManualSync && cfg.importPlaudDeleted) {
+      const cleared = resetPlaudTrashAssetProbeTimestamps();
+      if (cleared > 0) {
+        logger.info({ rows: cleared }, "manual sync: cleared Plaud trash transcript/summary probe throttles");
+      }
+    }
+
     this.authRequired = false;
+
+    purgeExpiredSoftDeletes();
+
+    const listTrashMode = cfg.importPlaudDeleted ? 2 : 0;
 
     // Phase 1 — Discovery: walk Plaud's recording list and upsert metadata for
     // any new rows. Upsert is a no-op for rows we already have. No fetching
@@ -129,6 +157,7 @@ class Poller {
       const page = await listRecordings({
         skip: pageIdx * PAGE_SIZE,
         limit: PAGE_SIZE,
+        isTrash: listTrashMode,
       });
       if (page.status !== 0) {
         throw new Error(`Plaud list returned status=${page.status} msg=${page.msg}`);
@@ -138,6 +167,10 @@ class Poller {
       if (items.length === 0) break;
       for (const item of items) {
         try {
+          if (isSyncIgnoredId(item.id)) continue;
+          if (item.is_trash && !cfg.importPlaudDeleted) continue;
+          const pre = getRecordingById(item.id);
+          if (pre?.userDeletedAt) continue;
           upsertFromPlaud(item);
           fetched++;
         } catch (err) {
@@ -163,11 +196,38 @@ class Poller {
         emit("error", { recordingId: row.id, message: msg });
       });
     }
+
+    // Phase 3 — Plaud trash: best-effort transcript/summary check (throttled).
+    // Not included in pending counts or findRecordingsNeedingAssets; failures do not set last_error.
+    if (cfg.importPlaudDeleted) {
+      const probeCutoff = Date.now() - PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS;
+      const probeLimit = isManualSync
+        ? PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT
+        : PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT;
+      const trashProbe = findPlaudTrashAssetProbeCandidates(probeCutoff, probeLimit);
+      for (const row of trashProbe) {
+        try {
+          clearError(row.id);
+          await this.tryTranscriptAndSummary(row, true);
+        } catch (err) {
+          logger.info(
+            { err, id: row.id },
+            "plaud trash asset probe: no transcript/summary to ingest or transient error (ignored)",
+          );
+        } finally {
+          markTrashAssetProbed(row.id);
+        }
+      }
+    }
   }
 
   private async processRecording(row: RecordingRow): Promise<void> {
     const cfg = loadConfig();
     if (!cfg.recordingsDir) return;
+    if (isSyncIgnoredId(row.id)) return;
+    if (row.userDeletedAt) return;
+    if (row.isTrash && !cfg.importPlaudDeleted) return;
+
     const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
     // Each asset is retried independently — a failure fetching one doesn't
@@ -198,7 +258,8 @@ class Poller {
       }
     }
 
-    if (!row.transcriptDownloadedAt || !row.summaryDownloadedAt) {
+    const wantSummary = !row.summaryDownloadedAt && row.plaudIsSummary;
+    if (!row.isTrash && (!row.transcriptDownloadedAt || wantSummary)) {
       try {
         await this.tryTranscriptAndSummary(row);
       } catch (err) {
@@ -210,13 +271,18 @@ class Poller {
     }
   }
 
-  private async tryTranscriptAndSummary(row: RecordingRow): Promise<void> {
+  private async tryTranscriptAndSummary(row: RecordingRow, opportunistic = false): Promise<void> {
+    if (opportunistic) {
+      if (!row.isTrash) return;
+    } else if (row.isTrash) {
+      return;
+    }
     const cfg = loadConfig();
     if (!cfg.recordingsDir) return;
     const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
     const needTranscript = !row.transcriptDownloadedAt;
-    const needSummary = !row.summaryDownloadedAt;
+    const needSummary = !row.summaryDownloadedAt && row.plaudIsSummary;
     let wroteTranscript = false;
     let wroteSummary = false;
 
@@ -234,7 +300,11 @@ class Poller {
     if (needSummary) {
       const md = extractSummaryMarkdown(resp);
       if (md) {
-        writeFileSync(paths.summaryMdPath, md);
+        const cleaned = sanitizePlaudSummaryMarkdown(md, {
+          startTimeMs: row.startTime,
+          endTimeMs: row.endTime,
+        });
+        writeFileSync(paths.summaryMdPath, cleaned);
         markSummaryDownloaded(row.id);
         wroteSummary = true;
       }
@@ -262,7 +332,11 @@ class Poller {
           wroteTranscript = true;
         }
         if (stillNeedSummary && summaryMd) {
-          writeFileSync(paths.summaryMdPath, summaryMd);
+          const cleaned = sanitizePlaudSummaryMarkdown(summaryMd, {
+            startTimeMs: row.startTime,
+            endTimeMs: row.endTime,
+          });
+          writeFileSync(paths.summaryMdPath, cleaned);
           markSummaryDownloaded(row.id);
           wroteSummary = true;
         }

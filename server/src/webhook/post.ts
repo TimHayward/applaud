@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { WebhookPayload, WebhookEvent, RecordingRow } from "@applaud/shared";
+import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 import { loadConfig } from "../config.js";
 import { getDb } from "../db.js";
 import { logger } from "../logger.js";
@@ -47,9 +48,16 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
 
   if (event === "transcript_ready" && cfg.recordingsDir) {
     const folderAbs = path.join(cfg.recordingsDir, row.folder);
+    const rawSummary = readIfExists(path.join(folderAbs, "summary.md"));
     payload.content = {
       transcript_text: readIfExists(path.join(folderAbs, "transcript.txt")),
-      summary_markdown: readIfExists(path.join(folderAbs, "summary.md")),
+      summary_markdown:
+        rawSummary != null
+          ? sanitizePlaudSummaryMarkdown(rawSummary, {
+              startTimeMs: row.startTime,
+              endTimeMs: row.endTime,
+            })
+          : null,
     };
   }
 

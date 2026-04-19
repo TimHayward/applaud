@@ -26,15 +26,19 @@ export function Settings(): JSX.Element {
 
   const [webhookUrl, setWebhookUrl] = useState("");
   const [pollMinutes, setPollMinutes] = useState(10);
+  const [importPlaudDeleted, setImportPlaudDeleted] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<null | { ok: boolean; message: string }>(null);
+  const [clearIgnoreBusy, setClearIgnoreBusy] = useState(false);
+  const [clearIgnoreMsg, setClearIgnoreMsg] = useState<null | { ok: boolean; text: string }>(null);
 
   useEffect(() => {
     if (!cfg.data) return;
     const c = cfg.data.config;
     setWebhookUrl(c.webhook?.url ?? "");
     setPollMinutes(c.pollIntervalMinutes);
+    setImportPlaudDeleted(c.importPlaudDeleted ?? false);
     setDirty(false);
   }, [cfg.data]);
 
@@ -50,8 +54,11 @@ export function Settings(): JSX.Element {
           ? { url: webhookUrl.trim(), enabled: true }
           : null,
         pollIntervalMinutes: pollMinutes,
+        importPlaudDeleted,
       });
       await qc.invalidateQueries({ queryKey: ["config"] });
+      await qc.invalidateQueries({ queryKey: ["recordings"] });
+      await qc.invalidateQueries({ queryKey: ["sync-status"] });
       setDirty(false);
     } finally {
       setSaving(false);
@@ -111,10 +118,58 @@ export function Settings(): JSX.Element {
               <p className="font-label text-[10px] text-on-surface-variant uppercase tracking-widest mb-1">Pending</p>
               <p className="font-bold text-lg text-tertiary">
                 {s?.pendingTranscripts ?? 0} transcript{(s?.pendingTranscripts ?? 0) !== 1 ? "s" : ""}
+                {(s?.pendingSummaries ?? 0) > 0 ? (
+                  <span className="block text-sm font-semibold mt-1 text-on-surface-variant">
+                    {s?.pendingSummaries} summary pending
+                  </span>
+                ) : null}
               </p>
             </div>
           </div>
         </div>
+      </section>
+
+      {/* Sync maintenance */}
+      <section className="card p-8 space-y-4">
+        <h2 className="text-xl font-bold text-on-surface">Sync maintenance</h2>
+        <p className="text-sm text-on-surface-variant max-w-prose">
+          After a recording spends 7 days in Trash, Applaud deletes its local files and adds the Plaud id to an internal
+          blocklist so it is not downloaded again. If you need to pull those recordings from Plaud again, clear the
+          blocklist here. This does not delete any files currently in your library.
+        </p>
+        {clearIgnoreMsg && (
+          <p className={`text-sm ${clearIgnoreMsg.ok ? "text-secondary" : "text-error"}`}>{clearIgnoreMsg.text}</p>
+        )}
+        <button
+          type="button"
+          className="px-4 py-2 rounded-lg border border-error/30 text-error text-sm font-semibold hover:bg-error/10 transition-colors"
+          disabled={clearIgnoreBusy}
+          onClick={() => {
+            if (
+              !confirm(
+                "Clear the purged-recording blocklist? Previously purged Plaud ids may be downloaded again on the next sync.",
+              )
+            ) {
+              return;
+            }
+            setClearIgnoreBusy(true);
+            setClearIgnoreMsg(null);
+            void api
+              .clearSyncIgnore()
+              .then((r) => {
+                setClearIgnoreMsg({ ok: true, text: `Cleared ${r.cleared} blocked id(s).` });
+                void qc.invalidateQueries({ queryKey: ["sync-blocklist"] });
+              })
+              .catch((err) => {
+                setClearIgnoreMsg({ ok: false, text: err instanceof Error ? err.message : String(err) });
+              })
+              .finally(() => {
+                setClearIgnoreBusy(false);
+              });
+          }}
+        >
+          {clearIgnoreBusy ? "Clearing…" : "Clear purged recording blocklist"}
+        </button>
       </section>
 
       {/* Account Details */}
@@ -256,6 +311,27 @@ export function Settings(): JSX.Element {
             <span>60 mins</span>
           </div>
         </div>
+      </section>
+
+      {/* Plaud import option (saved with Save Settings) */}
+      <section className="card p-8 space-y-4">
+        <h2 className="text-xl font-bold text-on-surface">Plaud library</h2>
+        <p className="text-sm text-on-surface-variant max-w-prose">
+          By default only files that are still active in Plaud are listed and synced. Enable the option below to also
+          download and show items you deleted in the Plaud app (they appear with the trash badge on the recordings list).
+        </p>
+        <label className="flex items-start gap-3 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary shrink-0"
+            checked={importPlaudDeleted}
+            onChange={(e) => {
+              setImportPlaudDeleted(e.target.checked);
+              setDirty(true);
+            }}
+          />
+          <span className="text-sm font-medium text-on-surface">Import recordings deleted in Plaud</span>
+        </label>
       </section>
 
       {/* Save Footer */}

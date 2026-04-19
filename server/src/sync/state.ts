@@ -1,4 +1,4 @@
-import { renameSync, existsSync } from "node:fs";
+import { renameSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { RecordingRow, PlaudRawRecording } from "@applaud/shared";
 import { getDb, rowToRecording, type RecordingDbRow } from "../db.js";
@@ -6,6 +6,57 @@ import { folderName, recordingPaths } from "./layout.js";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { emit } from "./events.js";
+
+/** Soft-deleted recordings are purged from disk and DB after this delay. */
+export const SOFT_DELETE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+function mainListWhereSql(): string {
+  if (loadConfig().importPlaudDeleted) {
+    return "user_deleted_at IS NULL";
+  }
+  return "user_deleted_at IS NULL AND is_trash = 0";
+}
+
+/** Rows that still need cloud asset work (used by the poller). */
+function assetWorkWhereSql(): string {
+  const cfg = loadConfig();
+  const trashOk = cfg.importPlaudDeleted ? "" : " AND is_trash = 0";
+  // Plaud-trashed files (is_trash=1): only sync audio when import is enabled — never transcript/summary.
+  return `user_deleted_at IS NULL${trashOk}
+       AND (
+         audio_downloaded_at IS NULL
+         OR (is_trash = 0 AND (
+              transcript_downloaded_at IS NULL
+              OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
+            ))
+       )`;
+}
+
+export function isSyncIgnoredId(id: string): boolean {
+  const row = getDb()
+    .prepare<[string], { c: number }>("SELECT 1 AS c FROM sync_ignore WHERE id = ?")
+    .get(id);
+  return (row?.c ?? 0) > 0;
+}
+
+export function clearSyncIgnore(): number {
+  const r = getDb().prepare("DELETE FROM sync_ignore").run();
+  return r.changes;
+}
+
+export interface SyncBlocklistRow {
+  id: string;
+  ignoredAt: number;
+}
+
+export function listSyncIgnoreRows(): SyncBlocklistRow[] {
+  const rows = getDb()
+    .prepare<[], { id: string; ignored_at: number }>(
+      "SELECT id, ignored_at FROM sync_ignore ORDER BY ignored_at DESC",
+    )
+    .all();
+  return rows.map((r) => ({ id: r.id, ignoredAt: r.ignored_at }));
+}
 
 export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
   const db = getDb();
@@ -17,8 +68,9 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
       renameRecordingFolder(existing, item.filename);
     }
     const trashVal = item.is_trash ? 1 : 0;
-    if (existing.is_trash !== trashVal) {
-      db.prepare("UPDATE recordings SET is_trash = ? WHERE id = ?").run(trashVal, item.id);
+    const summVal = item.is_summary ? 1 : 0;
+    if (existing.is_trash !== trashVal || existing.plaud_is_summary !== summVal) {
+      db.prepare("UPDATE recordings SET is_trash = ?, plaud_is_summary = ? WHERE id = ?").run(trashVal, summVal, item.id);
     }
     return rowToRecording(
       db.prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?").get(item.id)!,
@@ -35,8 +87,9 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
       id, filename, start_time, end_time, duration_ms, filesize_bytes, serial_number,
       folder, audio_path, transcript_path, summary_path, metadata_path,
       audio_downloaded_at, transcript_downloaded_at, webhook_audio_fired_at,
-      webhook_transcript_fired_at, is_trash, last_error, metadata_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL)`,
+      webhook_transcript_fired_at, is_trash, last_error, metadata_json,
+      user_deleted_at, user_purge_at, plaud_is_summary, summary_downloaded_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, NULL)`,
   ).run(
     item.id,
     item.filename,
@@ -51,6 +104,7 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
     paths.summaryMdPath,
     paths.metadataPath,
     item.is_trash ? 1 : 0,
+    item.is_summary ? 1 : 0,
   );
 
   return rowToRecording(
@@ -118,7 +172,7 @@ export function markTranscriptDownloaded(id: string, transcriptText?: string): v
 
 export function markSummaryDownloaded(id: string): void {
   getDb()
-    .prepare("UPDATE recordings SET summary_downloaded_at = ? WHERE id = ?")
+    .prepare("UPDATE recordings SET summary_downloaded_at = ?, last_error = NULL WHERE id = ?")
     .run(Date.now(), id);
 }
 
@@ -138,27 +192,54 @@ export function clearError(id: string): void {
 }
 
 export function listRecordingRows(
-  opts: { limit?: number; offset?: number; search?: string } = {},
+  opts: { limit?: number; offset?: number; search?: string; includeInactive?: boolean } = {},
 ): { total: number; totalBytes: number; items: RecordingRow[] } {
   const db = getDb();
   const limit = Math.min(opts.limit ?? 100, 500);
   const offset = Math.max(opts.offset ?? 0, 0);
   const search = opts.search?.trim();
+  const activeOnly = !opts.includeInactive;
 
   let aggRow: { c: number; b: number } | undefined;
   let rows: RecordingDbRow[];
   if (search) {
     const like = `%${search}%`;
+    const ml = mainListWhereSql();
+    if (activeOnly) {
+      aggRow = db
+        .prepare<[string, string], { c: number; b: number }>(
+          `SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE (${ml}) AND (filename LIKE ? OR transcript_text LIKE ?)`,
+        )
+        .get(like, like);
+      rows = db
+        .prepare<[string, string, number, number], RecordingDbRow>(
+          `SELECT * FROM recordings WHERE (${ml}) AND (filename LIKE ? OR transcript_text LIKE ?) ORDER BY start_time DESC LIMIT ? OFFSET ?`,
+        )
+        .all(like, like, limit, offset);
+    } else {
+      aggRow = db
+        .prepare<[string, string], { c: number; b: number }>(
+          "SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ?",
+        )
+        .get(like, like);
+      rows = db
+        .prepare<[string, string, number, number], RecordingDbRow>(
+          "SELECT * FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ? ORDER BY start_time DESC LIMIT ? OFFSET ?",
+        )
+        .all(like, like, limit, offset);
+    }
+  } else if (activeOnly) {
+    const ml = mainListWhereSql();
     aggRow = db
-      .prepare<[string, string], { c: number; b: number }>(
-        "SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ?",
+      .prepare<[], { c: number; b: number }>(
+        `SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE ${ml}`,
       )
-      .get(like, like);
+      .get();
     rows = db
-      .prepare<[string, string, number, number], RecordingDbRow>(
-        "SELECT * FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ? ORDER BY start_time DESC LIMIT ? OFFSET ?",
+      .prepare<[number, number], RecordingDbRow>(
+        `SELECT * FROM recordings WHERE ${ml} ORDER BY start_time DESC LIMIT ? OFFSET ?`,
       )
-      .all(like, like, limit, offset);
+      .all(limit, offset);
   } else {
     aggRow = db.prepare<[], { c: number; b: number }>("SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings").get();
     rows = db
@@ -174,6 +255,29 @@ export function listRecordingRows(
   };
 }
 
+export function listSoftDeletedRows(
+  opts: { limit?: number; offset?: number } = {},
+): { total: number; totalBytes: number; items: RecordingRow[] } {
+  const db = getDb();
+  const limit = Math.min(opts.limit ?? 100, 500);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const aggRow = db
+    .prepare<[], { c: number; b: number }>(
+      "SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE user_deleted_at IS NOT NULL",
+    )
+    .get();
+  const rows = db
+    .prepare<[number, number], RecordingDbRow>(
+      "SELECT * FROM recordings WHERE user_deleted_at IS NOT NULL ORDER BY user_deleted_at DESC LIMIT ? OFFSET ?",
+    )
+    .all(limit, offset);
+  return {
+    total: aggRow?.c ?? 0,
+    totalBytes: aggRow?.b ?? 0,
+    items: rows.map(rowToRecording),
+  };
+}
+
 export function getRecordingById(id: string): RecordingRow | null {
   const row = getDb()
     .prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?")
@@ -181,17 +285,93 @@ export function getRecordingById(id: string): RecordingRow | null {
   return row ? rowToRecording(row) : null;
 }
 
-export function deleteRecording(id: string): void {
+/** Permanently remove the DB row (after files removed). Used by purge only. */
+export function removeRecordingRow(id: string): void {
   getDb().prepare("DELETE FROM recordings WHERE id = ?").run(id);
 }
 
-export function countPendingAssets(): number {
+export function softDeleteRecording(id: string): void {
+  const now = Date.now();
+  getDb()
+    .prepare("UPDATE recordings SET user_deleted_at = ?, user_purge_at = ? WHERE id = ?")
+    .run(now, now + SOFT_DELETE_RETENTION_MS, id);
+}
+
+export function restoreRecording(id: string): void {
+  getDb()
+    .prepare("UPDATE recordings SET user_deleted_at = NULL, user_purge_at = NULL WHERE id = ?")
+    .run(id);
+}
+
+/** @returns false if disk removal was required and failed (DB row kept). */
+function purgeOneSoftDeletedRow(row: RecordingDbRow, now: number): boolean {
+  const cfg = loadConfig();
+  if (cfg.recordingsDir) {
+    const folderAbs = path.join(cfg.recordingsDir, row.folder);
+    try {
+      rmSync(folderAbs, { recursive: true, force: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, id: row.id, folderAbs },
+        "purge: failed to remove folder; retaining DB row to avoid orphan data on disk",
+      );
+      getDb()
+        .prepare("UPDATE recordings SET last_error = ? WHERE id = ?")
+        .run(`Purge failed (disk): ${msg}`.slice(0, 500), row.id);
+      return false;
+    }
+  }
+  try {
+    getDb().prepare("INSERT OR REPLACE INTO sync_ignore (id, ignored_at) VALUES (?, ?)").run(row.id, now);
+  } catch (err) {
+    logger.warn({ err, id: row.id }, "purge: failed to insert sync_ignore");
+  }
+  removeRecordingRow(row.id);
+  logger.info({ id: row.id }, "soft-delete purge complete; id added to sync_ignore");
+  return true;
+}
+
+export function purgeExpiredSoftDeletes(): void {
+  const now = Date.now();
+  const rows = getDb()
+    .prepare<[number], RecordingDbRow>(
+      "SELECT * FROM recordings WHERE user_deleted_at IS NOT NULL AND user_purge_at IS NOT NULL AND user_purge_at <= ?",
+    )
+    .all(now) as RecordingDbRow[];
+
+  for (const row of rows) {
+    purgeOneSoftDeletedRow(row, now);
+  }
+}
+
+/** Permanently remove a soft-deleted row immediately (same as scheduled purge). */
+export function purgeSoftDeletedRecordingNow(
+  id: string,
+): "ok" | "not_found" | "not_in_trash" | "disk_error" {
+  const row = getDb()
+    .prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?")
+    .get(id);
+  if (!row) return "not_found";
+  if (row.user_deleted_at == null) return "not_in_trash";
+  return purgeOneSoftDeletedRow(row, Date.now()) ? "ok" : "disk_error";
+}
+
+export function countPendingTranscripts(): number {
   const row = getDb()
     .prepare<[], { c: number }>(
-      `SELECT COUNT(*) AS c FROM recordings
-       WHERE audio_downloaded_at IS NULL
-          OR transcript_downloaded_at IS NULL
-          OR summary_downloaded_at IS NULL`,
+      `SELECT COUNT(*) AS c FROM recordings WHERE audio_downloaded_at IS NOT NULL AND transcript_downloaded_at IS NULL
+       AND user_deleted_at IS NULL AND is_trash = 0`,
+    )
+    .get();
+  return row?.c ?? 0;
+}
+
+export function countPendingSummaries(): number {
+  const row = getDb()
+    .prepare<[], { c: number }>(
+      `SELECT COUNT(*) AS c FROM recordings WHERE audio_downloaded_at IS NOT NULL AND transcript_downloaded_at IS NOT NULL
+       AND summary_downloaded_at IS NULL AND plaud_is_summary = 1 AND user_deleted_at IS NULL AND is_trash = 0`,
     )
     .get();
   return row?.c ?? 0;
@@ -208,14 +388,57 @@ export function countErrorsLast24h(): number {
 }
 
 export function findRecordingsNeedingAssets(): RecordingRow[] {
+  const w = assetWorkWhereSql();
   const rows = getDb()
-    .prepare<[], RecordingDbRow>(
-      `SELECT * FROM recordings
-       WHERE audio_downloaded_at IS NULL
-          OR transcript_downloaded_at IS NULL
-          OR summary_downloaded_at IS NULL
-       ORDER BY start_time DESC`,
-    )
+    .prepare<[], RecordingDbRow>(`SELECT * FROM recordings WHERE ${w} ORDER BY start_time DESC`)
     .all();
   return rows.map(rowToRecording);
+}
+
+/** Throttled Plaud-trash rows to check for transcript/summary (does not drive pending counts). */
+export const PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** Max trash rows probed per scheduled poll (Phase 3). */
+export const PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT = 25;
+/** Sync Now: higher than scheduled poll, but bounded so one manual sync cannot fan out without limit. */
+export const PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT = 100;
+
+export function findPlaudTrashAssetProbeCandidates(probeOlderThan: number, limit: number): RecordingRow[] {
+  if (!loadConfig().importPlaudDeleted) return [];
+  const rows = getDb()
+    .prepare<[number, number], RecordingDbRow>(
+      `SELECT * FROM recordings
+       WHERE user_deleted_at IS NULL
+         AND is_trash = 1
+         AND audio_downloaded_at IS NOT NULL
+         AND (
+           transcript_downloaded_at IS NULL
+           OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
+         )
+         AND (trash_asset_probe_at IS NULL OR trash_asset_probe_at < ?)
+       ORDER BY trash_asset_probe_at ASC, start_time DESC
+       LIMIT ?`,
+    )
+    .all(probeOlderThan, limit);
+  return rows.map(rowToRecording);
+}
+
+export function markTrashAssetProbed(id: string): void {
+  getDb().prepare("UPDATE recordings SET trash_asset_probe_at = ? WHERE id = ?").run(Date.now(), id);
+}
+
+/** Clears probe timers so the next Phase-3 pass can consider all eligible Plaud-trash rows (e.g. after Sync Now). */
+export function resetPlaudTrashAssetProbeTimestamps(): number {
+  const r = getDb()
+    .prepare(
+      `UPDATE recordings SET trash_asset_probe_at = NULL
+       WHERE user_deleted_at IS NULL
+         AND is_trash = 1
+         AND audio_downloaded_at IS NOT NULL
+         AND (
+           transcript_downloaded_at IS NULL
+           OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
+         )`,
+    )
+    .run();
+  return r.changes;
 }

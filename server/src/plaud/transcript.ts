@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { plaudJson } from "./client.js";
 import { gunzipSync } from "node:zlib";
 import type { ContentListItem } from "./detail.js";
@@ -90,7 +91,10 @@ export async function fetchTranscriptFromContentList(
   contentList: ContentListItem[],
 ): Promise<{ segments: TranscriptSegment[]; summaryMd: string | null }> {
   const transItem = contentList.find((c) => c.data_type === "transaction" && c.data_link);
-  const summItem = contentList.find((c) => c.data_type === "auto_sum_note" && c.data_link);
+  const summItem =
+    contentList.find((c) => c.data_type === "auto_sum_note" && c.data_link) ??
+    contentList.find((c) => c.data_type === "transaction_polish" && c.data_link) ??
+    contentList.find((c) => typeof c.data_type === "string" && c.data_type.includes("sum") && c.data_link);
 
   let segments: TranscriptSegment[] = [];
   if (transItem?.data_link) {
@@ -128,10 +132,32 @@ export async function fetchTranscriptFromContentList(
   return { segments, summaryMd };
 }
 
+function pickMarkdownFromUnknown(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === "string") return extractMarkdownFromSummaryPayload(v);
+  try {
+    return extractMarkdownFromSummaryPayload(JSON.stringify(v));
+  } catch {
+    return null;
+  }
+}
+
 export function extractSummaryMarkdown(resp: TranssummResponse): string | null {
-  const raw = resp.data_result_summ;
-  if (raw === null || raw === undefined) return null;
-  return extractMarkdownFromSummaryPayload(raw);
+  const primary = extractMarkdownFromSummaryPayload(resp.data_result_summ);
+  if (primary) return primary;
+  const mul = pickMarkdownFromUnknown(resp.data_result_summ_mul);
+  if (mul) return mul;
+  const note = pickMarkdownFromUnknown(resp.data_note_result);
+  if (note) return note;
+  if (resp.outline_result && resp.outline_result.length > 0) {
+    const lines: string[] = ["## Topics", ""];
+    for (const o of resp.outline_result) {
+      const ts = formatTimestamp(o.start_time);
+      lines.push(`- **${ts}** — ${o.topic}`);
+    }
+    return lines.join("\n");
+  }
+  return null;
 }
 
 // Plaud returns summary payloads in several shapes across its endpoints and
@@ -143,7 +169,7 @@ export function extractSummaryMarkdown(resp: TranssummResponse): string | null {
 //       { content: "..." }                     (legacy string form)
 //       { content: { markdown: "..." } }       (legacy nested form)
 // Returns the markdown string, or null if nothing usable was found.
-function extractMarkdownFromSummaryPayload(input: unknown): string | null {
+export function extractMarkdownFromSummaryPayload(input: unknown): string | null {
   let obj: unknown = input;
   if (typeof obj === "string") {
     const s = obj.trim();
@@ -178,4 +204,21 @@ function extractMarkdownFromSummaryPayload(input: unknown): string | null {
     if (typeof md === "string" && md.trim().length > 0) return md;
   }
   return null;
+}
+
+/** If `summary.md` is JSON-wrapped or outline-only, rewrite as markdown. Returns whether a write occurred. */
+export function repairSummaryMarkdownFile(absPath: string): boolean {
+  if (!existsSync(absPath)) return false;
+  let raw: string;
+  try {
+    raw = readFileSync(absPath, "utf8");
+  } catch {
+    return false;
+  }
+  const fixed = extractMarkdownFromSummaryPayload(raw);
+  if (fixed && fixed.trim().length > 0 && fixed !== raw) {
+    writeFileSync(absPath, fixed);
+    return true;
+  }
+  return false;
 }

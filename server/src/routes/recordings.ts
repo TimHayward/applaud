@@ -1,15 +1,32 @@
 import { Router } from "express";
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { repairSummaryMarkdownFile } from "../plaud/transcript.js";
 import {
   listRecordingRows,
+  listSoftDeletedRows,
+  listSyncIgnoreRows,
   getRecordingById,
-  deleteRecording,
+  softDeleteRecording,
+  restoreRecording,
+  purgeSoftDeletedRecordingNow,
 } from "../sync/state.js";
 import { loadConfig } from "../config.js";
 import type { RecordingDetail } from "@applaud/shared";
+import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 
 export const recordingsRouter = Router();
+
+recordingsRouter.get("/trash", (req, res) => {
+  const limit = Number(req.query.limit ?? 100);
+  const offset = Number(req.query.offset ?? 0);
+  const result = listSoftDeletedRows({ limit, offset });
+  res.json(result);
+});
+
+recordingsRouter.get("/sync-blocklist", (_req, res) => {
+  res.json({ items: listSyncIgnoreRows() });
+});
 
 recordingsRouter.get("/", (req, res) => {
   const limit = Number(req.query.limit ?? 100);
@@ -17,6 +34,47 @@ recordingsRouter.get("/", (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search : undefined;
   const result = listRecordingRows({ limit, offset, ...(search ? { search } : {}) });
   res.json(result);
+});
+
+recordingsRouter.post("/:id/restore", (req, res) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({ error: "missing id" });
+    return;
+  }
+  const row = getRecordingById(id);
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (!row.userDeletedAt) {
+    res.status(400).json({ error: "not in trash" });
+    return;
+  }
+  restoreRecording(id);
+  res.json({ ok: true });
+});
+
+recordingsRouter.post("/:id/purge", (req, res) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({ error: "missing id" });
+    return;
+  }
+  const result = purgeSoftDeletedRecordingNow(id);
+  if (result === "not_found") {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (result === "not_in_trash") {
+    res.status(400).json({ error: "not in trash" });
+    return;
+  }
+  if (result === "disk_error") {
+    res.status(500).json({ error: "could not remove recording folder from disk" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 recordingsRouter.get("/:id", (req, res) => {
@@ -47,7 +105,12 @@ recordingsRouter.get("/:id", (req, res) => {
   }
   try {
     if (row.summaryPath && existsSync(row.summaryPath)) {
-      summaryMarkdown = readFileSync(row.summaryPath, "utf8");
+      repairSummaryMarkdownFile(row.summaryPath);
+      const raw = readFileSync(row.summaryPath, "utf8");
+      summaryMarkdown = sanitizePlaudSummaryMarkdown(raw, {
+        startTimeMs: row.startTime,
+        endTimeMs: row.endTime,
+      });
     }
   } catch {
     /* ignore */
@@ -80,15 +143,10 @@ recordingsRouter.delete("/:id", (req, res) => {
     res.status(404).json({ error: "not found" });
     return;
   }
-  const cfg = loadConfig();
-  if (cfg.recordingsDir) {
-    const folder = path.join(cfg.recordingsDir, row.folder);
-    try {
-      rmSync(folder, { recursive: true, force: true });
-    } catch {
-      /* best effort */
-    }
+  if (row.userDeletedAt) {
+    res.status(400).json({ error: "already in trash" });
+    return;
   }
-  deleteRecording(id);
+  softDeleteRecording(id);
   res.json({ ok: true });
 });

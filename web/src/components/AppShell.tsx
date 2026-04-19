@@ -53,6 +53,16 @@ export function AppShell(): JSX.Element {
                 Recordings
               </NavLink>
               <NavLink
+                to="/trash"
+                className={({ isActive }) =>
+                  isActive
+                    ? "text-primary font-bold border-b-2 border-primary pb-1"
+                    : "text-on-surface-variant hover:text-on-surface transition-colors"
+                }
+              >
+                Trash
+              </NavLink>
+              <NavLink
                 to="/settings"
                 className={({ isActive }) =>
                   isActive
