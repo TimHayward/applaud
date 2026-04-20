@@ -34,10 +34,8 @@ export interface PlaudListResponse {
 export type RecordingStatus =
   | "pending_audio"
   | "audio_only"
-  | "pending_transcript"
   | "complete"
-  | "error"
-  | "historical";
+  | "error";
 
 export interface RecordingRow {
   id: string;
@@ -54,12 +52,18 @@ export interface RecordingRow {
   metadataPath: string | null;
   audioDownloadedAt: number | null;
   transcriptDownloadedAt: number | null;
+  summaryDownloadedAt: number | null;
   webhookAudioFiredAt: number | null;
   webhookTranscriptFiredAt: number | null;
   isTrash: boolean;
-  isHistorical: boolean;
   lastError: string | null;
   status: RecordingStatus;
+  /** Applaud UI soft-delete; hidden from main list until restored or purged. */
+  userDeletedAt: number | null;
+  /** When `userDeletedAt` is set, local files are removed and the id is blocklisted. */
+  userPurgeAt: number | null;
+  /** Last-seen Plaud `is_summary` from list API (drives summary backfill). */
+  plaudIsSummary: boolean;
 }
 
 export interface RecordingDetail extends RecordingRow {

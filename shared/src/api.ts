@@ -60,9 +60,24 @@ export interface SyncStatusResponse {
   nextPollAt: number | null;
   polling: boolean;
   pendingTranscripts: number;
+  pendingSummaries: number;
   errorsLast24h: number;
   lastError: string | null;
   authRequired: boolean;
+}
+
+export interface ClearSyncIgnoreResponse {
+  ok: boolean;
+  cleared: number;
+}
+
+export interface SyncBlocklistEntry {
+  id: string;
+  ignoredAt: number;
+}
+
+export interface SyncBlocklistResponse {
+  items: SyncBlocklistEntry[];
 }
 
 export interface ConfigResponse {

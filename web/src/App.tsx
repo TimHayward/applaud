@@ -6,6 +6,7 @@ import { SetupWizard } from "./routes/setup/SetupWizard.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { RecordingDetailPage } from "./routes/RecordingDetail.js";
 import { Settings } from "./routes/Settings.js";
+import { Trash } from "./routes/Trash.js";
 import { AppShell } from "./components/AppShell.js";
 
 export function App(): JSX.Element {
@@ -41,6 +42,7 @@ export function App(): JSX.Element {
       <Route path="/setup/*" element={<SetupWizard />} />
       <Route element={<AppShell />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/trash" element={<Trash />} />
         <Route path="/recordings/:id" element={<RecordingDetailPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

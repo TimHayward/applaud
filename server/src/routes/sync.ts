@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { poller } from "../sync/poller.js";
 import { syncEvents } from "../sync/events.js";
-import { countPendingTranscripts, countErrorsLast24h } from "../sync/state.js";
+import { countPendingTranscripts, countPendingSummaries, countErrorsLast24h } from "../sync/state.js";
 import type { SyncStatusResponse } from "@applaud/shared";
 
 export const syncRouter = Router();
@@ -13,6 +13,7 @@ syncRouter.get("/status", (_req, res) => {
     nextPollAt: s.nextPollAt,
     polling: s.polling,
     pendingTranscripts: countPendingTranscripts(),
+    pendingSummaries: countPendingSummaries(),
     errorsLast24h: countErrorsLast24h(),
     lastError: s.lastError,
     authRequired: s.authRequired,

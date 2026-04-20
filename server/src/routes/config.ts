@@ -11,6 +11,7 @@ import path from "node:path";
 import { loadConfig, updateConfig } from "../config.js";
 import { testWebhook } from "../webhook/post.js";
 import { poller } from "../sync/poller.js";
+import { clearSyncIgnore } from "../sync/state.js";
 
 export const configRouter = Router();
 
@@ -38,6 +39,7 @@ const PatchSchema = z.object({
       port: z.number().int().min(1).max(65535),
     })
     .optional(),
+  importPlaudDeleted: z.boolean().optional(),
 });
 
 configRouter.post("/", (req, res) => {
@@ -47,6 +49,7 @@ configRouter.post("/", (req, res) => {
     return;
   }
   const patch = parsed.data;
+  const prevImportPlaudDeleted = loadConfig().importPlaudDeleted;
   const normalized = {
     ...patch,
     webhook: patch.webhook
@@ -58,6 +61,9 @@ configRouter.post("/", (req, res) => {
       : patch.webhook,
   };
   const next = updateConfig(normalized);
+  if (patch.importPlaudDeleted === true && !prevImportPlaudDeleted) {
+    void poller.trigger();
+  }
   res.json({ config: { ...next, token: next.token ? "***REDACTED***" : null } });
 });
 
@@ -117,6 +123,12 @@ configRouter.post("/validate-recordings-dir", (req, res) => {
 });
 
 const CompleteSchema = z.object({});
+
+configRouter.post("/clear-sync-ignore", (_req, res) => {
+  const cleared = clearSyncIgnore();
+  void poller.trigger();
+  res.json({ ok: true, cleared });
+});
 
 configRouter.post("/complete-setup", (req, res) => {
   const parsed = CompleteSchema.safeParse(req.body ?? {});

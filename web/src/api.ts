@@ -9,6 +9,8 @@ import type {
   WebhookTestResponse,
   RecordingsDirValidateResponse,
   AppConfig,
+  ClearSyncIgnoreResponse,
+  SyncBlocklistResponse,
 } from "@applaud/shared";
 
 export class ApiError extends Error {
@@ -83,12 +85,25 @@ export const api = {
     if (params.search) qs.set("search", params.search);
     return jsonFetch<RecordingsListResponse>(`/api/recordings?${qs.toString()}`);
   },
+  listTrashRecordings: (params: { limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set("limit", String(params.limit));
+    if (params.offset) qs.set("offset", String(params.offset));
+    return jsonFetch<RecordingsListResponse>(`/api/recordings/trash?${qs.toString()}`);
+  },
+  syncBlocklist: () => jsonFetch<SyncBlocklistResponse>("/api/recordings/sync-blocklist"),
   recordingDetail: (id: string) =>
     jsonFetch<{ recording: RecordingDetail; mediaBase: string }>(`/api/recordings/${id}`),
   deleteRecording: (id: string) =>
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}`, { method: "DELETE" }),
   resyncRecording: (id: string) =>
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/resync`, { method: "POST", body: "{}" }),
+  restoreRecording: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/restore`, { method: "POST", body: "{}" }),
+  purgeRecordingFromTrash: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/purge`, { method: "POST", body: "{}" }),
+  clearSyncIgnore: () =>
+    jsonFetch<ClearSyncIgnoreResponse>("/api/config/clear-sync-ignore", { method: "POST", body: "{}" }),
   syncStatus: () => jsonFetch<SyncStatusResponse>("/api/sync/status"),
   syncTrigger: () =>
     jsonFetch<{ ok: boolean }>("/api/sync/trigger", { method: "POST", body: "{}" }),

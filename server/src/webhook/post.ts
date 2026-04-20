@@ -1,11 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import type {
-  WebhookPayload,
-  WebhookEvent,
-  RecordingRow,
-  WebhookAssetType,
-} from "@applaud/shared";
+import type { WebhookPayload, WebhookEvent, RecordingRow, WebhookAssetType } from "@applaud/shared";
+import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 import { loadConfig } from "../config.js";
 import { getDb } from "../db.js";
 import { logger } from "../logger.js";
@@ -85,9 +81,16 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
   if (event === "transcript_ready" && cfg.recordingsDir) {
     const folderAbs = path.join(cfg.recordingsDir, row.folder);
     const assets = discoverAssets(folderAbs);
+    const rawSummary = readIfExists(path.join(folderAbs, "summary.md"));
     payload.content = {
       transcript_text: readIfExists(path.join(folderAbs, "transcript.txt")),
-      summary_markdown: readIfExists(path.join(folderAbs, "summary.md")),
+      summary_markdown:
+        rawSummary != null
+          ? sanitizePlaudSummaryMarkdown(rawSummary, {
+              startTimeMs: row.startTime,
+              endTimeMs: row.endTime,
+            })
+          : null,
     };
     if (assets.length > 0) {
       payload.files.assets = assets.map((asset) => ({
@@ -251,21 +254,21 @@ function buildTestPayload(): WebhookPayload & { test: true } {
           type: "markdown",
           path: `${folder}/summary.md`,
           url: `${base}/summary.md`,
-          markdown_text: "# Sample Summary\n\nThis is a sample summary from an Applaud test webhook.",
+          markdown_text: "# Sample Summary\\n\\nThis is a sample summary from an Applaud test webhook.",
         },
         {
           name: "Speech_Summary.md",
           type: "markdown",
           path: `${folder}/Speech_Summary.md`,
           url: `${base}/Speech_Summary.md`,
-          markdown_text: "# Speech Summary\n\nSample speech summary content.",
+          markdown_text: "# Speech Summary\\n\\nConcise recap.",
         },
         {
           name: "Highlights.md",
           type: "markdown",
           path: `${folder}/Highlights.md`,
           url: `${base}/Highlights.md`,
-          markdown_text: "# Highlights\n\n- Key point one\n- Key point two",
+          markdown_text: "# Highlights\\n\\n- Insight 1",
         },
         {
           name: "thumbnail.png",

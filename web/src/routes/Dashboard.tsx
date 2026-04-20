@@ -33,7 +33,8 @@ function formatBytes(bytes: number): string {
 function StatusDots({ row }: { row: RecordingRow }): JSX.Element {
   const hasAudio = !!row.audioDownloadedAt;
   const hasTranscript = !!row.transcriptDownloadedAt;
-  const hasSummary = !!row.summaryPath && hasTranscript;
+  const hasSummary =
+    !!row.summaryDownloadedAt && (row.isTrash || hasTranscript);
   return (
     <div className="flex items-center gap-2 text-[10px] font-label font-bold uppercase tracking-widest">
       <StatusPill on={hasAudio} label="audio" color="secondary" />
@@ -184,7 +185,7 @@ export function Dashboard(): JSX.Element {
       {/* Recordings Grid */}
       {list.data && list.data.items.length > 0 && (
         <div className="grid gap-3">
-          {list.data.items.map((r) => (
+          {list.data.items.map((r: RecordingRow) => (
             <Link
               key={r.id}
               to={`/recordings/${r.id}`}

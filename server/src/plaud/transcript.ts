@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { plaudJson } from "./client.js";
 import { gunzipSync } from "node:zlib";
 import type { ContentListItem } from "./detail.js";
@@ -90,7 +91,10 @@ export async function fetchTranscriptFromContentList(
   contentList: ContentListItem[],
 ): Promise<{ segments: TranscriptSegment[]; summaryMd: string | null }> {
   const transItem = contentList.find((c) => c.data_type === "transaction" && c.data_link);
-  const summItem = contentList.find((c) => c.data_type === "auto_sum_note" && c.data_link);
+  const summItem =
+    contentList.find((c) => c.data_type === "auto_sum_note" && c.data_link) ??
+    contentList.find((c) => c.data_type === "transaction_polish" && c.data_link) ??
+    contentList.find((c) => typeof c.data_type === "string" && c.data_type.includes("sum") && c.data_link);
 
   let segments: TranscriptSegment[] = [];
   if (transItem?.data_link) {
@@ -115,42 +119,106 @@ export async function fetchTranscriptFromContentList(
     const res = await fetch(summItem.data_link);
     if (res.ok) {
       const buf = Buffer.from(await res.arrayBuffer());
+      let raw: string;
       try {
-        summaryMd = gunzipSync(buf).toString("utf8");
+        raw = gunzipSync(buf).toString("utf8");
       } catch {
-        summaryMd = buf.toString("utf8");
+        raw = buf.toString("utf8");
       }
-      if (summaryMd && summaryMd.trim().length === 0) summaryMd = null;
+      summaryMd = extractMarkdownFromSummaryPayload(raw);
     }
   }
 
   return { segments, summaryMd };
 }
 
-export function extractSummaryMarkdown(resp: TranssummResponse): string | null {
-  const raw = resp.data_result_summ;
-  if (!raw) return null;
+function pickMarkdownFromUnknown(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === "string") return extractMarkdownFromSummaryPayload(v);
+  try {
+    return extractMarkdownFromSummaryPayload(JSON.stringify(v));
+  } catch {
+    return null;
+  }
+}
 
-  // Plaud returns this field as either a structured object OR a JSON-encoded string.
-  let obj: SummaryContent | null = null;
-  if (typeof raw === "string") {
-    try {
-      obj = JSON.parse(raw) as SummaryContent;
-    } catch {
-      // Not JSON — fall back to treating the raw string as markdown itself.
-      return raw.trim().length > 0 ? raw : null;
+export function extractSummaryMarkdown(resp: TranssummResponse): string | null {
+  const primary = extractMarkdownFromSummaryPayload(resp.data_result_summ);
+  if (primary) return primary;
+  const mul = pickMarkdownFromUnknown(resp.data_result_summ_mul);
+  if (mul) return mul;
+  const note = pickMarkdownFromUnknown(resp.data_note_result);
+  if (note) return note;
+  if (resp.outline_result && resp.outline_result.length > 0) {
+    const lines: string[] = ["## Topics", ""];
+    for (const o of resp.outline_result) {
+      const ts = formatTimestamp(o.start_time);
+      lines.push(`- **${ts}** — ${o.topic}`);
     }
-  } else {
-    obj = raw;
+    return lines.join("\n");
+  }
+  return null;
+}
+
+// Plaud returns summary payloads in several shapes across its endpoints and
+// across recordings of different ages. Known shapes:
+//   - Raw markdown string
+//   - JSON object / JSON-encoded string with one of:
+//       { markdown: "..." }                    (top-level markdown)
+//       { ai_content: "...", header, ... }    (S3 auto_sum_note blobs)
+//       { content: "..." }                     (legacy string form)
+//       { content: { markdown: "..." } }       (legacy nested form)
+// Returns the markdown string, or null if nothing usable was found.
+export function extractMarkdownFromSummaryPayload(input: unknown): string | null {
+  let obj: unknown = input;
+  if (typeof obj === "string") {
+    const s = obj.trim();
+    if (s.length === 0) return null;
+    // Try to parse as JSON; if it fails the raw string IS the markdown.
+    if (s.startsWith("{") || s.startsWith("[")) {
+      try {
+        obj = JSON.parse(s);
+      } catch {
+        return s;
+      }
+    } else {
+      return s;
+    }
   }
 
-  const content = obj?.content;
+  if (!obj || typeof obj !== "object") return null;
+  const rec = obj as Record<string, unknown>;
+
+  const aiContent = rec.ai_content;
+  if (typeof aiContent === "string" && aiContent.trim().length > 0) return aiContent;
+
+  const topMd = rec.markdown;
+  if (typeof topMd === "string" && topMd.trim().length > 0) return topMd;
+
+  const content = rec.content;
   if (typeof content === "string") {
     return content.trim().length > 0 ? content : null;
   }
   if (content && typeof content === "object") {
-    const md = (content as { markdown?: unknown }).markdown;
+    const md = (content as Record<string, unknown>).markdown;
     if (typeof md === "string" && md.trim().length > 0) return md;
   }
   return null;
+}
+
+/** If `summary.md` is JSON-wrapped or outline-only, rewrite as markdown. Returns whether a write occurred. */
+export function repairSummaryMarkdownFile(absPath: string): boolean {
+  if (!existsSync(absPath)) return false;
+  let raw: string;
+  try {
+    raw = readFileSync(absPath, "utf8");
+  } catch {
+    return false;
+  }
+  const fixed = extractMarkdownFromSummaryPayload(raw);
+  if (fixed && fixed.trim().length > 0 && fixed !== raw) {
+    writeFileSync(absPath, fixed);
+    return true;
+  }
+  return false;
 }

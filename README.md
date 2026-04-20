@@ -25,12 +25,12 @@ First, you should never run commands you find on the internet that end in `| sh`
 
 **macOS / Linux / WSL:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rsteckler/applaud/v0.5.6/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/rsteckler/applaud/v0.5.8/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/rsteckler/applaud/v0.5.6/install.ps1 | iex
+irm https://raw.githubusercontent.com/rsteckler/applaud/v0.5.8/install.ps1 | iex
 ```
 
 The installer does everything needed to install Applaud into a subfolder named `./applaud`. To run it:
@@ -171,5 +171,4 @@ pnpm dev
 Runs the Vite dev server on port 44470 with a proxy for `/api` and `/media` to the Express server on port 44471. The server runs in `tsx watch` mode. Hot reload works on both sides.
 
 ## License
-
-MIT
+ MIT see [`LICENSE`](LICENSE)

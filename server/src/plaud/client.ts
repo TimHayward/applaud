@@ -1,30 +1,31 @@
 import { logger } from "../logger.js";
 import { loadConfig, updateConfig } from "../config.js";
 
-const REGION_API_BASES = {
+const REGION_API_BASES: Record<string, string> = {
   "aws:us-west-2": "https://api.plaud.ai",
   "aws:eu-central-1": "https://api-euc1.plaud.ai",
-} as const;
+  "aws:ap-southeast-1": "https://api-apse1.plaud.ai",
+};
 const DEFAULT_API_BASE = "https://api.plaud.ai";
 
 export const PLAUD_API_BASES = Object.values(REGION_API_BASES);
 
 export function getPlaudApiBaseForRegion(region: string | null): string {
-  if (region && region in REGION_API_BASES) {
-    return REGION_API_BASES[region as keyof typeof REGION_API_BASES];
+  if (region) {
+    return REGION_API_BASES[region] ?? DEFAULT_API_BASE;
   }
   return DEFAULT_API_BASE;
 }
 
 export function getPlaudRegionForBase(base: string): string | null {
   const match = Object.entries(REGION_API_BASES).find(([, value]) => value === base);
-  return match?.[0] ?? null;
+  return match ? match[0] : null;
 }
 
 export function getPlaudApiBase(): string {
   const cfg = loadConfig();
-  if (cfg.plaudRegion && cfg.plaudRegion in REGION_API_BASES) {
-    return REGION_API_BASES[cfg.plaudRegion as keyof typeof REGION_API_BASES];
+  if (cfg.plaudRegion) {
+    return REGION_API_BASES[cfg.plaudRegion] ?? DEFAULT_API_BASE;
   }
   return DEFAULT_API_BASE;
 }
