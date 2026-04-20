@@ -92,6 +92,28 @@ export interface SyncEvent {
 
 export type WebhookEvent = "audio_ready" | "transcript_ready";
 
+export type WebhookAssetType = "markdown" | "image";
+
+export interface WebhookFileAsset {
+  name: string;
+  type: WebhookAssetType;
+  path: string;
+}
+
+export interface WebhookHttpAsset {
+  name: string;
+  type: WebhookAssetType;
+  url: string;
+}
+
+export interface WebhookContentAsset {
+  name: string;
+  type: WebhookAssetType;
+  path: string;
+  url: string;
+  markdown_text?: string | null;
+}
+
 export interface WebhookPayload {
   event: WebhookEvent;
   recording: {
@@ -108,11 +130,13 @@ export interface WebhookPayload {
     audio: string;
     transcript: string;
     summary: string;
+    assets?: WebhookFileAsset[];
   };
   http_urls: {
     audio: string;
     transcript: string;
     summary: string;
+    assets?: WebhookHttpAsset[];
   };
   /**
    * On `transcript_ready` events we include the flattened transcript text and
@@ -124,5 +148,6 @@ export interface WebhookPayload {
   content?: {
     transcript_text: string | null;
     summary_markdown: string | null;
+    assets?: WebhookContentAsset[];
   };
 }

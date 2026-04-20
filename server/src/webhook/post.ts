@@ -1,11 +1,22 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import type { WebhookPayload, WebhookEvent, RecordingRow } from "@applaud/shared";
+import type {
+  WebhookPayload,
+  WebhookEvent,
+  RecordingRow,
+  WebhookAssetType,
+} from "@applaud/shared";
 import { loadConfig } from "../config.js";
 import { getDb } from "../db.js";
 import { logger } from "../logger.js";
 
 const BACKOFF_MS = [5_000, 30_000, 120_000];
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".svg"]);
+
+interface DiscoveredAsset {
+  name: string;
+  type: WebhookAssetType;
+}
 
 function readIfExists(absPath: string): string | null {
   try {
@@ -15,6 +26,32 @@ function readIfExists(absPath: string): string | null {
     logger.warn({ err, absPath }, "failed to read file for webhook inline content");
     return null;
   }
+}
+
+function detectAssetType(filename: string): WebhookAssetType | null {
+  const ext = path.extname(filename).toLowerCase();
+  if (ext === ".md") return "markdown";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  return null;
+}
+
+function discoverAssets(folderAbs: string): DiscoveredAsset[] {
+  if (!existsSync(folderAbs)) return [];
+  const assets: DiscoveredAsset[] = [];
+  try {
+    for (const name of readdirSync(folderAbs)) {
+      const abs = path.join(folderAbs, name);
+      if (!existsSync(abs) || !statSync(abs).isFile()) continue;
+      const type = detectAssetType(name);
+      if (!type) continue;
+      assets.push({ name, type });
+    }
+  } catch (err) {
+    logger.warn({ err, folderAbs }, "failed to discover webhook assets");
+    return [];
+  }
+  assets.sort((a, b) => a.name.localeCompare(b.name));
+  return assets;
 }
 
 function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
@@ -47,10 +84,42 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
 
   if (event === "transcript_ready" && cfg.recordingsDir) {
     const folderAbs = path.join(cfg.recordingsDir, row.folder);
+    const assets = discoverAssets(folderAbs);
     payload.content = {
       transcript_text: readIfExists(path.join(folderAbs, "transcript.txt")),
       summary_markdown: readIfExists(path.join(folderAbs, "summary.md")),
     };
+    if (assets.length > 0) {
+      payload.files.assets = assets.map((asset) => ({
+        name: asset.name,
+        type: asset.type,
+        path: `${row.folder}/${asset.name}`,
+      }));
+      payload.http_urls.assets = assets.map((asset) => ({
+        name: asset.name,
+        type: asset.type,
+        url: `${base}/${encodeURIComponent(asset.name)}`,
+      }));
+      payload.content.assets = assets.map((asset) => {
+        const relPath = `${row.folder}/${asset.name}`;
+        const url = `${base}/${encodeURIComponent(asset.name)}`;
+        if (asset.type === "markdown") {
+          return {
+            name: asset.name,
+            type: asset.type,
+            path: relPath,
+            url,
+            markdown_text: readIfExists(path.join(folderAbs, asset.name)),
+          };
+        }
+        return {
+          name: asset.name,
+          type: asset.type,
+          path: relPath,
+          url,
+        };
+      });
+    }
   }
 
   return payload;
@@ -155,15 +224,56 @@ function buildTestPayload(): WebhookPayload & { test: true } {
       audio: `${folder}/audio.ogg`,
       transcript: `${folder}/transcript.json`,
       summary: `${folder}/summary.md`,
+      assets: [
+        { name: "summary.md", type: "markdown", path: `${folder}/summary.md` },
+        { name: "Speech_Summary.md", type: "markdown", path: `${folder}/Speech_Summary.md` },
+        { name: "Highlights.md", type: "markdown", path: `${folder}/Highlights.md` },
+        { name: "thumbnail.png", type: "image", path: `${folder}/thumbnail.png` },
+      ],
     },
     http_urls: {
       audio: `${base}/audio.ogg`,
       transcript: `${base}/transcript.json`,
       summary: `${base}/summary.md`,
+      assets: [
+        { name: "summary.md", type: "markdown", url: `${base}/summary.md` },
+        { name: "Speech_Summary.md", type: "markdown", url: `${base}/Speech_Summary.md` },
+        { name: "Highlights.md", type: "markdown", url: `${base}/Highlights.md` },
+        { name: "thumbnail.png", type: "image", url: `${base}/thumbnail.png` },
+      ],
     },
     content: {
       transcript_text: "This is a sample transcript from an Applaud test webhook.",
       summary_markdown: "# Sample Summary\n\nThis is a sample summary from an Applaud test webhook.",
+      assets: [
+        {
+          name: "summary.md",
+          type: "markdown",
+          path: `${folder}/summary.md`,
+          url: `${base}/summary.md`,
+          markdown_text: "# Sample Summary\n\nThis is a sample summary from an Applaud test webhook.",
+        },
+        {
+          name: "Speech_Summary.md",
+          type: "markdown",
+          path: `${folder}/Speech_Summary.md`,
+          url: `${base}/Speech_Summary.md`,
+          markdown_text: "# Speech Summary\n\nSample speech summary content.",
+        },
+        {
+          name: "Highlights.md",
+          type: "markdown",
+          path: `${folder}/Highlights.md`,
+          url: `${base}/Highlights.md`,
+          markdown_text: "# Highlights\n\n- Key point one\n- Key point two",
+        },
+        {
+          name: "thumbnail.png",
+          type: "image",
+          path: `${folder}/thumbnail.png`,
+          url: `${base}/thumbnail.png`,
+        },
+      ],
     },
   };
 }
