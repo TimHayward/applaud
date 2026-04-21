@@ -5,6 +5,7 @@ import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 import { loadConfig } from "../config.js";
 import { getDb } from "../db.js";
 import { logger } from "../logger.js";
+import { signPayload } from "./sign.js";
 
 const BACKOFF_MS = [5_000, 30_000, 120_000];
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".svg"]);
@@ -164,7 +165,7 @@ export async function fireWebhookForRecording(
   const cfg = loadConfig();
   if (!cfg.webhook || !cfg.webhook.enabled || !cfg.webhook.url) return false;
   const payload = buildPayload(event, row);
-  return fireRaw(cfg.webhook.url, payload, row.id, event);
+  return fireRaw(cfg.webhook.url, payload, row.id, event, cfg.webhook.secret);
 }
 
 async function fireRaw(
@@ -172,8 +173,10 @@ async function fireRaw(
   payload: WebhookPayload,
   recordingId: string | null,
   event: WebhookEvent,
+  secret?: string,
 ): Promise<boolean> {
   const body = JSON.stringify(payload);
+  const signature = secret ? signPayload(secret, body) : null;
   for (let attempt = 0; attempt < BACKOFF_MS.length; attempt++) {
     const started = Date.now();
     try {
@@ -183,6 +186,7 @@ async function fireRaw(
           "content-type": "application/json",
           "user-agent": "applaud/0.1.0",
           "x-applaud-event": event,
+          ...(signature ? { "x-applaud-signature": signature } : {}),
         },
         body,
       });
@@ -299,6 +303,9 @@ export async function testWebhook(
 ): Promise<{ ok: boolean; statusCode?: number; bodySnippet?: string; error?: string; durationMs: number }> {
   const started = Date.now();
   const body = JSON.stringify(buildTestPayload());
+  const cfg = loadConfig();
+  const secret = cfg.webhook?.secret;
+  const signature = secret ? signPayload(secret, body) : null;
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -307,6 +314,7 @@ export async function testWebhook(
         "user-agent": "applaud/0.1.0",
         "x-applaud-event": "transcript_ready",
         "x-applaud-test": "1",
+        ...(signature ? { "x-applaud-signature": signature } : {}),
       },
       body,
     });

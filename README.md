@@ -25,12 +25,12 @@ First, you should never run commands you find on the internet that end in `| sh`
 
 **macOS / Linux / WSL:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rsteckler/applaud/v0.5.9/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/rsteckler/applaud/v0.5.10/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/rsteckler/applaud/v0.5.9/install.ps1 | iex
+irm https://raw.githubusercontent.com/rsteckler/applaud/v0.5.10/install.ps1 | iex
 ```
 
 The installer does everything needed to install Applaud into a subfolder named `./applaud`. To run it:
@@ -110,6 +110,61 @@ Each recording gets its own folder under your chosen recordings directory:
 - `content` is only present on `transcript_ready` events. Both fields are nullable — if Plaud didn't generate a summary for a recording, `summary_markdown` will be `null`.
 - Webhook consumers should treat `(id, event)` as idempotent. `audio_ready` always fires before `transcript_ready`; on recordings that are already fully transcribed when first seen, both fire back-to-back in the same poll cycle.
 - Custom headers on every webhook: `User-Agent: applaud/0.1.0` and `X-Applaud-Event: audio_ready|transcript_ready`.
+
+### Verifying the signature
+
+If you set a signing secret on the Settings page, every outgoing webhook (including the test one from the Settings **Test** button) includes an extra header:
+
+```
+X-Applaud-Signature: sha256=<hex>
+```
+
+where the hex is the HMAC-SHA256 of the exact raw request body, keyed with your secret. The header is absent entirely when no secret is configured, so receivers can distinguish "signing not configured" from "signing failed."
+
+**Node.js example** (Express):
+
+```js
+import crypto from "node:crypto";
+import express from "express";
+
+const SECRET = process.env.APPLAUD_WEBHOOK_SECRET;
+const app = express();
+
+app.post("/ingest", express.raw({ type: "application/json" }), (req, res) => {
+  const header = req.get("x-applaud-signature") ?? "";
+  const expected = "sha256=" + crypto.createHmac("sha256", SECRET).update(req.body).digest("hex");
+  const a = Buffer.from(header);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).send("bad signature");
+  }
+  const payload = JSON.parse(req.body.toString("utf8"));
+  // ... handle payload
+  res.sendStatus(200);
+});
+```
+
+**Python example** (Flask):
+
+```python
+import hmac, hashlib, os
+from flask import Flask, request, abort
+
+SECRET = os.environ["APPLAUD_WEBHOOK_SECRET"].encode()
+app = Flask(__name__)
+
+@app.post("/ingest")
+def ingest():
+    header = request.headers.get("X-Applaud-Signature", "")
+    expected = "sha256=" + hmac.new(SECRET, request.get_data(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(header, expected):
+        abort(401)
+    payload = request.get_json(force=True)
+    # ... handle payload
+    return "", 200
+```
+
+Both snippets verify against the raw request bytes — don't re-serialize the JSON before signing, or the hash won't match.
 
 ## n8n workflows
 
