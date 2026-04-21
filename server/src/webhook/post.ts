@@ -14,6 +14,8 @@ interface DiscoveredAsset {
   type: WebhookAssetType;
 }
 
+const CORE_FILENAMES = new Set(["audio.ogg", "transcript.json", "transcript.txt", "summary.md", "metadata.json"]);
+
 function readIfExists(absPath: string): string | null {
   try {
     if (!existsSync(absPath)) return null;
@@ -35,13 +37,23 @@ function discoverAssets(folderAbs: string): DiscoveredAsset[] {
   if (!existsSync(folderAbs)) return [];
   const assets: DiscoveredAsset[] = [];
   try {
-    for (const name of readdirSync(folderAbs)) {
-      const abs = path.join(folderAbs, name);
-      if (!existsSync(abs) || !statSync(abs).isFile()) continue;
-      const type = detectAssetType(name);
-      if (!type) continue;
-      assets.push({ name, type });
-    }
+    const walk = (dirAbs: string, relDir = ""): void => {
+      for (const name of readdirSync(dirAbs)) {
+        const abs = path.join(dirAbs, name);
+        const relPath = relDir ? path.posix.join(relDir, name) : name;
+        const stat = statSync(abs);
+        if (stat.isDirectory()) {
+          walk(abs, relPath);
+          continue;
+        }
+        if (!stat.isFile()) continue;
+        if (CORE_FILENAMES.has(relPath)) continue;
+        const type = detectAssetType(relPath);
+        if (!type) continue;
+        assets.push({ name: relPath, type });
+      }
+    };
+    walk(folderAbs);
   } catch (err) {
     logger.warn({ err, folderAbs }, "failed to discover webhook assets");
     return [];

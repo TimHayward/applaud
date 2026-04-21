@@ -1,4 +1,5 @@
-import { writeFileSync } from "node:fs";
+import { writeFileSync, existsSync, mkdirSync } from "node:fs";
+import path from "node:path";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { listRecordings } from "../plaud/list.js";
@@ -7,9 +8,11 @@ import {
   getTranscriptAndSummary,
   flattenTranscript,
   extractSummaryMarkdown,
+  extractMarkdownFromSummaryPayload,
   fetchTranscriptFromContentList,
 } from "../plaud/transcript.js";
 import { getFileDetail } from "../plaud/detail.js";
+import type { ContentListItem, FileDetailData } from "../plaud/detail.js";
 import { PlaudAuthError } from "../plaud/client.js";
 import {
   upsertFromPlaud,
@@ -31,10 +34,12 @@ import {
   resetPlaudTrashAssetProbeTimestamps,
 } from "./state.js";
 import { ensureRecordingFolder } from "./layout.js";
+import { sanitizeFilename } from "./layout.js";
 import { fireWebhookForRecording } from "../webhook/post.js";
 import { emit } from "./events.js";
 import type { RecordingRow } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
+import { gunzipSync } from "node:zlib";
 
 export interface PollerStatus {
   lastPollAt: number | null;
@@ -95,6 +100,12 @@ class Poller {
       lastError: this.lastError,
       authRequired: this.authRequired,
     };
+  }
+
+  async resyncRecording(id: string): Promise<void> {
+    const row = getRecordingById(id);
+    if (!row) throw new Error("recording not found");
+    await this.processRecording(row, true);
   }
 
   private async runOnce(): Promise<void> {
@@ -221,7 +232,7 @@ class Poller {
     }
   }
 
-  private async processRecording(row: RecordingRow): Promise<void> {
+  private async processRecording(row: RecordingRow, forceDetailRefresh = false): Promise<void> {
     const cfg = loadConfig();
     if (!cfg.recordingsDir) return;
     if (isSyncIgnoredId(row.id)) return;
@@ -230,16 +241,15 @@ class Poller {
 
     const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
+    if (forceDetailRefresh) {
+      await this.refreshDetailAndAssets(row.id, paths.folder);
+    }
+
     // Each asset is retried independently — a failure fetching one doesn't
     // block the others. Errors are recorded on the row and the loop continues.
     if (!row.audioDownloadedAt) {
       try {
-        try {
-          const detail = await getFileDetail(row.id);
-          writeFileSync(paths.metadataPath, JSON.stringify(detail, null, 2));
-        } catch (err) {
-          logger.warn({ err, id: row.id }, "file detail fetch failed (non-fatal)");
-        }
+        if (!forceDetailRefresh) await this.refreshDetailAndAssets(row.id, paths.folder);
 
         const bytes = await downloadAudio(row.id, paths.audioPath);
         markAudioDownloaded(row.id, bytes || row.filesizeBytes);
@@ -341,6 +351,8 @@ class Poller {
           wroteSummary = true;
         }
       }
+      await this.downloadExtraAssets(detail, paths.folder, row.id);
+      await this.downloadContentListMarkdown(detail.content_list, paths.folder, row.id);
     }
 
     // transcript_ready fires only on a null→set transition; summary-only
@@ -351,6 +363,116 @@ class Poller {
       if (fresh) {
         const fired = await fireWebhookForRecording("transcript_ready", fresh);
         if (fired) markWebhookFired(row.id, "transcript_ready");
+      }
+    }
+  }
+
+  private async refreshDetailAndAssets(recordingId: string, folderAbs: string): Promise<void> {
+    try {
+      const detail = await getFileDetail(recordingId);
+      writeFileSync(path.join(folderAbs, "metadata.json"), JSON.stringify(detail, null, 2));
+      await this.downloadExtraAssets(detail, folderAbs, recordingId);
+      await this.downloadContentListMarkdown(detail.content_list, folderAbs, recordingId);
+    } catch (err) {
+      logger.warn({ err, id: recordingId }, "file detail fetch failed (non-fatal)");
+    }
+  }
+
+  private async downloadContentListMarkdown(
+    contentList: ContentListItem[] | undefined,
+    folderAbs: string,
+    recordingId: string,
+  ): Promise<void> {
+    if (!contentList || contentList.length === 0) return;
+    const NOTE_TYPES = new Set([
+      "auto_sum_note",
+      "outline",
+      "sum_multi_note",
+      "high_light",
+      "mark_memo",
+      "consumer_note",
+      "transaction_polish",
+    ]);
+    let downloadedCount = 0;
+
+    for (const item of contentList) {
+      if (!item?.data_link) continue;
+      if (!NOTE_TYPES.has(item.data_type)) continue;
+      const baseLabel =
+        sanitizeFilename(item.data_tab_name || item.data_title || item.data_type || "note") ||
+        "note";
+      const fileName = `${baseLabel}__${item.data_type}__${item.data_id.slice(-8)}.md`;
+      const destPath = path.join(folderAbs, fileName);
+      if (existsSync(destPath)) continue;
+
+      try {
+        const res = await fetch(item.data_link);
+        if (!res.ok) {
+          logger.warn(
+            { id: recordingId, dataType: item.data_type, dataId: item.data_id, status: res.status },
+            "content_list markdown download failed",
+          );
+          continue;
+        }
+        const buf = Buffer.from(await res.arrayBuffer());
+        let raw: string;
+        try {
+          raw = gunzipSync(buf).toString("utf8");
+        } catch {
+          raw = buf.toString("utf8");
+        }
+        const extracted = extractMarkdownFromSummaryPayload(raw);
+        const out = extracted && extracted.trim().length > 0 ? extracted : raw;
+        writeFileSync(destPath, out, "utf8");
+        downloadedCount += 1;
+        logger.info({ id: recordingId, dataType: item.data_type, fileName }, "downloaded content_list markdown");
+      } catch (err) {
+        logger.warn(
+          { err, id: recordingId, dataType: item.data_type, dataId: item.data_id },
+          "content_list markdown download error",
+        );
+      }
+    }
+
+    logger.info({ id: recordingId, downloadedCount }, "content_list markdown download summary");
+  }
+
+  private async downloadExtraAssets(
+    detail: FileDetailData,
+    folderAbs: string,
+    recordingId: string,
+  ): Promise<void> {
+    const mapping = detail.download_path_mapping;
+    if (!mapping || Object.keys(mapping).length === 0) return;
+    const ALLOWED_EXT = new Set([".md", ".jpg", ".jpeg", ".png", ".svg"]);
+    for (const [filename, url] of Object.entries(mapping)) {
+      if (!url) continue;
+      const relPath = path.normalize(filename);
+      if (path.isAbsolute(relPath) || relPath.startsWith("..") || relPath.includes(`..${path.sep}`)) {
+        logger.warn({ id: recordingId, filename }, "skipping unsafe extra asset path");
+        continue;
+      }
+      const ext = path.extname(relPath).toLowerCase();
+      if (!ALLOWED_EXT.has(ext)) continue;
+      const destPath = path.join(folderAbs, relPath);
+      const relFromRoot = path.relative(folderAbs, destPath);
+      if (relFromRoot.startsWith("..") || path.isAbsolute(relFromRoot)) {
+        logger.warn({ id: recordingId, filename }, "skipping escaping extra asset path");
+        continue;
+      }
+      if (existsSync(destPath)) continue;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) {
+          logger.warn({ id: recordingId, filename, status: res.status }, "extra asset download failed");
+          continue;
+        }
+        const buf = Buffer.from(await res.arrayBuffer());
+        mkdirSync(path.dirname(destPath), { recursive: true });
+        writeFileSync(destPath, buf);
+        logger.info({ id: recordingId, filename }, "downloaded extra asset");
+      } catch (err) {
+        logger.warn({ err, id: recordingId, filename }, "extra asset download error");
       }
     }
   }

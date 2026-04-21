@@ -332,11 +332,11 @@ export function RecordingDetailPage(): JSX.Element {
                 onClick={() => void resync()}
                 disabled={isResyncing || !r.audioDownloadedAt}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 4v6h6" />
-                  <path d="M20 20v-6h-6" />
-                  <path d="M5 9a9 9 0 0 1 14 6" />
-                  <path d="M19 15a9 9 0 0 1-14-6" />
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={isResyncing ? "animate-spin" : ""}>
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                  <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
                 </svg>
                 {isResyncing ? "Resyncing..." : "Resync Recording"}
               </button>

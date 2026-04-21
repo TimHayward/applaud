@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { MouseEvent } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
@@ -105,6 +106,24 @@ export function Dashboard(): JSX.Element {
     queryFn: () => api.listRecordings({ limit: 200, search: search || undefined }),
   });
   const [triggering, setTriggering] = useState(false);
+  const [resyncingIds, setResyncingIds] = useState<Set<string>>(new Set());
+
+  const resyncRecording = async (id: string, e: MouseEvent): Promise<void> => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (resyncingIds.has(id)) return;
+    setResyncingIds((prev) => new Set(prev).add(id));
+    try {
+      await api.resyncRecording(id);
+      await qc.invalidateQueries({ queryKey: ["recordings"] });
+    } finally {
+      setResyncingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
 
   const triggerSync = async (): Promise<void> => {
     setTriggering(true);
@@ -208,8 +227,20 @@ export function Dashboard(): JSX.Element {
                   </div>
                 </div>
               </div>
-              <div className="relative">
+              <div className="relative flex items-center gap-3">
                 <StatusDots row={r} />
+                <button
+                  className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-primary text-on-primary hover:bg-primary/90 transition-all active:scale-95 shadow-sm"
+                  onClick={(e) => void resyncRecording(r.id, e)}
+                  title="Resync recording"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={resyncingIds.has(r.id) ? "animate-spin" : ""}>
+                    <polyline points="23 4 23 10 17 10" />
+                    <polyline points="1 20 1 14 7 14" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                    <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+                  </svg>
+                </button>
               </div>
             </Link>
           ))}

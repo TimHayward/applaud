@@ -14,10 +14,37 @@ import {
 } from "../sync/state.js";
 import { loadConfig } from "../config.js";
 import { fireWebhookForRecording } from "../webhook/post.js";
+import { poller } from "../sync/poller.js";
 import type { RecordingDetail } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 
 export const recordingsRouter = Router();
+
+const CORE_FILENAMES = new Set(["audio.ogg", "transcript.json", "transcript.txt", "summary.md", "metadata.json"]);
+
+function listAttachments(folderAbs: string): { filename: string; url: string }[] {
+  const attachments: { filename: string; url: string }[] = [];
+  const walk = (dirAbs: string, relDir = ""): void => {
+    for (const item of readdirSync(dirAbs)) {
+      const abs = path.join(dirAbs, item);
+      const relPath = relDir ? path.posix.join(relDir, item) : item;
+      const stat = statSync(abs);
+      if (stat.isDirectory()) {
+        walk(abs, relPath);
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      if (CORE_FILENAMES.has(relPath)) continue;
+      attachments.push({
+        filename: relPath,
+        url: `/media/${encodeURI(relPath)}`,
+      });
+    }
+  };
+  if (existsSync(folderAbs)) walk(folderAbs);
+  attachments.sort((a, b) => a.filename.localeCompare(b.filename));
+  return attachments;
+}
 
 recordingsRouter.get("/trash", (req, res) => {
   const limit = Number(req.query.limit ?? 100);
@@ -128,14 +155,10 @@ recordingsRouter.get("/:id", (req, res) => {
   const attachments: { filename: string; url: string }[] = [];
   if (row.folder && base) {
     const folderAbs = path.join(base, row.folder);
-    if (existsSync(folderAbs)) {
-      for (const item of readdirSync(folderAbs)) {
-        if (["audio.ogg", "transcript.json", "transcript.txt", "summary.md", "metadata.json"].includes(item)) continue;
-        const abs = path.join(folderAbs, item);
-        if (!existsSync(abs) || !statSync(abs).isFile()) continue;
-        attachments.push({ filename: item, url: `/media/${encodeURIComponent(row.folder)}/${encodeURIComponent(item)}` });
-      }
-    }
+    attachments.push(...listAttachments(folderAbs).map((asset) => ({
+      filename: asset.filename,
+      url: `/media/${encodeURI(`${row.folder}/${asset.filename}`)}`,
+    })));
   }
 
   const detail: RecordingDetail = {
@@ -183,8 +206,14 @@ recordingsRouter.post("/:id/resync", async (req, res) => {
     return;
   }
   try {
-    const event = row.transcriptDownloadedAt ? "transcript_ready" : "audio_ready";
-    const fired = await fireWebhookForRecording(event, row);
+    await poller.resyncRecording(id);
+    const fresh = getRecordingById(id);
+    if (!fresh) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const event = fresh.transcriptDownloadedAt ? "transcript_ready" : "audio_ready";
+    const fired = await fireWebhookForRecording(event, fresh);
     if (!fired) {
       res.status(502).json({ error: "webhook failed" });
       return;
