@@ -1,0 +1,396 @@
+{
+  "name": "Applaud — Summarize transcript & email",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "applaud",
+        "options": {}
+      },
+      "id": "d9595421-de85-407d-bc6a-bc939f3ce53d",
+      "name": "Applaud Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        480,
+        96
+      ],
+      "webhookId": "8a7b6c5d-1234-5678-90ab-cdef12345678"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-1",
+              "name": "recipient_email",
+              "value": "you@example.com",
+              "type": "string"
+            },
+            {
+              "id": "cfg-2",
+              "name": "from_email",
+              "value": "applaud@example.com",
+              "type": "string"
+            },
+            {
+              "id": "cfg-3",
+              "name": "subject_prefix",
+              "value": "[Applaud]",
+              "type": "string"
+            },
+            {
+              "id": "cfg-4",
+              "name": "claude_model",
+              "value": "claude-sonnet-4-6",
+              "type": "string"
+            },
+            {
+              "id": "cfg-5",
+              "name": "max_summary_tokens",
+              "value": 4096,
+              "type": "number"
+            },
+            {
+              "id": "cfg-6",
+              "name": "summarize_prompt",
+              "value": "Summarize the following meeting/voice-memo transcript in 3–5 concise bullet points, then end with a one-sentence takeaway. Use markdown.",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "3f08e66c-b5b5-4d58-a20d-bdf43dba099e",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        912,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "533a5eb2-6006-4d0d-8c2d-ccd4e679ee62",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "=downloadedMarkdown",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1360,
+        0
+      ],
+      "id": "7f23d4dc-46f4-405c-aa81-06cd0058dffc",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "path": "={{ $json.targetPath }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.ftp",
+      "typeVersion": 1,
+      "position": [
+        2032,
+        0
+      ],
+      "id": "4d08b9a6-ea37-48b3-9cd8-3c7fdd6dadcc",
+      "name": "FTP",
+      "credentials": {
+        "ftp": {
+          "id": "2bVtDhD1cWyw7Jkn",
+          "name": "FTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const content =\n  typeof $json.data === 'string'\n    ? $json.data\n    : (typeof $json.body === 'string'\n        ? $json.body\n        : (typeof $json.content === 'string' ? $json.content : ''));\n\n// Change this node name if your upstream preparation node has a different name\nconst upstream = $('Rewrite URLs').item.json;\n\nconst fileName = String(upstream.desiredFileName || 'output.md');\nconst targetDir = String(upstream.targetDir || '/data/supportns-md');\nconst filePath = `${targetDir}/${fileName}`;\n\nreturn {\n  json: {\n    targetDir,\n    desiredFileName: fileName,\n    targetPath: filePath\n  },\n  binary: {\n    data: await this.helpers.prepareBinaryData(\n      Buffer.from(content, 'utf8'),\n      fileName,\n      'text/markdown'\n    )\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        0
+      ],
+      "id": "87a386a9-c694-4992-add7-cb772cdfe739",
+      "name": "Format Outputs"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.sourceUrl }}",
+        "options": {
+          "response": {
+            "response": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1584,
+        0
+      ],
+      "id": "01655c6f-8029-41f1-9fd0-888bfadc0843",
+      "name": "Get Files"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json.body;\n\nfunction rewriteHost(url) {\n  if (!url || typeof url !== 'string') return url;\n  return url.replace(/^http:\\/\\/127\\.0\\.0\\.1/, 'http://192.168.0.117');\n}\n\nfunction sanitiseBaseName(name) {\n  return String(name || 'Recording')\n    .replace(/[\\\\/:*?\"<>|]/g, '-')\n    .replace(/\\s+/g, ' ')\n    .replace(/[ .]+$/g, '')\n    .trim();\n}\n\nfunction assetBaseName(name) {\n  return String(name || '').split('/').pop() || '';\n}\n\nfunction shouldIgnoreMarkdownAsset(name) {\n  const baseName = assetBaseName(name).toLowerCase();\n  return (\n    baseName === 'summary.md' ||\n    baseName.startsWith('summary__auto_sum_note') ||\n    baseName.startsWith('outline__outline__')\n  );\n}\n\nfunction londonPartsFromMs(ms) {\n  const dt = new Date(ms);\n  const parts = new Intl.DateTimeFormat('en-GB', {\n    timeZone: 'Europe/London',\n    year: 'numeric',\n    month: '2-digit',\n  }).formatToParts(dt);\n\n  const year = parts.find(p => p.type === 'year')?.value;\n  const month = parts.find(p => p.type === 'month')?.value;\n\n  return { year, month };\n}\n\nconst { year, month } = londonPartsFromMs(input.recording.start_time_ms);\nconst baseName = sanitiseBaseName(input.recording.filename);\nconst targetRoot = `/data/supportns-md/${year}/${month}`;\n\nconst items = [];\n\n// Main summary only once\nitems.push({\n  json: {\n    kind: 'downloadedMarkdown',\n    sourceUrl: rewriteHost(input.http_urls.summary),\n    targetDir: targetRoot,\n    desiredFileName: `${baseName} - Summary.md`,\n    recordingId: input.recording.id,\n  }\n});\n\n// Markdown assets except filtered duplicates\nfor (const asset of input.http_urls.assets || []) {\n  if (asset.type !== 'markdown') continue;\n  if (shouldIgnoreMarkdownAsset(asset.name)) continue;\n\n  const safeAssetName = String(asset.name)\n    .replace(/[\\\\/:*?\"<>|]/g, '-')\n    .replace(/[ .]+$/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  items.push({\n    json: {\n      kind: 'downloadedMarkdown',\n      sourceUrl: rewriteHost(asset.url),\n      targetDir: targetRoot,\n      desiredFileName: `${baseName} - ${safeAssetName}`,\n      recordingId: input.recording.id,\n    }\n  });\n}\n\n// Transcript generated from payload\nitems.push({\n  json: {\n    kind: 'generatedTranscript',\n    targetDir: targetRoot,\n    desiredFileName: `${baseName} - Transcript.md`,\n    transcriptText: input.content?.transcript_text || '',\n    recordingId: input.recording.id,\n  }\n});\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        96
+      ],
+      "id": "5a9bcf55-602a-4476-aa9d-b83cf27f9659",
+      "name": "Rewrite URLs"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ede7c888-bb37-48ac-b345-47bb9f12c26b",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "generatedTranscript",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1360,
+        192
+      ],
+      "id": "02ba0577-458c-4304-83e3-834bcadd13c4",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "jsCode": "function formatTranscript(text) {\n  return String(text || '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .replace(/\\s*(\\[\\d{2}:\\d{2}(?::\\d{2})?\\])/g, '\\n$1')\n    .replace(/^\\n+/, '')\n    .trim() + '\\n';\n}\n\nconst formatted = formatTranscript($json.transcriptText);\nconst fileName = $json.desiredFileName;\nconst filePath = `${$json.targetDir}/${fileName}`;\n\nreturn [\n  {\n    json: {\n      targetDir: $json.targetDir,\n      desiredFileName: fileName,\n      targetPath: filePath,\n    },\n    binary: {\n      data: await this.helpers.prepareBinaryData(\n        Buffer.from(formatted, 'utf8'),\n        fileName,\n        'text/markdown'\n      )\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1584,
+        192
+      ],
+      "id": "44c8da47-41dc-428d-9d38-78173c2ce602",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "path": "={{ $json.targetPath }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.ftp",
+      "typeVersion": 1,
+      "position": [
+        1808,
+        192
+      ],
+      "id": "3bde203a-4bb8-4024-a2c9-4cf7e057f554",
+      "name": "FTP1",
+      "credentials": {
+        "ftp": {
+          "id": "2bVtDhD1cWyw7Jkn",
+          "name": "FTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "effff6d7-80ec-4c43-acdd-715a4fe2cbe3",
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "transcript_ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        688,
+        96
+      ],
+      "id": "16e3c756-cac3-4691-952b-55d558a33184",
+      "name": "Drop Audio Only"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Applaud Webhook": {
+      "main": [
+        [
+          {
+            "node": "Drop Audio Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Rewrite URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Get Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Outputs": {
+      "main": [
+        [
+          {
+            "node": "FTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Files": {
+      "main": [
+        [
+          {
+            "node": "Format Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rewrite URLs": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "FTP1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drop Audio Only": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ab9a0052-f79b-4644-9bcb-6e083268e329",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "31b4c8002c699b32eae287949251f809a51ce2887ae1fbcaa9533b58784bc466"
+  },
+  "id": "MOcoATHFlU2DXMGd",
+  "tags": []
+}
