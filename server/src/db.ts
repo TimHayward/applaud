@@ -17,6 +17,19 @@ export function getDb(): Database.Database {
   return db;
 }
 
+/**
+ * Test-only: replace the cached DB with the given handle (e.g. an in-memory DB).
+ * @internal — never call from production code paths.
+ */
+export function setDbForTests(handle: Database.Database | null): void {
+  db = handle;
+}
+
+/** Apply the schema migrations against any DB handle. Exported for test fixtures. */
+export function runMigrations(d: Database.Database): void {
+  migrate(d);
+}
+
 function migrate(d: Database.Database): void {
   d.exec(`
     CREATE TABLE IF NOT EXISTS recordings (
