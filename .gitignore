@@ -10,3 +10,5 @@ recordings/
 *.tsbuildinfo
 .vite/
 .claude/
+scripts/.sync-tracking.json
+applaud/scripts/.sync-tracking.json
