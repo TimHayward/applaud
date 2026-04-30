@@ -176,6 +176,17 @@ export function markSummaryDownloaded(id: string): void {
     .run(Date.now(), id);
 }
 
+/**
+ * Resync should refresh transcript/summary artifacts without forcing audio redownload.
+ */
+export function resetDownloadStateForResync(id: string): void {
+  getDb()
+    .prepare(
+      "UPDATE recordings SET transcript_downloaded_at = NULL, summary_downloaded_at = NULL, last_error = NULL WHERE id = ?",
+    )
+    .run(id);
+}
+
 export function markWebhookFired(id: string, event: "audio_ready" | "transcript_ready"): void {
   const col = event === "audio_ready" ? "webhook_audio_fired_at" : "webhook_transcript_fired_at";
   getDb().prepare(`UPDATE recordings SET ${col} = ? WHERE id = ?`).run(Date.now(), id);

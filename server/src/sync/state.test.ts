@@ -27,6 +27,7 @@ import {
   purgeSoftDeletedRecordingNow,
   isSyncIgnoredId,
   SOFT_DELETE_RETENTION_MS,
+  resetDownloadStateForResync,
 } from "./state.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 
@@ -153,6 +154,38 @@ describe("upsertFromPlaud", () => {
   it("throws when recordingsDir is not configured", () => {
     loadConfig.mockReturnValue({ ...baseConfig, recordingsDir: null });
     expect(() => upsertFromPlaud(makePlaudItem())).toThrow(/recordingsDir/);
+  });
+
+  it("resetDownloadStateForResync clears transcript/summary flags but keeps audio flag", () => {
+    upsertFromPlaud(makePlaudItem());
+    db
+      .prepare(
+        `UPDATE recordings
+         SET audio_downloaded_at = ?, transcript_downloaded_at = ?, summary_downloaded_at = ?, last_error = ?
+         WHERE id = ?`,
+      )
+      .run(111, 222, 333, "network failure", "abcdef0123456789");
+
+    resetDownloadStateForResync("abcdef0123456789");
+
+    const row = db
+      .prepare<
+        [string],
+        {
+          audio_downloaded_at: number | null;
+          transcript_downloaded_at: number | null;
+          summary_downloaded_at: number | null;
+          last_error: string | null;
+        }
+      >(
+        "SELECT audio_downloaded_at, transcript_downloaded_at, summary_downloaded_at, last_error FROM recordings WHERE id = ?",
+      )
+      .get("abcdef0123456789");
+
+    expect(row?.audio_downloaded_at).toBe(111);
+    expect(row?.transcript_downloaded_at).toBeNull();
+    expect(row?.summary_downloaded_at).toBeNull();
+    expect(row?.last_error).toBeNull();
   });
 });
 

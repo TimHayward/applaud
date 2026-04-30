@@ -32,6 +32,7 @@ import {
   PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT,
   clearError,
   resetPlaudTrashAssetProbeTimestamps,
+  resetDownloadStateForResync,
 } from "./state.js";
 import { ensureRecordingFolder } from "./layout.js";
 import { sanitizeFilename } from "./layout.js";
@@ -103,9 +104,10 @@ class Poller {
   }
 
   async resyncRecording(id: string): Promise<void> {
-    const row = getRecordingById(id);
-    if (!row) throw new Error("recording not found");
-    await this.processRecording(row, true);
+    resetDownloadStateForResync(id);
+    const refreshed = getRecordingById(id);
+    if (!refreshed) throw new Error("recording not found");
+    await this.processRecording(refreshed, true);
   }
 
   private async runOnce(): Promise<void> {
@@ -242,7 +244,7 @@ class Poller {
     const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
     if (forceDetailRefresh) {
-      await this.refreshDetailAndAssets(row.id, paths.folder);
+      await this.refreshDetailAndAssets(row.id, paths.folder, true);
     }
 
     // Each asset is retried independently — a failure fetching one doesn't
@@ -367,12 +369,16 @@ class Poller {
     }
   }
 
-  private async refreshDetailAndAssets(recordingId: string, folderAbs: string): Promise<void> {
+  private async refreshDetailAndAssets(
+    recordingId: string,
+    folderAbs: string,
+    forceOverwrite = false,
+  ): Promise<void> {
     try {
       const detail = await getFileDetail(recordingId);
       writeFileSync(path.join(folderAbs, "metadata.json"), JSON.stringify(detail, null, 2));
-      await this.downloadExtraAssets(detail, folderAbs, recordingId);
-      await this.downloadContentListMarkdown(detail.content_list, folderAbs, recordingId);
+      await this.downloadExtraAssets(detail, folderAbs, recordingId, forceOverwrite);
+      await this.downloadContentListMarkdown(detail.content_list, folderAbs, recordingId, forceOverwrite);
     } catch (err) {
       logger.warn({ err, id: recordingId }, "file detail fetch failed (non-fatal)");
     }
@@ -382,6 +388,7 @@ class Poller {
     contentList: ContentListItem[] | undefined,
     folderAbs: string,
     recordingId: string,
+    forceOverwrite = false,
   ): Promise<void> {
     if (!contentList || contentList.length === 0) return;
     const NOTE_TYPES = new Set([
@@ -403,7 +410,7 @@ class Poller {
         "note";
       const fileName = `${baseLabel}__${item.data_type}__${item.data_id.slice(-8)}.md`;
       const destPath = path.join(folderAbs, fileName);
-      if (existsSync(destPath)) continue;
+      if (existsSync(destPath) && !forceOverwrite) continue;
 
       try {
         const res = await fetch(item.data_link);
@@ -441,6 +448,7 @@ class Poller {
     detail: FileDetailData,
     folderAbs: string,
     recordingId: string,
+    forceOverwrite = false,
   ): Promise<void> {
     const mapping = detail.download_path_mapping;
     if (!mapping || Object.keys(mapping).length === 0) return;
@@ -460,7 +468,7 @@ class Poller {
         logger.warn({ id: recordingId, filename }, "skipping escaping extra asset path");
         continue;
       }
-      if (existsSync(destPath)) continue;
+      if (existsSync(destPath) && !forceOverwrite) continue;
       try {
         const res = await fetch(url);
         if (!res.ok) {
