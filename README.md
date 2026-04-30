@@ -4,8 +4,6 @@ A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recording
 
 > Applaud is not affiliated with Plaud. It talks to the same undocumented web API that the Plaud web app uses, via your own logged-in session.
 
-![Recordings dashboard](assets/Screenshot%202026-04-11%20203407.png)
-
 ## Features
 
 - **Automatic sync** — polls Plaud every 10 minutes (configurable) and downloads audio, transcripts, and AI summaries to local disk
@@ -16,6 +14,8 @@ A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recording
 - **Webhooks** — POST JSON payloads on `audio_ready` and `transcript_ready` events for n8n, Zapier, or custom integrations
 - **Dark & light mode** — toggle between themes, defaults to system preference
 - **Setup wizard** — guided 5-step onboarding (auth, folder, webhook, review)
+
+![Recordings dashboard](assets/Screenshot%202026-04-11%20203407.png)
 
 ![Recording detail](assets/Screenshot%202026-04-11%20203843.png)
 
