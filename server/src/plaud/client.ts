@@ -60,7 +60,11 @@ function getToken(): string {
   return cfg.token;
 }
 
-const USER_AGENT = "applaud/0.1.0 (+https://github.com/rsteckler/applaud)";
+// Cloudflare's bot protection on api.plaud.ai blocks the custom applaud UA with a
+// 403 challenge page (see https://github.com/rsteckler/applaud/issues/26). Present
+// as a normal desktop browser so requests pass the WAF check.
+const USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promise<Response> {
   const base = init.apiBase ?? getPlaudApiBase();
@@ -86,6 +90,16 @@ export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promi
         updateConfig({ setupComplete: true });
         throw new PlaudAuthError("Plaud returned 401 — token expired or revoked");
       }
+      if (
+        res.status === 403 &&
+        (res.headers.get("cf-ray") || res.headers.get("server") === "cloudflare")
+      ) {
+        throw new PlaudApiError(
+          "Request blocked by Cloudflare WAF — check your network or try again later",
+          403,
+          "",
+        );
+      }
       if (res.status >= 500 && attempt < maxAttempts) {
         const waitMs = attempt * 1000;
         logger.warn({ url, status: res.status, attempt }, "Plaud 5xx — retrying");
@@ -94,7 +108,7 @@ export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promi
       }
       return res;
     } catch (err) {
-      if (err instanceof PlaudAuthError) throw err;
+      if (err instanceof PlaudAuthError || err instanceof PlaudApiError) throw err;
       lastErr = err;
       if (attempt < maxAttempts) {
         await new Promise((r) => setTimeout(r, attempt * 1000));
