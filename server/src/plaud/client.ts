@@ -60,9 +60,10 @@ function getToken(): string {
   return cfg.token;
 }
 
-// Cloudflare's bot protection on api.plaud.ai blocks the custom applaud UA with a
-// 403 challenge page (see https://github.com/rsteckler/applaud/issues/26). Present
-// as a normal desktop browser so requests pass the WAF check.
+<<<<<<< HEAD
+// Cloudflare's bot protection on api.plaud.ai 403s the "applaud/x.y.z" UA
+// (see https://github.com/rsteckler/applaud/issues/26). Present as a normal
+// desktop browser so the poller passes the WAF check.
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
