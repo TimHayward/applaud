@@ -1,7 +1,21 @@
 name: Claude Code Review
 
 on:
-  pull_request:
+  # `pull_request_target` (not `pull_request`) so PRs opened from forks can
+  # still get reviewed. Fork PRs under `pull_request` are issued a read-only
+  # GITHUB_TOKEN and refused an OIDC token regardless of the `permissions:`
+  # block — the action's first OIDC fetch hard-fails (see PR #27, run
+  # 25886296079). `pull_request_target` runs in the base-repo context with
+  # secrets + full perms.
+  #
+  # Security model: the workflow definition comes from the base branch
+  # (attacker on a fork cannot modify it), and the only fork content this
+  # job touches is data — the diff and files read via the Read tool. We
+  # never `pnpm install`, build, or otherwise execute fork code. The agent's
+  # `--allowed-tools` is whitelisted to `gh pr view/diff/comment/api` +
+  # Read/Grep/Glob/Write, so prompt-injection in the diff cannot escalate to
+  # arbitrary shell.
+  pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
     # Optional: Only run on specific file changes
     # paths:
@@ -30,10 +44,20 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout PR head (read-only — never execute fork code)
         uses: actions/checkout@v4
         with:
+          # Under `pull_request_target` the default ref is the BASE branch,
+          # which would leave the Read tool looking at unchanged files. Pin
+          # to the PR head SHA (not a mutable ref) so the agent sees the
+          # code it's reviewing, and so an attacker can't race a follow-up
+          # push between job start and checkout.
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
+          # Don't leave the base-repo push token sitting in .git/config — if
+          # any tool unexpectedly tries to `git push`, it should fail rather
+          # than succeed silently.
+          persist-credentials: false
 
       - name: Run Claude Code Review
         id: claude-review
