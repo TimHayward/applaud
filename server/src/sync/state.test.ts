@@ -28,6 +28,8 @@ import {
   isSyncIgnoredId,
   SOFT_DELETE_RETENTION_MS,
   resetDownloadStateForResync,
+  setRecordingDisplayName,
+  getRecordingById,
 } from "./state.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 
@@ -186,6 +188,25 @@ describe("upsertFromPlaud", () => {
     expect(row?.transcript_downloaded_at).toBeNull();
     expect(row?.summary_downloaded_at).toBeNull();
     expect(row?.last_error).toBeNull();
+  });
+
+  it("resetDownloadStateForResync clears a local display-name override (source is authoritative on resync)", () => {
+    upsertFromPlaud(makePlaudItem());
+    setRecordingDisplayName("abcdef0123456789", "My Custom Title");
+    expect(getRecordingById("abcdef0123456789")?.displayName).toBe("My Custom Title");
+
+    resetDownloadStateForResync("abcdef0123456789");
+
+    expect(getRecordingById("abcdef0123456789")?.displayName).toBeNull();
+  });
+
+  it("setRecordingDisplayName trims whitespace and treats empty/whitespace-only as clearing", () => {
+    upsertFromPlaud(makePlaudItem());
+    setRecordingDisplayName("abcdef0123456789", "  Padded Title  ");
+    expect(getRecordingById("abcdef0123456789")?.displayName).toBe("Padded Title");
+
+    setRecordingDisplayName("abcdef0123456789", "   ");
+    expect(getRecordingById("abcdef0123456789")?.displayName).toBeNull();
   });
 });
 

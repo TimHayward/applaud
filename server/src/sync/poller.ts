@@ -35,6 +35,8 @@ import {
   resetDownloadStateForResync,
 } from "./state.js";
 import { ensureRecordingFolder } from "./layout.js";
+import { writeFileAtomic } from "../fsAtomic.js";
+import { POLLER_LIST_PAGE_SIZE, POLLER_LIST_MAX_PAGES } from "../constants.js";
 import { sanitizeFilename } from "./layout.js";
 import { fireWebhookForRecording } from "../webhook/post.js";
 import { emit } from "./events.js";
@@ -56,6 +58,8 @@ class Poller {
   private queuedTrigger = false;
   /** Set by trigger(); consumed on next poll past config gate — manual reset + higher Phase 3 probe cap. */
   private pendingManualSync = false;
+  /** Recording ids currently being fetched/written, guarding scheduled and manual (resync) processing from overlapping on the same row. */
+  private processingIds = new Set<string>();
   lastPollAt: number | null = null;
   nextPollAt: number | null = null;
   lastError: string | null = null;
@@ -84,6 +88,16 @@ class Poller {
     logger.info("poller stopped");
   }
 
+  /**
+   * Re-read config (e.g. a new pollIntervalMinutes) and reschedule. No-op if
+   * the poller was never started — start() is the entry point for that case.
+   */
+  restart(): void {
+    if (!this.interval) return;
+    this.stop();
+    this.start();
+  }
+
   async trigger(): Promise<void> {
     this.pendingManualSync = true;
     if (this.inFlight) {
@@ -104,6 +118,9 @@ class Poller {
   }
 
   async resyncRecording(id: string): Promise<void> {
+    if (this.processingIds.has(id)) {
+      throw new Error("recording is already being synced — try again in a moment");
+    }
     resetDownloadStateForResync(id);
     const refreshed = getRecordingById(id);
     if (!refreshed) throw new Error("recording not found");
@@ -162,14 +179,12 @@ class Poller {
     // Phase 1 — Discovery: walk Plaud's recording list and upsert metadata for
     // any new rows. Upsert is a no-op for rows we already have. No fetching
     // happens here.
-    const PAGE_SIZE = 50;
-    const MAX_PAGES = 200;
     let fetched = 0;
     let totalReported = 0;
-    for (let pageIdx = 0; pageIdx < MAX_PAGES; pageIdx++) {
+    for (let pageIdx = 0; pageIdx < POLLER_LIST_MAX_PAGES; pageIdx++) {
       const page = await listRecordings({
-        skip: pageIdx * PAGE_SIZE,
-        limit: PAGE_SIZE,
+        skip: pageIdx * POLLER_LIST_PAGE_SIZE,
+        limit: POLLER_LIST_PAGE_SIZE,
         isTrash: listTrashMode,
       });
       if (page.status !== 0) {
@@ -193,7 +208,7 @@ class Poller {
           emit("error", { recordingId: item.id, message: msg });
         }
       }
-      if (items.length < PAGE_SIZE) break;
+      if (items.length < POLLER_LIST_PAGE_SIZE) break;
     }
     logger.info({ fetched, reportedTotal: totalReported }, "list walk complete");
 
@@ -235,51 +250,59 @@ class Poller {
   }
 
   private async processRecording(row: RecordingRow, forceDetailRefresh = false): Promise<void> {
-    const cfg = loadConfig();
-    if (!cfg.recordingsDir) return;
-    if (isSyncIgnoredId(row.id)) return;
-    if (row.userDeletedAt) return;
-    if (row.isTrash && !cfg.importPlaudDeleted) return;
+    // Guards the scheduled Phase 2 loop and a manual resync() from ever
+    // writing the same recording's files concurrently.
+    if (this.processingIds.has(row.id)) return;
+    this.processingIds.add(row.id);
+    try {
+      const cfg = loadConfig();
+      if (!cfg.recordingsDir) return;
+      if (isSyncIgnoredId(row.id)) return;
+      if (row.userDeletedAt) return;
+      if (row.isTrash && !cfg.importPlaudDeleted) return;
 
-    const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
+      const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
-    if (forceDetailRefresh) {
-      await this.refreshDetailAndAssets(row.id, paths.folder, true);
-    }
+      if (forceDetailRefresh) {
+        await this.refreshDetailAndAssets(row.id, paths.folder, true);
+      }
 
-    // Each asset is retried independently — a failure fetching one doesn't
-    // block the others. Errors are recorded on the row and the loop continues.
-    if (!row.audioDownloadedAt) {
-      try {
-        if (!forceDetailRefresh) await this.refreshDetailAndAssets(row.id, paths.folder);
+      // Each asset is retried independently — a failure fetching one doesn't
+      // block the others. Errors are recorded on the row and the loop continues.
+      if (!row.audioDownloadedAt) {
+        try {
+          if (!forceDetailRefresh) await this.refreshDetailAndAssets(row.id, paths.folder);
 
-        const bytes = await downloadAudio(row.id, paths.audioPath);
-        markAudioDownloaded(row.id, bytes || row.filesizeBytes);
-        emit("recording_new", { recordingId: row.id });
+          const bytes = await downloadAudio(row.id, paths.audioPath);
+          markAudioDownloaded(row.id, bytes || row.filesizeBytes);
+          emit("recording_new", { recordingId: row.id });
 
-        const fresh = getRecordingById(row.id);
-        if (fresh) {
-          const fired = await fireWebhookForRecording("audio_ready", fresh);
-          if (fired) markWebhookFired(row.id, "audio_ready");
+          const fresh = getRecordingById(row.id);
+          if (fresh) {
+            const fired = await fireWebhookForRecording("audio_ready", fresh);
+            if (fired) markWebhookFired(row.id, "audio_ready");
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ err, id: row.id }, "audio download failed");
+          recordError(row.id, msg);
+          emit("error", { recordingId: row.id, message: msg });
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ err, id: row.id }, "audio download failed");
-        recordError(row.id, msg);
-        emit("error", { recordingId: row.id, message: msg });
       }
-    }
 
-    const wantSummary = !row.summaryDownloadedAt && row.plaudIsSummary;
-    if (!row.isTrash && (!row.transcriptDownloadedAt || wantSummary)) {
-      try {
-        await this.tryTranscriptAndSummary(row);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ err, id: row.id }, "transcript/summary fetch failed");
-        recordError(row.id, msg);
-        emit("error", { recordingId: row.id, message: msg });
+      const wantSummary = !row.summaryDownloadedAt && row.plaudIsSummary;
+      if (!row.isTrash && (!row.transcriptDownloadedAt || wantSummary)) {
+        try {
+          await this.tryTranscriptAndSummary(row);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ err, id: row.id }, "transcript/summary fetch failed");
+          recordError(row.id, msg);
+          emit("error", { recordingId: row.id, message: msg });
+        }
       }
+    } finally {
+      this.processingIds.delete(row.id);
     }
   }
 
@@ -303,9 +326,9 @@ class Poller {
     // extractor handles that.
     const resp = await getTranscriptAndSummary(row.id);
     if (needTranscript && resp.data_result && resp.data_result.length > 0) {
-      writeFileSync(paths.transcriptJsonPath, JSON.stringify(resp, null, 2));
+      writeFileAtomic(paths.transcriptJsonPath, JSON.stringify(resp, null, 2));
       const txtContent = flattenTranscript(resp.data_result);
-      writeFileSync(paths.transcriptTxtPath, txtContent);
+      writeFileAtomic(paths.transcriptTxtPath, txtContent);
       markTranscriptDownloaded(row.id, txtContent);
       wroteTranscript = true;
     }
@@ -316,7 +339,7 @@ class Poller {
           startTimeMs: row.startTime,
           endTimeMs: row.endTime,
         });
-        writeFileSync(paths.summaryMdPath, cleaned);
+        writeFileAtomic(paths.summaryMdPath, cleaned);
         markSummaryDownloaded(row.id);
         wroteSummary = true;
       }
@@ -337,9 +360,9 @@ class Poller {
       if (detail.content_list && detail.content_list.length > 0) {
         const { segments, summaryMd } = await fetchTranscriptFromContentList(detail.content_list);
         if (stillNeedTranscript && segments.length > 0) {
-          writeFileSync(paths.transcriptJsonPath, JSON.stringify(segments, null, 2));
+          writeFileAtomic(paths.transcriptJsonPath, JSON.stringify(segments, null, 2));
           const txtContent = flattenTranscript(segments);
-          writeFileSync(paths.transcriptTxtPath, txtContent);
+          writeFileAtomic(paths.transcriptTxtPath, txtContent);
           markTranscriptDownloaded(row.id, txtContent);
           wroteTranscript = true;
         }
@@ -348,7 +371,7 @@ class Poller {
             startTimeMs: row.startTime,
             endTimeMs: row.endTime,
           });
-          writeFileSync(paths.summaryMdPath, cleaned);
+          writeFileAtomic(paths.summaryMdPath, cleaned);
           markSummaryDownloaded(row.id);
           wroteSummary = true;
         }
@@ -376,7 +399,7 @@ class Poller {
   ): Promise<void> {
     try {
       const detail = await getFileDetail(recordingId);
-      writeFileSync(path.join(folderAbs, "metadata.json"), JSON.stringify(detail, null, 2));
+      writeFileAtomic(path.join(folderAbs, "metadata.json"), JSON.stringify(detail, null, 2));
       await this.downloadExtraAssets(detail, folderAbs, recordingId, forceOverwrite);
       await this.downloadContentListMarkdown(detail.content_list, folderAbs, recordingId, forceOverwrite);
     } catch (err) {

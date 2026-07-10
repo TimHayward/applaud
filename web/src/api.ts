@@ -11,6 +11,10 @@ import type {
   AppConfig,
   ClearSyncIgnoreResponse,
   SyncBlocklistResponse,
+  RecordingsSort,
+  WebhookLogResponse,
+  WebhookRedeliverResponse,
+  RenameRecordingResponse,
 } from "@applaud/shared";
 
 export class ApiError extends Error {
@@ -22,12 +26,46 @@ export class ApiError extends Error {
   }
 }
 
+const LAN_TOKEN_STORAGE_KEY = "applaud-lan-token";
+
+/** Only set when the server has a lanToken configured (see Settings → LAN access). Absent by default. */
+export function getLanToken(): string | null {
+  try {
+    return localStorage.getItem(LAN_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setLanToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(LAN_TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(LAN_TOKEN_STORAGE_KEY);
+  } catch {
+    /* private browsing / storage disabled — nothing we can do */
+  }
+}
+
+/**
+ * Appends the LAN token as a query param for elements that can't set request
+ * headers (<audio src>, <a href download>, <img src>) — e.g. /media/* URLs.
+ * No-op when no lanToken is configured.
+ */
+export function mediaUrl(path: string): string {
+  const token = getLanToken();
+  if (!token) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}token=${encodeURIComponent(token)}`;
+}
+
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const token = getLanToken();
   const res = await fetch(url, {
     ...init,
     headers: {
       "content-type": "application/json",
       accept: "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -78,11 +116,25 @@ export const api = {
       method: "POST",
       body: "{}",
     }),
-  listRecordings: (params: { limit?: number; offset?: number; search?: string } = {}) => {
+  listRecordings: (
+    params: {
+      limit?: number;
+      offset?: number;
+      search?: string;
+      from?: number;
+      to?: number;
+      sort?: RecordingsSort;
+      starred?: boolean;
+    } = {},
+  ) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set("limit", String(params.limit));
     if (params.offset) qs.set("offset", String(params.offset));
     if (params.search) qs.set("search", params.search);
+    if (params.from != null) qs.set("from", String(params.from));
+    if (params.to != null) qs.set("to", String(params.to));
+    if (params.sort) qs.set("sort", params.sort);
+    if (params.starred) qs.set("starred", "1");
     return jsonFetch<RecordingsListResponse>(`/api/recordings?${qs.toString()}`);
   },
   listTrashRecordings: (params: { limit?: number; offset?: number } = {}) => {
@@ -98,6 +150,11 @@ export const api = {
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}`, { method: "DELETE" }),
   resyncRecording: (id: string) =>
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/resync`, { method: "POST", body: "{}" }),
+  renameRecording: (id: string, displayName: string | null) =>
+    jsonFetch<RenameRecordingResponse>(`/api/recordings/${id}/rename`, {
+      method: "POST",
+      body: JSON.stringify({ displayName }),
+    }),
   restoreRecording: (id: string) =>
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/restore`, { method: "POST", body: "{}" }),
   purgeRecordingFromTrash: (id: string) =>
@@ -107,4 +164,15 @@ export const api = {
   syncStatus: () => jsonFetch<SyncStatusResponse>("/api/sync/status"),
   syncTrigger: () =>
     jsonFetch<{ ok: boolean }>("/api/sync/trigger", { method: "POST", body: "{}" }),
+  webhookLog: (params: { limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set("limit", String(params.limit));
+    if (params.offset) qs.set("offset", String(params.offset));
+    return jsonFetch<WebhookLogResponse>(`/api/webhooks/log?${qs.toString()}`);
+  },
+  webhookRedeliver: (recordingId: string, event: "audio_ready" | "transcript_ready") =>
+    jsonFetch<WebhookRedeliverResponse>("/api/webhooks/redeliver", {
+      method: "POST",
+      body: JSON.stringify({ recordingId, event }),
+    }),
 };

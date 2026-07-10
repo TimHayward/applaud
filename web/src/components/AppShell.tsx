@@ -28,9 +28,25 @@ function useStarNudge(): { show: boolean; dismiss: () => void } {
   return { show, dismiss };
 }
 
+const NAV_LINK_CLASS = ({ isActive }: { isActive: boolean }): string =>
+  isActive
+    ? "text-primary font-bold border-b-2 border-primary pb-1"
+    : "text-on-surface-variant hover:text-on-surface transition-colors";
+
+const MOBILE_NAV_LINK_CLASS = ({ isActive }: { isActive: boolean }): string =>
+  isActive
+    ? "block px-4 py-3 rounded-lg bg-primary/10 text-primary font-bold"
+    : "block px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors";
+
 export function AppShell(): JSX.Element {
   const { show: showNudge, dismiss: dismissNudge } = useStarNudge();
   const ghRef = useRef<HTMLAnchorElement>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const location = useLocation();
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
 
   return (
     <div className="min-h-screen bg-surface">
@@ -41,35 +57,13 @@ export function AppShell(): JSX.Element {
               Applaud<span className="text-primary">.</span>
             </NavLink>
             <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
-              <NavLink
-                to="/"
-                end
-                className={({ isActive }) =>
-                  isActive
-                    ? "text-primary font-bold border-b-2 border-primary pb-1"
-                    : "text-on-surface-variant hover:text-on-surface transition-colors"
-                }
-              >
+              <NavLink to="/" end className={NAV_LINK_CLASS}>
                 Recordings
               </NavLink>
-              <NavLink
-                to="/trash"
-                className={({ isActive }) =>
-                  isActive
-                    ? "text-primary font-bold border-b-2 border-primary pb-1"
-                    : "text-on-surface-variant hover:text-on-surface transition-colors"
-                }
-              >
+              <NavLink to="/trash" className={NAV_LINK_CLASS}>
                 Trash
               </NavLink>
-              <NavLink
-                to="/settings"
-                className={({ isActive }) =>
-                  isActive
-                    ? "text-primary font-bold border-b-2 border-primary pb-1"
-                    : "text-on-surface-variant hover:text-on-surface transition-colors"
-                }
-              >
+              <NavLink to="/settings" className={NAV_LINK_CLASS}>
                 Settings
               </NavLink>
             </nav>
@@ -118,8 +112,34 @@ export function AppShell(): JSX.Element {
               )}
             </div>
             <ThemeToggle />
+            <button
+              type="button"
+              className="md:hidden rounded-lg p-1.5 text-on-surface-variant hover:text-on-surface transition-colors"
+              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={mobileMenuOpen}
+              onClick={() => setMobileMenuOpen((v) => !v)}
+            >
+              {mobileMenuOpen ? (
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              ) : (
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" /></svg>
+              )}
+            </button>
           </div>
         </div>
+        {mobileMenuOpen && (
+          <nav className="md:hidden border-t border-outline-variant/20 px-4 py-3 space-y-1 bg-surface-dim">
+            <NavLink to="/" end className={MOBILE_NAV_LINK_CLASS}>
+              Recordings
+            </NavLink>
+            <NavLink to="/trash" className={MOBILE_NAV_LINK_CLASS}>
+              Trash
+            </NavLink>
+            <NavLink to="/settings" className={MOBILE_NAV_LINK_CLASS}>
+              Settings
+            </NavLink>
+          </nav>
+        )}
       </header>
       <main className="mx-auto max-w-6xl px-6 py-8">
         <Outlet />

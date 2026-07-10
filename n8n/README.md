@@ -2,6 +2,11 @@
 
 Importable [n8n](https://n8n.io) workflows that consume Applaud webhook events.
 
+| File | What it does |
+| --- | --- |
+| `applaud-transcript-email.json` | Summarize new transcripts with Claude and email the result |
+| `file-organisation.json` | Mirror each recording's files to an FTP server |
+
 ## applaud-transcript-email.json
 
 Receives the Applaud webhook, filters for `transcript_ready` events, summarizes the transcript with Claude, and emails the result.
@@ -61,3 +66,24 @@ Applaud posts JSON with this shape (see `shared/src/recording.ts`):
 ```
 
 The `applaud.test` button on the Settings page posts a fully-populated sample of the above (with `test: true` and an `x-applaud-test: 1` header) so n8n's field mapper sees every key up front.
+
+## file-organisation.json
+
+Receives the Applaud webhook and mirrors the recording's files (audio, transcript, summary, and any extra assets) to an FTP server, organised into per-recording folders.
+
+```
+Webhook → Config → Drop Audio Only → Format Outputs → Get Files (HTTP) → Rewrite URLs → FTP upload
+```
+
+### Import
+
+1. In n8n: **Workflows → Import from File** → pick `file-organisation.json`.
+2. Open the **Config** node and set your destination base path and any naming options.
+3. Assign an **FTP credential** to the FTP nodes (host, user, password/key).
+4. **Activate** the workflow and copy the production webhook URL from the Webhook node.
+5. In Applaud → **Settings → Webhook**, paste the URL and hit **Test**.
+
+Notes:
+
+- The workflow downloads each file over HTTP from the `http_urls` in the payload, so n8n must be able to reach your Applaud instance (adjust the **Rewrite URLs** node if n8n runs on a different host than Applaud — e.g. replace `127.0.0.1` with your LAN address). If you've set a LAN access token in Applaud, append `?token=<your token>` in the same node.
+- `audio_ready` events are filtered out (**Drop Audio Only**) so files are uploaded once, when the transcript is complete.

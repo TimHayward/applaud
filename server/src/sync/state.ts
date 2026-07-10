@@ -1,14 +1,25 @@
 import { renameSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
-import type { RecordingRow, PlaudRawRecording } from "@applaud/shared";
+import type { RecordingRow, PlaudRawRecording, RecordingsSort } from "@applaud/shared";
 import { getDb, rowToRecording, type RecordingDbRow } from "../db.js";
 import { folderName, recordingPaths } from "./layout.js";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { emit } from "./events.js";
+import {
+  SOFT_DELETE_RETENTION_MS,
+  PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS,
+  PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT,
+  PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT,
+  RECORDINGS_LIST_MAX_LIMIT,
+} from "../constants.js";
 
-/** Soft-deleted recordings are purged from disk and DB after this delay. */
-export const SOFT_DELETE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export {
+  SOFT_DELETE_RETENTION_MS,
+  PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS,
+  PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT,
+  PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT,
+};
 
 function mainListWhereSql(): string {
   if (loadConfig().importPlaudDeleted) {
@@ -63,14 +74,24 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
   const existing = db
     .prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?")
     .get(item.id);
+  const starredVal = item.is_markmemo ? 1 : 0;
+  const tagsJson = item.filetag_id_list && item.filetag_id_list.length > 0 ? JSON.stringify(item.filetag_id_list) : null;
+
   if (existing) {
     if (existing.filename !== item.filename) {
       renameRecordingFolder(existing, item.filename);
     }
     const trashVal = item.is_trash ? 1 : 0;
     const summVal = item.is_summary ? 1 : 0;
-    if (existing.is_trash !== trashVal || existing.plaud_is_summary !== summVal) {
-      db.prepare("UPDATE recordings SET is_trash = ?, plaud_is_summary = ? WHERE id = ?").run(trashVal, summVal, item.id);
+    if (
+      existing.is_trash !== trashVal ||
+      existing.plaud_is_summary !== summVal ||
+      (existing.is_starred ?? 0) !== starredVal ||
+      (existing.plaud_tags ?? null) !== tagsJson
+    ) {
+      db.prepare(
+        "UPDATE recordings SET is_trash = ?, plaud_is_summary = ?, is_starred = ?, plaud_tags = ? WHERE id = ?",
+      ).run(trashVal, summVal, starredVal, tagsJson, item.id);
     }
     return rowToRecording(
       db.prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?").get(item.id)!,
@@ -88,8 +109,9 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
       folder, audio_path, transcript_path, summary_path, metadata_path,
       audio_downloaded_at, transcript_downloaded_at, webhook_audio_fired_at,
       webhook_transcript_fired_at, is_trash, last_error, metadata_json,
-      user_deleted_at, user_purge_at, plaud_is_summary, summary_downloaded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, NULL)`,
+      user_deleted_at, user_purge_at, plaud_is_summary, summary_downloaded_at,
+      is_starred, plaud_tags
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, NULL, ?, ?)`,
   ).run(
     item.id,
     item.filename,
@@ -105,6 +127,8 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
     paths.metadataPath,
     item.is_trash ? 1 : 0,
     item.is_summary ? 1 : 0,
+    starredVal,
+    tagsJson,
   );
 
   return rowToRecording(
@@ -178,13 +202,23 @@ export function markSummaryDownloaded(id: string): void {
 
 /**
  * Resync should refresh transcript/summary artifacts without forcing audio redownload.
+ * Also clears any local display-name override — a resync re-pulls from
+ * Plaud, so Plaud's filename becomes authoritative again.
  */
 export function resetDownloadStateForResync(id: string): void {
   getDb()
     .prepare(
-      "UPDATE recordings SET transcript_downloaded_at = NULL, summary_downloaded_at = NULL, last_error = NULL WHERE id = ?",
+      "UPDATE recordings SET transcript_downloaded_at = NULL, summary_downloaded_at = NULL, last_error = NULL, display_name = NULL WHERE id = ?",
     )
     .run(id);
+}
+
+/** Set (or clear, with `null`) a local title override. Cleared automatically on the next resync. */
+export function setRecordingDisplayName(id: string, displayName: string | null): RecordingRow | null {
+  const trimmed = displayName?.trim();
+  const value = trimmed && trimmed.length > 0 ? trimmed.slice(0, 300) : null;
+  getDb().prepare("UPDATE recordings SET display_name = ? WHERE id = ?").run(value, id);
+  return getRecordingById(id);
 }
 
 export function markWebhookFired(id: string, event: "audio_ready" | "transcript_ready"): void {
@@ -202,63 +236,65 @@ export function clearError(id: string): void {
   getDb().prepare("UPDATE recordings SET last_error = NULL WHERE id = ?").run(id);
 }
 
+const SORT_COLUMNS: Record<RecordingsSort, string> = {
+  date_desc: "start_time DESC",
+  date_asc: "start_time ASC",
+  duration_desc: "duration_ms DESC",
+  duration_asc: "duration_ms ASC",
+  size_desc: "filesize_bytes DESC",
+  size_asc: "filesize_bytes ASC",
+};
+
 export function listRecordingRows(
-  opts: { limit?: number; offset?: number; search?: string; includeInactive?: boolean } = {},
+  opts: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    includeInactive?: boolean;
+    from?: number;
+    to?: number;
+    sort?: RecordingsSort;
+    starred?: boolean;
+  } = {},
 ): { total: number; totalBytes: number; items: RecordingRow[] } {
   const db = getDb();
-  const limit = Math.min(opts.limit ?? 100, 500);
+  const limit = Math.min(opts.limit ?? 100, RECORDINGS_LIST_MAX_LIMIT);
   const offset = Math.max(opts.offset ?? 0, 0);
   const search = opts.search?.trim();
   const activeOnly = !opts.includeInactive;
+  const orderBy = SORT_COLUMNS[opts.sort ?? "date_desc"] ?? SORT_COLUMNS.date_desc;
 
-  let aggRow: { c: number; b: number } | undefined;
-  let rows: RecordingDbRow[];
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (activeOnly) conditions.push(mainListWhereSql());
   if (search) {
+    conditions.push("(filename LIKE ? OR transcript_text LIKE ?)");
     const like = `%${search}%`;
-    const ml = mainListWhereSql();
-    if (activeOnly) {
-      aggRow = db
-        .prepare<[string, string], { c: number; b: number }>(
-          `SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE (${ml}) AND (filename LIKE ? OR transcript_text LIKE ?)`,
-        )
-        .get(like, like);
-      rows = db
-        .prepare<[string, string, number, number], RecordingDbRow>(
-          `SELECT * FROM recordings WHERE (${ml}) AND (filename LIKE ? OR transcript_text LIKE ?) ORDER BY start_time DESC LIMIT ? OFFSET ?`,
-        )
-        .all(like, like, limit, offset);
-    } else {
-      aggRow = db
-        .prepare<[string, string], { c: number; b: number }>(
-          "SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ?",
-        )
-        .get(like, like);
-      rows = db
-        .prepare<[string, string, number, number], RecordingDbRow>(
-          "SELECT * FROM recordings WHERE filename LIKE ? OR transcript_text LIKE ? ORDER BY start_time DESC LIMIT ? OFFSET ?",
-        )
-        .all(like, like, limit, offset);
-    }
-  } else if (activeOnly) {
-    const ml = mainListWhereSql();
-    aggRow = db
-      .prepare<[], { c: number; b: number }>(
-        `SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings WHERE ${ml}`,
-      )
-      .get();
-    rows = db
-      .prepare<[number, number], RecordingDbRow>(
-        `SELECT * FROM recordings WHERE ${ml} ORDER BY start_time DESC LIMIT ? OFFSET ?`,
-      )
-      .all(limit, offset);
-  } else {
-    aggRow = db.prepare<[], { c: number; b: number }>("SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings").get();
-    rows = db
-      .prepare<[number, number], RecordingDbRow>(
-        "SELECT * FROM recordings ORDER BY start_time DESC LIMIT ? OFFSET ?",
-      )
-      .all(limit, offset);
+    params.push(like, like);
   }
+  if (opts.from != null) {
+    conditions.push("start_time >= ?");
+    params.push(opts.from);
+  }
+  if (opts.to != null) {
+    conditions.push("start_time <= ?");
+    params.push(opts.to);
+  }
+  if (opts.starred) {
+    conditions.push("is_starred = 1");
+  }
+
+  const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const aggRow = db
+    .prepare(`SELECT COUNT(*) AS c, COALESCE(SUM(filesize_bytes), 0) AS b FROM recordings ${whereSql}`)
+    .get(...params) as { c: number; b: number } | undefined;
+
+  const rows = db
+    .prepare(`SELECT * FROM recordings ${whereSql} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset) as RecordingDbRow[];
+
   return {
     total: aggRow?.c ?? 0,
     totalBytes: aggRow?.b ?? 0,
@@ -270,7 +306,7 @@ export function listSoftDeletedRows(
   opts: { limit?: number; offset?: number } = {},
 ): { total: number; totalBytes: number; items: RecordingRow[] } {
   const db = getDb();
-  const limit = Math.min(opts.limit ?? 100, 500);
+  const limit = Math.min(opts.limit ?? 100, RECORDINGS_LIST_MAX_LIMIT);
   const offset = Math.max(opts.offset ?? 0, 0);
   const aggRow = db
     .prepare<[], { c: number; b: number }>(
@@ -405,13 +441,6 @@ export function findRecordingsNeedingAssets(): RecordingRow[] {
     .all();
   return rows.map(rowToRecording);
 }
-
-/** Throttled Plaud-trash rows to check for transcript/summary (does not drive pending counts). */
-export const PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-/** Max trash rows probed per scheduled poll (Phase 3). */
-export const PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT = 25;
-/** Sync Now: higher than scheduled poll, but bounded so one manual sync cannot fan out without limit. */
-export const PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT = 100;
 
 export function findPlaudTrashAssetProbeCandidates(probeOlderThan: number, limit: number): RecordingRow[] {
   if (!loadConfig().importPlaudDeleted) return [];

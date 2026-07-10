@@ -1,34 +1,35 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { MouseEvent } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api.js";
-import type { RecordingRow } from "@applaud/shared";
+import { api, ApiError } from "../api.js";
+import { useDebouncedValue } from "../hooks/useDebouncedValue.js";
+import { useRecordingActions } from "../hooks/useRecordingActions.js";
+import { useToast } from "../components/Toast.js";
+import { formatDurationClock, formatDateShort, formatBytes } from "../lib/format.js";
+import type { RecordingRow, RecordingsSort } from "@applaud/shared";
 
-function formatDuration(ms: number): string {
-  const sec = Math.floor(ms / 1000);
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
+const PAGE_SIZE = 50;
+
+const SORT_OPTIONS: { value: RecordingsSort; label: string }[] = [
+  { value: "date_desc", label: "Newest first" },
+  { value: "date_asc", label: "Oldest first" },
+  { value: "duration_desc", label: "Longest first" },
+  { value: "duration_asc", label: "Shortest first" },
+  { value: "size_desc", label: "Largest first" },
+  { value: "size_asc", label: "Smallest first" },
+];
+
+function dateStringToFromMs(s: string): number | undefined {
+  if (!s) return undefined;
+  const d = new Date(`${s}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? undefined : d.getTime();
 }
 
-function formatDate(ts: number): string {
-  return new Date(ts).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+function dateStringToToMs(s: string): number | undefined {
+  if (!s) return undefined;
+  const d = new Date(`${s}T23:59:59.999`);
+  return Number.isNaN(d.getTime()) ? undefined : d.getTime();
 }
 
 function StatusDots({ row }: { row: RecordingRow }): JSX.Element {
@@ -101,21 +102,55 @@ function RecordingIcon({ isTrash }: { isTrash: boolean }): JSX.Element {
 export function Dashboard(): JSX.Element {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const [sort, setSort] = useState<RecordingsSort>("date_desc");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [starredOnly, setStarredOnly] = useState(false);
+  const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const { bulkMoveToTrash } = useRecordingActions();
+  const toast = useToast();
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch, sort, fromDate, toDate, starredOnly]);
+  // Selection is page-scoped; clear it whenever the visible rows change.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [debouncedSearch, sort, fromDate, toDate, starredOnly, page]);
   const list = useQuery({
-    queryKey: ["recordings", { search }],
-    queryFn: () => api.listRecordings({ limit: 200, search: search || undefined }),
+    queryKey: ["recordings", { search: debouncedSearch, sort, fromDate, toDate, starredOnly, page }],
+    queryFn: () =>
+      api.listRecordings({
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+        search: debouncedSearch || undefined,
+        sort,
+        from: dateStringToFromMs(fromDate),
+        to: dateStringToToMs(toDate),
+        starred: starredOnly || undefined,
+      }),
   });
   const [triggering, setTriggering] = useState(false);
   const [resyncingIds, setResyncingIds] = useState<Set<string>>(new Set());
+  const [resyncErrors, setResyncErrors] = useState<Record<string, string>>({});
 
   const resyncRecording = async (id: string, e: MouseEvent): Promise<void> => {
     e.preventDefault();
     e.stopPropagation();
     if (resyncingIds.has(id)) return;
     setResyncingIds((prev) => new Set(prev).add(id));
+    setResyncErrors((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     try {
       await api.resyncRecording(id);
       await qc.invalidateQueries({ queryKey: ["recordings"] });
+    } catch (err) {
+      setResyncErrors((prev) => ({ ...prev, [id]: err instanceof Error ? err.message : String(err) }));
     } finally {
       setResyncingIds((prev) => {
         const next = new Set(prev);
@@ -134,6 +169,40 @@ export function Dashboard(): JSX.Element {
     } finally {
       setTriggering(false);
     }
+  };
+
+  const toggleSelected = (id: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const bulkTrash = async (): Promise<void> => {
+    if (await bulkMoveToTrash([...selected])) setSelected(new Set());
+  };
+
+  const bulkResync = async (): Promise<void> => {
+    const ids = [...selected];
+    let okCount = 0;
+    let firstError: string | null = null;
+    for (const id of ids) {
+      try {
+        await api.resyncRecording(id);
+        okCount++;
+      } catch (err) {
+        if (!firstError) firstError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    await qc.invalidateQueries({ queryKey: ["recordings"] });
+    if (okCount === ids.length) {
+      toast.success(`${okCount} recording${okCount === 1 ? "" : "s"} resynced.`);
+    } else {
+      toast.error(`${okCount}/${ids.length} resynced — first failure: ${firstError ?? "unknown error"}`);
+    }
+    setSelected(new Set());
   };
 
   return (
@@ -186,9 +255,109 @@ export function Dashboard(): JSX.Element {
         </div>
       </header>
 
-      {list.isLoading && <p className="text-on-surface-variant">loading…</p>}
+      {/* Filters */}
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-on-surface-variant">
+          Sort
+          <select
+            className="input py-2 px-3 border-transparent text-sm"
+            value={sort}
+            onChange={(e) => setSort(e.target.value as RecordingsSort)}
+          >
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm text-on-surface-variant">
+          From
+          <input
+            type="date"
+            className="input py-2 px-3 border-transparent text-sm"
+            value={fromDate}
+            max={toDate || undefined}
+            onChange={(e) => setFromDate(e.target.value)}
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm text-on-surface-variant">
+          To
+          <input
+            type="date"
+            className="input py-2 px-3 border-transparent text-sm"
+            value={toDate}
+            min={fromDate || undefined}
+            onChange={(e) => setToDate(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+            starredOnly
+              ? "border-tertiary/50 bg-tertiary/10 text-tertiary"
+              : "border-outline-variant/40 text-on-surface-variant hover:text-on-surface"
+          }`}
+          onClick={() => setStarredOnly((v) => !v)}
+          aria-pressed={starredOnly}
+          title="Show only recordings starred in the Plaud app"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill={starredOnly ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
+          Starred
+        </button>
+        {(fromDate || toDate) && (
+          <button
+            type="button"
+            className="btn-ghost px-3 py-2 text-sm"
+            onClick={() => {
+              setFromDate("");
+              setToDate("");
+            }}
+          >
+            Clear dates
+          </button>
+        )}
+      </div>
+
+      {/* Bulk-selection action bar */}
+      {selected.size > 0 && (
+        <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex flex-wrap items-center gap-3">
+          <span className="text-sm font-medium text-on-surface">
+            {selected.size} selected
+          </span>
+          <button type="button" className="btn-primary px-3 py-1.5 text-xs" onClick={() => void bulkResync()}>
+            Resync selected
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 text-xs rounded-lg border border-error/30 text-error font-semibold hover:bg-error/10 transition-colors"
+            onClick={() => void bulkTrash()}
+          >
+            Move to Trash
+          </button>
+          <button type="button" className="btn-ghost px-3 py-1.5 text-xs" onClick={() => setSelected(new Set())}>
+            Clear selection
+          </button>
+        </div>
+      )}
+
+      {list.isLoading && (
+        <div className="grid gap-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="bg-surface-container rounded-xl h-[76px] animate-pulse" />
+          ))}
+        </div>
+      )}
       {list.error && (
-        <p className="text-error">Failed to load recordings: {String(list.error)}</p>
+        <div className="card flex flex-col items-center gap-3 p-12 text-center">
+          <p className="text-error font-medium">Couldn't load recordings.</p>
+          <p className="text-sm text-on-surface-variant">
+            {list.error instanceof ApiError ? list.error.message : "Check your connection and try again."}
+          </p>
+          <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={() => void list.refetch()}>
+            Retry
+          </button>
+        </div>
       )}
 
       {list.data && list.data.items.length === 0 && (
@@ -213,18 +382,44 @@ export function Dashboard(): JSX.Element {
               {/* Hover glow */}
               <div className="absolute inset-0 bg-gradient-to-r from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               <div className="relative flex items-center gap-4">
+                {/* Inside a <Link>: preventDefault stops anchor navigation; we toggle manually. */}
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary shrink-0 cursor-pointer"
+                  checked={selected.has(r.id)}
+                  aria-label={`Select ${r.filename}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleSelected(r.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === " " || e.key === "Enter") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleSelected(r.id);
+                    }
+                  }}
+                  readOnly
+                />
                 <RecordingIcon isTrash={r.isTrash} />
                 <div>
-                  <h3 className="text-base font-bold text-on-surface leading-tight group-hover:text-primary transition-colors">
-                    {r.filename}
+                  <h3 className="text-base font-bold text-on-surface leading-tight group-hover:text-primary transition-colors flex items-center gap-1.5">
+                    {r.isStarred && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="text-tertiary shrink-0" aria-label="Starred in Plaud" role="img"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
+                    )}
+                    {r.displayName ?? r.filename}
                   </h3>
                   <div className="mt-1 flex items-center gap-3 font-label text-[11px] tracking-wider text-on-surface-variant uppercase">
-                    <span>{formatDate(r.startTime)}</span>
+                    <span>{formatDateShort(r.startTime)}</span>
                     <span className="w-1 h-1 rounded-full bg-outline-variant" />
-                    <span>{formatDuration(r.durationMs)}</span>
+                    <span>{formatDurationClock(r.durationMs)}</span>
                     <span className="w-1 h-1 rounded-full bg-outline-variant" />
-                    <span>{(r.filesizeBytes / 1024 / 1024).toFixed(1)} MB</span>
+                    <span>{formatBytes(r.filesizeBytes)}</span>
                   </div>
+                  {resyncErrors[r.id] && (
+                    <p className="mt-1 text-xs text-error">Resync failed: {resyncErrors[r.id]}</p>
+                  )}
                 </div>
               </div>
               <div className="relative flex items-center gap-3">
@@ -233,6 +428,7 @@ export function Dashboard(): JSX.Element {
                   className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-primary text-on-primary hover:bg-primary/90 transition-all active:scale-95 shadow-sm"
                   onClick={(e) => void resyncRecording(r.id, e)}
                   title="Resync recording"
+                  aria-label="Resync recording"
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={resyncingIds.has(r.id) ? "animate-spin" : ""}>
                     <polyline points="23 4 23 10 17 10" />
@@ -244,6 +440,30 @@ export function Dashboard(): JSX.Element {
               </div>
             </Link>
           ))}
+        </div>
+      )}
+
+      {list.data && list.data.total > PAGE_SIZE && (
+        <div className="mt-6 flex items-center justify-between font-label text-xs text-on-surface-variant">
+          <button
+            type="button"
+            className="btn-ghost px-4 py-2 text-sm disabled:opacity-40 disabled:pointer-events-none"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0}
+          >
+            ← Previous
+          </button>
+          <span>
+            Page {page + 1} of {Math.max(1, Math.ceil(list.data.total / PAGE_SIZE))}
+          </span>
+          <button
+            type="button"
+            className="btn-ghost px-4 py-2 text-sm disabled:opacity-40 disabled:pointer-events-none"
+            onClick={() => setPage((p) => p + 1)}
+            disabled={(page + 1) * PAGE_SIZE >= list.data.total}
+          >
+            Next →
+          </button>
         </div>
       )}
     </div>

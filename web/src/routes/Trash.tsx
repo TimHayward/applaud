@@ -1,51 +1,35 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { RecordingRow } from "@applaud/shared";
 import { api } from "../api.js";
+import { useRecordingActions } from "../hooks/useRecordingActions.js";
+import { formatDateShort } from "../lib/format.js";
 
-function formatDate(ts: number): string {
-  return new Date(ts).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+const PAGE_SIZE = 50;
 
 export function Trash(): JSX.Element {
-  const qc = useQueryClient();
+  const { restore, purgeNow, bulkRestore, bulkPurge } = useRecordingActions();
+  const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const list = useQuery({
-    queryKey: ["recordings-trash"],
-    queryFn: () => api.listTrashRecordings({ limit: 200 }),
+    queryKey: ["recordings-trash", { page }],
+    queryFn: () => api.listTrashRecordings({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
   });
+
+  const toggleSelected = (id: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const blocklist = useQuery({
     queryKey: ["sync-blocklist"],
     queryFn: api.syncBlocklist,
     refetchOnMount: "always",
   });
-
-  const restore = async (id: string): Promise<void> => {
-    await api.restoreRecording(id);
-    await qc.invalidateQueries({ queryKey: ["recordings-trash"] });
-    await qc.invalidateQueries({ queryKey: ["recordings"] });
-  };
-
-  const purgeNow = async (id: string, filename: string): Promise<void> => {
-    const label = filename.length > 120 ? `${filename.slice(0, 117)}…` : filename;
-    if (
-      !confirm(
-        `Permanently delete this recording now?\n\n${label}\n\nLocal files will be removed immediately and the Plaud id will be added to the sync blocklist (same as after the 7-day wait). This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
-    await api.purgeRecordingFromTrash(id);
-    await qc.invalidateQueries({ queryKey: ["recordings-trash"] });
-    await qc.invalidateQueries({ queryKey: ["recordings"] });
-    await qc.invalidateQueries({ queryKey: ["sync-blocklist"] });
-    await qc.invalidateQueries({ queryKey: ["recording", id] });
-  };
 
   return (
     <div>
@@ -81,7 +65,7 @@ export function Trash(): JSX.Element {
             {blocklist.data.items.map((row) => (
               <li key={row.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 px-4 py-3 bg-surface-container-low">
                 <code className="text-xs text-primary break-all">{row.id}</code>
-                <span className="text-xs text-on-surface-variant shrink-0">Blocked {formatDate(row.ignoredAt)}</span>
+                <span className="text-xs text-on-surface-variant shrink-0">Blocked {formatDateShort(row.ignoredAt)}</span>
               </li>
             ))}
           </ul>
@@ -89,6 +73,38 @@ export function Trash(): JSX.Element {
       </section>
 
       <h2 className="text-lg font-bold text-on-surface mb-4">Applaud trash</h2>
+
+      {selected.size > 0 && (
+        <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 flex flex-wrap items-center gap-3">
+          <span className="text-sm font-medium text-on-surface">{selected.size} selected</span>
+          <button
+            type="button"
+            className="btn-primary px-3 py-1.5 text-xs"
+            onClick={() => {
+              void bulkRestore([...selected]).then((ok) => {
+                if (ok) setSelected(new Set());
+              });
+            }}
+          >
+            Restore selected
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 text-xs rounded-lg border border-error/30 text-error font-semibold hover:bg-error/10 transition-colors"
+            onClick={() => {
+              void bulkPurge([...selected]).then((ok) => {
+                if (ok) setSelected(new Set());
+              });
+            }}
+          >
+            Delete permanently
+          </button>
+          <button type="button" className="btn-ghost px-3 py-1.5 text-xs" onClick={() => setSelected(new Set())}>
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {list.isLoading && <p className="text-on-surface-variant">loading…</p>}
       {list.error && <p className="text-error">Failed to load trash.</p>}
 
@@ -103,19 +119,28 @@ export function Trash(): JSX.Element {
               key={r.id}
               className="bg-surface-container rounded-xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
             >
-              <div>
-                <Link to={`/recordings/${r.id}`} className="font-bold text-on-surface hover:text-primary">
-                  {r.filename}
-                </Link>
-                <p className="mt-1 text-xs text-on-surface-variant">
-                  Deleted {r.userDeletedAt ? formatDate(r.userDeletedAt) : "—"}
-                  {r.userPurgeAt ? (
-                    <>
-                      {" "}
-                      · Purges {formatDate(r.userPurgeAt)}
-                    </>
-                  ) : null}
-                </p>
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary shrink-0 cursor-pointer"
+                  checked={selected.has(r.id)}
+                  aria-label={`Select ${r.filename}`}
+                  onChange={() => toggleSelected(r.id)}
+                />
+                <div>
+                  <Link to={`/recordings/${r.id}`} className="font-bold text-on-surface hover:text-primary">
+                    {r.displayName ?? r.filename}
+                  </Link>
+                  <p className="mt-1 text-xs text-on-surface-variant">
+                    Deleted {r.userDeletedAt ? formatDateShort(r.userDeletedAt) : "—"}
+                    {r.userPurgeAt ? (
+                      <>
+                        {" "}
+                        · Purges {formatDateShort(r.userPurgeAt)}
+                      </>
+                    ) : null}
+                  </p>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2 shrink-0">
                 <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={() => void restore(r.id)}>
@@ -135,6 +160,30 @@ export function Trash(): JSX.Element {
             </li>
           ))}
         </ul>
+      )}
+
+      {list.data && list.data.total > PAGE_SIZE && (
+        <div className="mt-6 flex items-center justify-between font-label text-xs text-on-surface-variant">
+          <button
+            type="button"
+            className="btn-ghost px-4 py-2 text-sm disabled:opacity-40 disabled:pointer-events-none"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0}
+          >
+            ← Previous
+          </button>
+          <span>
+            Page {page + 1} of {Math.max(1, Math.ceil(list.data.total / PAGE_SIZE))}
+          </span>
+          <button
+            type="button"
+            className="btn-ghost px-4 py-2 text-sm disabled:opacity-40 disabled:pointer-events-none"
+            onClick={() => setPage((p) => p + 1)}
+            disabled={(page + 1) * PAGE_SIZE >= list.data.total}
+          >
+            Next →
+          </button>
+        </div>
       )}
     </div>
   );

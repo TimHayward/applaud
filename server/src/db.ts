@@ -177,6 +177,25 @@ function migrate(d: Database.Database): void {
   } catch {
     /* exists */
   }
+  // v5: persist Plaud's is_markmemo (starred/favorite) and filetag_id_list
+  // (JSON array of tag ids) so the UI can show favorites and filter by them.
+  try {
+    d.exec("ALTER TABLE recordings ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    /* exists */
+  }
+  try {
+    d.exec("ALTER TABLE recordings ADD COLUMN plaud_tags TEXT");
+  } catch {
+    /* exists */
+  }
+  // v6: local display-name override. NULL means "use Plaud's filename" (the
+  // default). Resyncing a recording clears this — the source is authoritative.
+  try {
+    d.exec("ALTER TABLE recordings ADD COLUMN display_name TEXT");
+  } catch {
+    /* exists */
+  }
 }
 
 function statusOf(row: RecordingDbRow): RecordingStatus {
@@ -212,6 +231,19 @@ interface RecordingDbRow {
   user_purge_at: number | null;
   plaud_is_summary: number;
   trash_asset_probe_at: number | null;
+  is_starred: number;
+  plaud_tags: string | null;
+  display_name: string | null;
+}
+
+function parseTagIds(json: string | null): string[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 export function rowToRecording(row: RecordingDbRow): RecordingRow {
@@ -239,6 +271,9 @@ export function rowToRecording(row: RecordingDbRow): RecordingRow {
     userDeletedAt: row.user_deleted_at ?? null,
     userPurgeAt: row.user_purge_at ?? null,
     plaudIsSummary: (row.plaud_is_summary ?? 0) === 1,
+    isStarred: (row.is_starred ?? 0) === 1,
+    plaudTagIds: parseTagIds(row.plaud_tags),
+    displayName: row.display_name ?? null,
   };
 }
 

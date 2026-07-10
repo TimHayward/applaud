@@ -64,6 +64,17 @@ export interface RecordingRow {
   userPurgeAt: number | null;
   /** Last-seen Plaud `is_summary` from list API (drives summary backfill). */
   plaudIsSummary: boolean;
+  /** Plaud's `is_markmemo` — the star/favorite flag set in the Plaud app. */
+  isStarred: boolean;
+  /** Plaud's `filetag_id_list` — raw tag ids (names require Plaud's tag API, not yet mapped). */
+  plaudTagIds: string[];
+  /**
+   * Local title override, set via the rename endpoint. `null` means "show
+   * Plaud's `filename`" (the default). Cleared automatically on resync —
+   * Plaud's filename is always authoritative once the recording is re-pulled
+   * from source.
+   */
+  displayName: string | null;
 }
 
 export interface RecordingDetail extends RecordingRow {

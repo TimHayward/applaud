@@ -17,12 +17,24 @@
     "test": "pnpm --filter @applaud/shared build && vitest run",
     "test:watch": "vitest",
     "coverage": "pnpm --filter @applaud/shared build && vitest run --coverage",
-    "clean": "pnpm -r clean && rm -rf node_modules"
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "clean": "pnpm -r clean && node -e \"fs.rmSync('node_modules',{recursive:true,force:true})\""
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@vitest/coverage-v8": "^2.1.0",
     "concurrently": "^9.0.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.4",
     "typescript": "^5.6.0",
+    "typescript-eslint": "^8.63.0",
     "vitest": "^2.1.9"
   }
 }

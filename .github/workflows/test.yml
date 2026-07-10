@@ -30,11 +30,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Build shared (server depends on it for both typecheck and tests)
         run: pnpm --filter @applaud/shared build
 
       - name: Typecheck
         run: pnpm -r typecheck
+
+      - name: Build (web bundle + server dist)
+        run: pnpm build
 
       - name: Run tests with coverage
         run: pnpm coverage

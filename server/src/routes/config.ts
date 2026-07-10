@@ -38,6 +38,7 @@ const PatchSchema = z.object({
     })
     .optional(),
   importPlaudDeleted: z.boolean().optional(),
+  lanToken: z.string().optional(),
 });
 
 configRouter.post("/", (req, res) => {
@@ -52,6 +53,9 @@ configRouter.post("/", (req, res) => {
   const mergedSecret = patch.webhook
     ? mergeWebhookSecret(prev.webhook?.secret, patch.webhook.secret)
     : undefined;
+  // Same redact/preserve/clear truth table as the webhook secret applies here.
+  const mergedLanToken =
+    patch.lanToken !== undefined ? mergeWebhookSecret(prev.lanToken ?? undefined, patch.lanToken) : undefined;
   const normalized = {
     ...patch,
     webhook: patch.webhook
@@ -61,12 +65,25 @@ configRouter.post("/", (req, res) => {
           ...(mergedSecret ? { secret: mergedSecret } : {}),
         }
       : patch.webhook,
+    ...(patch.lanToken !== undefined ? { lanToken: mergedLanToken ?? null } : {}),
   };
   const next = updateConfig(normalized);
   if (patch.importPlaudDeleted === true && !prevImportPlaudDeleted) {
     void poller.trigger();
   }
-  res.json({ config: redactConfig(next) });
+  // Poll interval takes effect immediately by rescheduling the running timer.
+  if (
+    patch.pollIntervalMinutes !== undefined &&
+    patch.pollIntervalMinutes !== prev.pollIntervalMinutes
+  ) {
+    poller.restart();
+  }
+  // Bind host/port can't be safely re-bound on a live HTTP server from here —
+  // flag that a restart is needed instead of silently ignoring the change.
+  const restartRequired =
+    patch.bind !== undefined &&
+    (patch.bind.host !== prev.bind.host || patch.bind.port !== prev.bind.port);
+  res.json({ config: redactConfig(next), ...(restartRequired ? { restartRequired: true } : {}) });
 });
 
 const TestWebhookSchema = z.object({ url: z.string().url() });

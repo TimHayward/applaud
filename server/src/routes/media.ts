@@ -19,7 +19,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-function resolveSafe(base: string, rel: string): string | null {
+export function resolveSafe(base: string, rel: string): string | null {
   // Normalize out any traversal attempts before joining.
   const decoded = decodeURIComponent(rel);
   if (decoded.includes("\0")) return null;

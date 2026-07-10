@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api.js";
 
 type DetectState =
@@ -30,6 +30,19 @@ export function AuthStep({
   const [manual, setManual] = useState<ManualState>({ kind: "idle" });
   const [manualText, setManualText] = useState("");
   const [accepted, setAccepted] = useState(false);
+  const watchRef = useRef<{ es: EventSource; tick: ReturnType<typeof setInterval> } | null>(null);
+
+  // Close the watch EventSource/interval if the wizard unmounts mid-watch
+  // (e.g. the user navigates back) instead of leaking them.
+  useEffect(() => {
+    return () => {
+      if (watchRef.current) {
+        clearInterval(watchRef.current.tick);
+        watchRef.current.es.close();
+        watchRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setDetect({ kind: "detecting" });
@@ -66,15 +79,21 @@ export function AuthStep({
       const tick = setInterval(() => {
         setWatch({ kind: "waiting", elapsedSec: Math.floor((Date.now() - start) / 1000) });
       }, 1000);
+      watchRef.current = { es, tick };
+      const stop = (): void => {
+        clearInterval(tick);
+        es.close();
+        watchRef.current = null;
+      };
       es.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data);
-          if (data.type === "found") { clearInterval(tick); es.close(); setAccepted(true); onNext(); }
-          else if (data.type === "timeout") { clearInterval(tick); es.close(); setWatch({ kind: "error", message: "timed out waiting for login (5 min)" }); }
-          else if (data.type === "error") { clearInterval(tick); es.close(); setWatch({ kind: "error", message: data.message }); }
+          if (data.type === "found") { stop(); setAccepted(true); onNext(); }
+          else if (data.type === "timeout") { stop(); setWatch({ kind: "error", message: "timed out waiting for login (5 min)" }); }
+          else if (data.type === "error") { stop(); setWatch({ kind: "error", message: data.message }); }
         } catch { /* ignore */ }
       };
-      es.onerror = () => { clearInterval(tick); es.close(); setWatch({ kind: "error", message: "connection lost" }); };
+      es.onerror = () => { stop(); setWatch({ kind: "error", message: "connection lost" }); };
     } catch (err) {
       setWatch({ kind: "error", message: err instanceof Error ? err.message : String(err) });
     }

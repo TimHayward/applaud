@@ -121,16 +121,26 @@ describe("fireRaw retry loop", () => {
     expect(headers["x-applaud-signature"]).toMatch(/^sha256=[0-9a-f]{64}$/);
   });
 
-  it("omits the signature header entirely when no secret is provided", async () => {
+  it("includes an X-Applaud-Timestamp header alongside the signature (replay protection)", async () => {
+    mock.enqueue({ status: 200 });
+    const before = Math.floor(Date.now() / 1000);
+    await fireRaw("https://hook.example/x", samplePayload, "rec-1", "audio_ready", "shh");
+    const headers = (mock.calls[0]!.init?.headers ?? {}) as Record<string, string>;
+    expect(headers["x-applaud-timestamp"]).toMatch(/^\d+$/);
+    expect(Number(headers["x-applaud-timestamp"])).toBeGreaterThanOrEqual(before);
+  });
+
+  it("omits the signature and timestamp headers entirely when no secret is provided", async () => {
     mock.enqueue({ status: 200 });
     await fireRaw("https://hook.example/x", samplePayload, "rec-1", "audio_ready");
     const headers = (mock.calls[0]!.init?.headers ?? {}) as Record<string, string>;
     expect(headers).not.toHaveProperty("x-applaud-signature");
+    expect(headers).not.toHaveProperty("x-applaud-timestamp");
     // Confirms the absence is by-omission, not empty-string.
     expect(headers["x-applaud-event"]).toBe("audio_ready");
   });
 
-  it("re-uses the same signature across retries (no re-sign per attempt)", async () => {
+  it("re-uses the same signature and timestamp across retries (no re-sign per attempt)", async () => {
     mock.enqueue({ status: 502 });
     mock.enqueue({ status: 502 });
     mock.enqueue({ status: 200 });
@@ -140,6 +150,10 @@ describe("fireRaw retry loop", () => {
     const sigs = mock.calls.map(
       (c) => (c.init!.headers as Record<string, string>)["x-applaud-signature"],
     );
+    const timestamps = mock.calls.map(
+      (c) => (c.init!.headers as Record<string, string>)["x-applaud-timestamp"],
+    );
     expect(new Set(sigs).size).toBe(1);
+    expect(new Set(timestamps).size).toBe(1);
   });
 });

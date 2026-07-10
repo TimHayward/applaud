@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo } from "react";
+import { useRef, useEffect, useCallback, useMemo, useState, useId } from "react";
 
 interface WaveformProps {
   recordingId: string;
@@ -81,9 +81,15 @@ function generateWavePath(
 const SVG_WIDTH = 1000;
 const SVG_HEIGHT = 120;
 
+/**
+ * Decorative seeded waveform acting as a seek slider: click, drag, hover
+ * preview, and keyboard (arrow keys ±5%, Home/End) via role="slider".
+ */
 export function Waveform({ recordingId, progress, onSeek }: WaveformProps): JSX.Element {
   const gradRef = useRef<SVGLinearGradientElement>(null);
   const containerRef = useRef<SVGSVGElement>(null);
+  const draggingRef = useRef(false);
+  const [hoverFrac, setHoverFrac] = useState<number | null>(null);
 
   const path = useMemo(
     () => generateWavePath(SVG_WIDTH, SVG_HEIGHT, recordingId),
@@ -111,27 +117,78 @@ export function Waveform({ recordingId, progress, onSeek }: WaveformProps): JSX.
     stops[6]?.setAttribute("offset", "100%");
   }, [progress]);
 
-  const handleClick = useCallback(
-    (e: React.MouseEvent<SVGSVGElement>) => {
-      const svg = containerRef.current;
-      if (!svg) return;
-      const rect = svg.getBoundingClientRect();
-      const fraction = (e.clientX - rect.left) / rect.width;
-      onSeek(Math.max(0, Math.min(1, fraction)));
+  const fractionFromEvent = useCallback((clientX: number): number => {
+    const svg = containerRef.current;
+    if (!svg) return 0;
+    const rect = svg.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  }, []);
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      draggingRef.current = true;
+      containerRef.current?.setPointerCapture(e.pointerId);
+      onSeek(fractionFromEvent(e.clientX));
     },
-    [onSeek],
+    [onSeek, fractionFromEvent],
   );
 
-  // Gradient ID unique per instance
-  const gradId = `wf-grad-${recordingId.slice(0, 8)}`;
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      const frac = fractionFromEvent(e.clientX);
+      setHoverFrac(frac);
+      if (draggingRef.current) onSeek(frac);
+    },
+    [onSeek, fractionFromEvent],
+  );
+
+  const handlePointerUp = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
+    draggingRef.current = false;
+    containerRef.current?.releasePointerCapture(e.pointerId);
+  }, []);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<SVGSVGElement>) => {
+      const clamped = Math.max(0, Math.min(1, progress));
+      if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+        e.preventDefault();
+        onSeek(Math.max(0, clamped - 0.05));
+      } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+        e.preventDefault();
+        onSeek(Math.min(1, clamped + 0.05));
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        onSeek(0);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        onSeek(1);
+      }
+    },
+    [onSeek, progress],
+  );
+
+  // useId keeps gradient defs unique even with multiple waveforms mounted.
+  const gradId = `wf-grad-${useId().replace(/:/g, "")}`;
+  const playheadX = Math.max(0, Math.min(1, progress)) * SVG_WIDTH;
 
   return (
     <svg
       ref={containerRef}
       viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
       preserveAspectRatio="none"
-      className="w-full h-28 rounded-lg bg-surface-container-highest/30 cursor-pointer"
-      onClick={handleClick}
+      className="w-full h-28 rounded-lg bg-surface-container-highest/30 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 touch-none"
+      role="slider"
+      aria-label="Seek position"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(Math.max(0, Math.min(1, progress)) * 100)}
+      aria-valuetext={`${Math.round(Math.max(0, Math.min(1, progress)) * 100)}% played`}
+      tabIndex={0}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={() => setHoverFrac(null)}
+      onKeyDown={handleKeyDown}
     >
       <defs>
         <linearGradient
@@ -150,6 +207,32 @@ export function Waveform({ recordingId, progress, onSeek }: WaveformProps): JSX.
         </linearGradient>
       </defs>
       <path d={path} fill={`url(#${gradId})`} />
+      {/* Playhead */}
+      <line
+        x1={playheadX}
+        x2={playheadX}
+        y1={4}
+        y2={SVG_HEIGHT - 4}
+        stroke="rgb(var(--color-primary))"
+        strokeWidth={2}
+        vectorEffect="non-scaling-stroke"
+        pointerEvents="none"
+      />
+      {/* Hover scrub preview */}
+      {hoverFrac !== null && (
+        <line
+          x1={hoverFrac * SVG_WIDTH}
+          x2={hoverFrac * SVG_WIDTH}
+          y1={4}
+          y2={SVG_HEIGHT - 4}
+          stroke="rgb(var(--color-on-surface-variant))"
+          strokeWidth={1}
+          strokeDasharray="4 3"
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+          opacity={0.6}
+        />
+      )}
     </svg>
   );
 }

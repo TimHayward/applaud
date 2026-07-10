@@ -26,17 +26,3 @@ export async function listRecordings(
   });
   return plaudJson<PlaudListResponse>(`/file/simple/web?${q.toString()}`);
 }
-
-export async function listAll(pageSize = 50): Promise<PlaudListResponse["data_file_list"]> {
-  const out: PlaudListResponse["data_file_list"] = [];
-  let skip = 0;
-  // Hard cap to avoid infinite loops if the API misbehaves.
-  for (let i = 0; i < 200; i++) {
-    const page = await listRecordings({ skip, limit: pageSize });
-    if (!page.data_file_list || page.data_file_list.length === 0) break;
-    out.push(...page.data_file_list);
-    if (page.data_file_list.length < pageSize) break;
-    skip += pageSize;
-  }
-  return out;
-}

@@ -34,12 +34,23 @@ COPY --from=build /app/server/package.json server/
 COPY --from=build /app/server/node_modules/ server/node_modules/
 COPY --from=build /app/web/dist/ web/dist/
 
+# node:20-slim ships a non-root `node` user (uid 1000) — run as that instead
+# of root. Volume mount points must be owned by it before Docker seeds a
+# fresh named volume from this layer.
+RUN mkdir -p /data/config /data/recordings \
+  && chown -R node:node /app /data/config /data/recordings
+
+USER node
+
 VOLUME ["/data/config", "/data/recordings"]
 
 ENV APPLAUD_CONFIG_DIR=/data/config
 ENV NODE_ENV=production
 
 EXPOSE 44471
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://127.0.0.1:44471/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 ENTRYPOINT ["tini", "--"]
 CMD ["node", "server/dist/index.js"]

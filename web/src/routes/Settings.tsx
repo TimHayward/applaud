@@ -1,27 +1,23 @@
 import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api.js";
-
-function formatRelative(ts: number | null): string {
-  if (!ts) return "never";
-  const diff = Date.now() - ts;
-  if (diff < 10_000) return "just now";
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  return `${Math.floor(diff / 3_600_000)}h ago`;
-}
-
-function daysUntil(epochSec: number): number {
-  return Math.max(0, Math.ceil((epochSec * 1000 - Date.now()) / (1000 * 60 * 60 * 24)));
-}
+import { api, setLanToken as persistLanToken } from "../api.js";
+import { useToast } from "../components/Toast.js";
+import { useConfirm } from "../components/ConfirmDialog.js";
+import { ResultCard } from "../components/ResultCard.js";
+import { WebhookDeliveries } from "../components/WebhookDeliveries.js";
+import { formatRelative, daysUntil } from "../lib/format.js";
 
 export function Settings(): JSX.Element {
   const qc = useQueryClient();
+  const toast = useToast();
+  const confirm = useConfirm();
   const cfg = useQuery({ queryKey: ["config"], queryFn: api.config });
+  // No refetchInterval here: the always-mounted SyncStatusBadge polls this
+  // same query key (10s + SSE invalidation), so Settings just observes the
+  // shared cache instead of adding a second, faster poll loop.
   const syncStatus = useQuery({
     queryKey: ["sync-status"],
     queryFn: api.syncStatus,
-    refetchInterval: 5000,
   });
 
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -31,6 +27,10 @@ export function Settings(): JSX.Element {
   const [showSecret, setShowSecret] = useState(false);
   const [pollMinutes, setPollMinutes] = useState(10);
   const [importPlaudDeleted, setImportPlaudDeleted] = useState(false);
+  const [lanTokenInput, setLanTokenInput] = useState("");
+  const [lanTokenExists, setLanTokenExists] = useState(false);
+  const [lanTokenTouched, setLanTokenTouched] = useState(false);
+  const [showLanToken, setShowLanToken] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<null | { ok: boolean; message: string }>(null);
@@ -47,6 +47,10 @@ export function Settings(): JSX.Element {
     setShowSecret(false);
     setPollMinutes(c.pollIntervalMinutes);
     setImportPlaudDeleted(c.importPlaudDeleted ?? false);
+    setLanTokenExists(Boolean(c.lanToken));
+    setLanTokenInput("");
+    setLanTokenTouched(false);
+    setShowLanToken(false);
     setDirty(false);
   }, [cfg.data]);
 
@@ -70,11 +74,20 @@ export function Settings(): JSX.Element {
         webhook,
         pollIntervalMinutes: pollMinutes,
         importPlaudDeleted,
+        ...(lanTokenTouched ? { lanToken: lanTokenInput } : {}),
       });
+      if (lanTokenTouched) {
+        // Keep this browser working immediately — once set, the server
+        // requires the token on every request, including the next reload.
+        persistLanToken(lanTokenInput.length > 0 ? lanTokenInput : null);
+      }
       await qc.invalidateQueries({ queryKey: ["config"] });
       await qc.invalidateQueries({ queryKey: ["recordings"] });
       await qc.invalidateQueries({ queryKey: ["sync-status"] });
       setDirty(false);
+      toast.success("Settings saved.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -94,6 +107,23 @@ export function Settings(): JSX.Element {
     setWebhookSecret("");
     setSecretExists(false);
     setSecretTouched(true);
+    setDirty(true);
+  };
+
+  const generateLanToken = (): void => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    setLanTokenInput(hex);
+    setShowLanToken(true);
+    setLanTokenTouched(true);
+    setDirty(true);
+  };
+
+  const clearLanToken = (): void => {
+    setLanTokenInput("");
+    setLanTokenExists(false);
+    setLanTokenTouched(true);
     setDirty(true);
   };
 
@@ -131,8 +161,8 @@ export function Settings(): JSX.Element {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <div className={`w-2.5 h-2.5 rounded-full ${isHealthy ? "bg-secondary shadow-[0_0_8px_rgba(157,223,46,0.4)]" : "bg-error shadow-[0_0_8px_rgba(255,180,171,0.4)]"}`} />
-              <span className="font-label text-xs font-bold tracking-widest uppercase text-secondary">
+              <div className={`w-2.5 h-2.5 rounded-full ${isHealthy ? "bg-secondary shadow-[0_0_8px_rgb(var(--color-secondary)/0.4)]" : "bg-error shadow-[0_0_8px_rgb(var(--color-error)/0.4)]"}`} />
+              <span className={`font-label text-xs font-bold tracking-widest uppercase ${isHealthy ? "text-secondary" : "text-error"}`}>
                 {isHealthy ? "All systems operational" : s?.authRequired ? "Auth required" : "Error detected"}
               </span>
             </div>
@@ -177,27 +207,26 @@ export function Settings(): JSX.Element {
           className="px-4 py-2 rounded-lg border border-error/30 text-error text-sm font-semibold hover:bg-error/10 transition-colors"
           disabled={clearIgnoreBusy}
           onClick={() => {
-            if (
-              !confirm(
-                "Clear the purged-recording blocklist? Previously purged Plaud ids may be downloaded again on the next sync.",
-              )
-            ) {
-              return;
-            }
-            setClearIgnoreBusy(true);
-            setClearIgnoreMsg(null);
-            void api
-              .clearSyncIgnore()
-              .then((r) => {
-                setClearIgnoreMsg({ ok: true, text: `Cleared ${r.cleared} blocked id(s).` });
-                void qc.invalidateQueries({ queryKey: ["sync-blocklist"] });
-              })
-              .catch((err) => {
-                setClearIgnoreMsg({ ok: false, text: err instanceof Error ? err.message : String(err) });
-              })
-              .finally(() => {
-                setClearIgnoreBusy(false);
+            void (async () => {
+              const ok = await confirm({
+                title: "Clear the purged-recording blocklist?",
+                message: "Previously purged Plaud ids may be downloaded again on the next sync.",
+                confirmLabel: "Clear blocklist",
+                destructive: true,
               });
+              if (!ok) return;
+              setClearIgnoreBusy(true);
+              setClearIgnoreMsg(null);
+              try {
+                const r = await api.clearSyncIgnore();
+                setClearIgnoreMsg({ ok: true, text: `Cleared ${r.cleared} blocked id(s).` });
+                await qc.invalidateQueries({ queryKey: ["sync-blocklist"] });
+              } catch (err) {
+                setClearIgnoreMsg({ ok: false, text: err instanceof Error ? err.message : String(err) });
+              } finally {
+                setClearIgnoreBusy(false);
+              }
+            })();
           }}
         >
           {clearIgnoreBusy ? "Clearing…" : "Clear purged recording blocklist"}
@@ -241,6 +270,77 @@ export function Settings(): JSX.Element {
               </svg>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* LAN access token */}
+      <section className="card p-8 space-y-6">
+        <div className="flex items-center gap-3">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <h2 className="text-xl font-bold text-on-surface">LAN Access</h2>
+        </div>
+        <p className="text-sm text-on-surface-variant max-w-prose">
+          By default Applaud only listens on this machine. If you access it from other devices on your network (or run it
+          in Docker, which listens on all interfaces), set a token here to require it on every request. Leave blank to
+          keep the current setup unauthenticated.
+        </p>
+        <div className="space-y-2">
+          <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">
+            Access token (optional)
+          </label>
+          <div className="flex gap-3">
+            <input
+              className="input py-3 border-transparent font-mono"
+              type={showLanToken ? "text" : "password"}
+              placeholder={lanTokenExists ? "Leave empty to keep current token" : "Paste a token or click Generate"}
+              value={lanTokenInput}
+              onChange={(e) => {
+                setLanTokenInput(e.target.value);
+                setLanTokenTouched(true);
+                setDirty(true);
+              }}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="px-4 py-3 rounded-lg border border-outline-variant/30 text-on-surface text-sm font-semibold hover:bg-surface-container-highest transition-colors"
+              onClick={() => setShowLanToken((v) => !v)}
+              disabled={!lanTokenInput}
+            >
+              {showLanToken ? "Hide" : "Show"}
+            </button>
+            <button
+              type="button"
+              className="px-4 py-3 rounded-lg border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/10 transition-colors"
+              onClick={generateLanToken}
+            >
+              Generate
+            </button>
+            {lanTokenExists && lanTokenInput.length === 0 && (
+              <button
+                type="button"
+                className="px-4 py-3 rounded-lg border border-error/30 text-error text-sm font-semibold hover:bg-error/10 transition-colors"
+                onClick={clearLanToken}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {lanTokenTouched && lanTokenInput.length > 0 && (
+            <p className="text-xs font-semibold text-tertiary bg-tertiary/10 border border-tertiary/30 rounded-lg px-3 py-2">
+              Click <strong>Save Settings</strong> to apply. Then share{" "}
+              <span className="font-mono break-all">{`${window.location.origin}/?token=${lanTokenInput}`}</span> with
+              other devices — opening that link saves the token in their browser automatically.
+            </p>
+          )}
+          {lanTokenTouched && lanTokenInput.length === 0 && (
+            <p className="text-xs font-semibold text-tertiary bg-tertiary/10 border border-tertiary/30 rounded-lg px-3 py-2">
+              Click <strong>Save Settings</strong> to apply — this will remove the access requirement.
+            </p>
+          )}
         </div>
       </section>
 
@@ -332,37 +432,17 @@ export function Settings(): JSX.Element {
             </p>
           </div>
           {testResult && (
-            <div
-              className={`rounded-lg p-4 flex items-center gap-3 ${
-                testResult.ok
-                  ? "bg-secondary/10 border border-secondary/20"
-                  : "bg-error/10 border border-error/20"
-              }`}
-            >
-              {testResult.ok ? (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-secondary flex-shrink-0">
-                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                  <polyline points="22 4 12 14.01 9 11.01" />
-                </svg>
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-error flex-shrink-0">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="15" y1="9" x2="9" y2="15" />
-                  <line x1="9" y1="9" x2="15" y2="15" />
-                </svg>
-              )}
-              <div>
-                <p className={`font-bold text-sm ${testResult.ok ? "text-secondary" : "text-error"}`}>
-                  {testResult.ok ? "Connection Success" : "Connection Failed"}
-                </p>
-                <p className={`text-xs ${testResult.ok ? "text-secondary/70" : "text-error/70"}`}>
-                  {testResult.message}
-                </p>
-              </div>
-            </div>
+            <ResultCard
+              ok={testResult.ok}
+              title={testResult.ok ? "Connection Success" : "Connection Failed"}
+              detail={testResult.message}
+            />
           )}
         </div>
       </section>
+
+      {/* Webhook delivery log */}
+      <WebhookDeliveries />
 
       {/* Poll Interval */}
       <section className="card p-8 space-y-6">

@@ -118,13 +118,14 @@ Each recording gets its own folder under your chosen recordings directory:
 
 ### Verifying the signature
 
-If you set a signing secret on the Settings page, every outgoing webhook (including the test one from the Settings **Test** button) includes an extra header:
+If you set a signing secret on the Settings page, every outgoing webhook (including the test one from the Settings **Test** button) includes two extra headers:
 
 ```
+X-Applaud-Timestamp: <unix seconds>
 X-Applaud-Signature: sha256=<hex>
 ```
 
-where the hex is the HMAC-SHA256 of the exact raw request body, keyed with your secret. The header is absent entirely when no secret is configured, so receivers can distinguish "signing not configured" from "signing failed."
+where the hex is the HMAC-SHA256 of `<timestamp>.<raw request body>`, keyed with your secret — not the body alone. Both headers are absent entirely when no secret is configured, so receivers can distinguish "signing not configured" from "signing failed." Including the timestamp in the signed message lets receivers reject old, replayed requests instead of just checking the hash.
 
 **Node.js example** (Express):
 
@@ -133,11 +134,17 @@ import crypto from "node:crypto";
 import express from "express";
 
 const SECRET = process.env.APPLAUD_WEBHOOK_SECRET;
+const MAX_CLOCK_SKEW_SEC = 5 * 60;
 const app = express();
 
 app.post("/ingest", express.raw({ type: "application/json" }), (req, res) => {
   const header = req.get("x-applaud-signature") ?? "";
-  const expected = "sha256=" + crypto.createHmac("sha256", SECRET).update(req.body).digest("hex");
+  const timestamp = req.get("x-applaud-timestamp") ?? "";
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > MAX_CLOCK_SKEW_SEC) {
+    return res.status(401).send("stale timestamp");
+  }
+  const signedMessage = `${timestamp}.${req.body.toString("utf8")}`;
+  const expected = "sha256=" + crypto.createHmac("sha256", SECRET).update(signedMessage).digest("hex");
   const a = Buffer.from(header);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
@@ -152,16 +159,21 @@ app.post("/ingest", express.raw({ type: "application/json" }), (req, res) => {
 **Python example** (Flask):
 
 ```python
-import hmac, hashlib, os
+import hmac, hashlib, os, time
 from flask import Flask, request, abort
 
 SECRET = os.environ["APPLAUD_WEBHOOK_SECRET"].encode()
+MAX_CLOCK_SKEW_SEC = 5 * 60
 app = Flask(__name__)
 
 @app.post("/ingest")
 def ingest():
     header = request.headers.get("X-Applaud-Signature", "")
-    expected = "sha256=" + hmac.new(SECRET, request.get_data(), hashlib.sha256).hexdigest()
+    timestamp = request.headers.get("X-Applaud-Timestamp", "0")
+    if abs(time.time() - int(timestamp)) > MAX_CLOCK_SKEW_SEC:
+        abort(401)
+    signed_message = timestamp.encode() + b"." + request.get_data()
+    expected = "sha256=" + hmac.new(SECRET, signed_message, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(header, expected):
         abort(401)
     payload = request.get_json(force=True)
@@ -222,6 +234,23 @@ Settings live in `~/.config/applaud/settings.json` (or `~/Library/Application Su
 
 The bearer token is stored as plaintext in `settings.json` (with `chmod 600`). The file lives in a user-only directory, and the token's scope is equivalent to "read this user's own Plaud data." OS keychain integration is a future enhancement.
 
+### Advanced tuning (environment variables)
+
+These are optional and only matter for unusual setups (very large libraries, flaky networks, stricter retention). Defaults match what Applaud has always shipped with.
+
+| Variable | Default | What it controls |
+| --- | --- | --- |
+| `APPLAUD_PLAUD_MAX_ATTEMPTS` | `3` | Retries for a single Plaud API call |
+| `APPLAUD_PLAUD_USER_AGENT` | a desktop Chrome UA | Spoofed User-Agent sent to Plaud (bypasses Cloudflare's bot check) |
+| `APPLAUD_POLLER_PAGE_SIZE` | `50` | Page size when walking your Plaud recording list |
+| `APPLAUD_POLLER_MAX_PAGES` | `200` | Hard cap on pages walked per poll (safety limit) |
+| `APPLAUD_WEBHOOK_BACKOFF_MS` | `5000,30000,120000` | Comma-separated retry backoff schedule for webhook delivery |
+| `APPLAUD_TRASH_RETENTION_DAYS` | `7` | Days a soft-deleted recording stays in Trash before local files are purged |
+| `APPLAUD_TRASH_PROBE_INTERVAL_HOURS` | `6` | How often Plaud-trashed recordings are re-checked for a transcript/summary |
+| `APPLAUD_TRASH_PROBE_SCHEDULED_LIMIT` | `25` | Max Plaud-trash rows probed per scheduled poll |
+| `APPLAUD_TRASH_PROBE_MANUAL_LIMIT` | `100` | Max Plaud-trash rows probed on a manual Sync Now |
+| `APPLAUD_RECORDINGS_MAX_LIMIT` | `500` | Hard cap on `limit` for any recordings list/search query |
+
 ## Development
 
 ```bash
@@ -229,6 +258,10 @@ pnpm dev
 ```
 
 Runs the Vite dev server on port 44470 with a proxy for `/api` and `/media` to the Express server on port 44471. The server runs in `tsx watch` mode. Hot reload works on both sides.
+
+- HTTP API reference: [`docs/api.md`](docs/api.md)
+- Contributing guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## License
  MIT see [`LICENSE`](LICENSE)

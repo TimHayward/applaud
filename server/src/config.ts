@@ -42,7 +42,3 @@ export function updateConfig(patch: Partial<AppConfig>): AppConfig {
   saveConfig(next);
   return next;
 }
-
-export function resetConfigCache(): void {
-  cached = null;
-}

@@ -11,6 +11,7 @@ export function redactConfig(cfg: AppConfig): AppConfig {
   return {
     ...cfg,
     token: cfg.token ? SECRET_REDACTED : null,
+    lanToken: cfg.lanToken ? SECRET_REDACTED : null,
     webhook: cfg.webhook
       ? { ...cfg.webhook, ...(cfg.webhook.secret ? { secret: SECRET_REDACTED } : {}) }
       : cfg.webhook,

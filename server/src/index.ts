@@ -10,8 +10,10 @@ import { authRouter } from "./routes/auth.js";
 import { configRouter } from "./routes/config.js";
 import { recordingsRouter } from "./routes/recordings.js";
 import { syncRouter } from "./routes/sync.js";
+import { webhooksRouter } from "./routes/webhooks.js";
 import { mediaRouter } from "./routes/media.js";
 import { poller } from "./sync/poller.js";
+import { requireLanToken } from "./auth/lan-token.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,11 +90,23 @@ async function main(): Promise<void> {
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
 
+  // Unauthenticated liveness probe (e.g. the Docker HEALTHCHECK) — must stay
+  // reachable even when a lanToken is configured, and discloses nothing.
+  app.get("/api/health", (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  // Gate /api and /media behind cfg.lanToken when one is configured (no-op
+  // by default). Protects LAN-exposed instances, e.g. Docker's 0.0.0.0 bind.
+  app.use("/api", requireLanToken);
+  app.use("/media", requireLanToken);
+
   // API routes
   app.use("/api/auth", authRouter);
   app.use("/api/config", configRouter);
   app.use("/api/recordings", recordingsRouter);
   app.use("/api/sync", syncRouter);
+  app.use("/api/webhooks", webhooksRouter);
   app.use("/media", mediaRouter);
 
   app.get("/api/setup/status", (_req, res) => {

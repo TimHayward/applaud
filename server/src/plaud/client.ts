@@ -1,5 +1,6 @@
 import { logger } from "../logger.js";
-import { loadConfig, updateConfig } from "../config.js";
+import { loadConfig } from "../config.js";
+import { PLAUD_USER_AGENT, PLAUD_FETCH_MAX_ATTEMPTS } from "../constants.js";
 
 const REGION_API_BASES: Record<string, string> = {
   "aws:us-west-2": "https://api.plaud.ai",
@@ -60,19 +61,13 @@ function getToken(): string {
   return cfg.token;
 }
 
-// Cloudflare's bot protection on api.plaud.ai 403s the "applaud/x.y.z" UA
-// (see https://github.com/rsteckler/applaud/issues/26). Present as a normal
-// desktop browser so the poller passes the WAF check.
-const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
-
 export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promise<Response> {
   const base = init.apiBase ?? getPlaudApiBase();
   const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${base}${pathOrUrl}`;
   const token = init.authOverride ?? getToken();
   const headers: Record<string, string> = {
     accept: "application/json",
-    "user-agent": USER_AGENT,
+    "user-agent": PLAUD_USER_AGENT,
     authorization: `Bearer ${token}`,
     ...init.headers,
   };
@@ -81,13 +76,12 @@ export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promi
     headers["content-type"] = "application/json";
   }
 
-  const maxAttempts = 3;
+  const maxAttempts = PLAUD_FETCH_MAX_ATTEMPTS;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await fetch(url, { ...init, headers });
       if (res.status === 401) {
-        updateConfig({ setupComplete: true });
         throw new PlaudAuthError("Plaud returned 401 — token expired or revoked");
       }
       if (

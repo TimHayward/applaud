@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { repairSummaryMarkdownFile } from "../plaud/transcript.js";
@@ -11,10 +12,12 @@ import {
   restoreRecording,
   purgeSoftDeletedRecordingNow,
   markWebhookFired,
+  setRecordingDisplayName,
 } from "../sync/state.js";
 import { loadConfig } from "../config.js";
 import { fireWebhookForRecording } from "../webhook/post.js";
 import { poller } from "../sync/poller.js";
+import { RECORDINGS_LIST_MAX_LIMIT } from "../constants.js";
 import type { RecordingDetail } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 
@@ -22,8 +25,9 @@ export const recordingsRouter = Router();
 
 const CORE_FILENAMES = new Set(["audio.ogg", "transcript.json", "transcript.txt", "summary.md", "metadata.json"]);
 
-function listAttachments(folderAbs: string): { filename: string; url: string }[] {
-  const attachments: { filename: string; url: string }[] = [];
+/** Non-core files under the recording folder, as folder-relative POSIX paths. */
+function listAttachmentFilenames(folderAbs: string): string[] {
+  const filenames: string[] = [];
   const walk = (dirAbs: string, relDir = ""): void => {
     for (const item of readdirSync(dirAbs)) {
       const abs = path.join(dirAbs, item);
@@ -35,20 +39,39 @@ function listAttachments(folderAbs: string): { filename: string; url: string }[]
       }
       if (!stat.isFile()) continue;
       if (CORE_FILENAMES.has(relPath)) continue;
-      attachments.push({
-        filename: relPath,
-        url: `/media/${encodeURI(relPath)}`,
-      });
+      filenames.push(relPath);
     }
   };
   if (existsSync(folderAbs)) walk(folderAbs);
-  attachments.sort((a, b) => a.filename.localeCompare(b.filename));
-  return attachments;
+  filenames.sort((a, b) => a.localeCompare(b));
+  return filenames;
 }
 
+const ListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(RECORDINGS_LIST_MAX_LIMIT).optional().default(100),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+  search: z.string().optional(),
+});
+
+const RecordingsListQuerySchema = ListQuerySchema.extend({
+  from: z.coerce.number().int().min(0).optional(),
+  to: z.coerce.number().int().min(0).optional(),
+  sort: z
+    .enum(["date_desc", "date_asc", "duration_desc", "duration_asc", "size_desc", "size_asc"])
+    .optional(),
+  starred: z
+    .enum(["1", "true", "0", "false"])
+    .transform((v) => v === "1" || v === "true")
+    .optional(),
+});
+
 recordingsRouter.get("/trash", (req, res) => {
-  const limit = Number(req.query.limit ?? 100);
-  const offset = Number(req.query.offset ?? 0);
+  const parsed = ListQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  const { limit, offset } = parsed.data;
   const result = listSoftDeletedRows({ limit, offset });
   res.json(result);
 });
@@ -58,11 +81,45 @@ recordingsRouter.get("/sync-blocklist", (_req, res) => {
 });
 
 recordingsRouter.get("/", (req, res) => {
-  const limit = Number(req.query.limit ?? 100);
-  const offset = Number(req.query.offset ?? 0);
-  const search = typeof req.query.search === "string" ? req.query.search : undefined;
-  const result = listRecordingRows({ limit, offset, ...(search ? { search } : {}) });
+  const parsed = RecordingsListQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  const { limit, offset, search, from, to, sort, starred } = parsed.data;
+  const result = listRecordingRows({
+    limit,
+    offset,
+    ...(search ? { search } : {}),
+    ...(from != null ? { from } : {}),
+    ...(to != null ? { to } : {}),
+    ...(sort ? { sort } : {}),
+    ...(starred ? { starred } : {}),
+  });
   res.json(result);
+});
+
+const RenameSchema = z.object({ displayName: z.string().max(300).nullable() });
+
+/** Set (or clear) a local title override. Cleared automatically on the recording's next resync. */
+recordingsRouter.post("/:id/rename", (req, res) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({ error: "missing id" });
+    return;
+  }
+  const parsed = RenameSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  const row = getRecordingById(id);
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const updated = setRecordingDisplayName(id, parsed.data.displayName);
+  res.json({ recording: updated });
 });
 
 recordingsRouter.post("/:id/restore", (req, res) => {
@@ -155,10 +212,12 @@ recordingsRouter.get("/:id", (req, res) => {
   const attachments: { filename: string; url: string }[] = [];
   if (row.folder && base) {
     const folderAbs = path.join(base, row.folder);
-    attachments.push(...listAttachments(folderAbs).map((asset) => ({
-      filename: asset.filename,
-      url: `/media/${encodeURI(`${row.folder}/${asset.filename}`)}`,
-    })));
+    attachments.push(
+      ...listAttachmentFilenames(folderAbs).map((filename) => ({
+        filename,
+        url: `/media/${encodeURI(`${row.folder}/${filename}`)}`,
+      })),
+    );
   }
 
   const detail: RecordingDetail = {
@@ -168,7 +227,7 @@ recordingsRouter.get("/:id", (req, res) => {
     metadata,
     attachments,
   };
-  res.json({ recording: detail, mediaBase: `/media/${encodeURI(row.folder)}`, recordingsDir: base });
+  res.json({ recording: detail, mediaBase: `/media/${encodeURI(row.folder)}` });
 });
 
 recordingsRouter.delete("/:id", (req, res) => {

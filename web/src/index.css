@@ -22,6 +22,23 @@
     --color-outline-variant: 200 200 195; /* #c8c8c3 */
     --color-error: 180 40 30;             /* #b4281e */
 
+    /* Transcript speaker accents — deliberately not theme-swapped: these are
+       already saturated enough to read on both light and dark surfaces, and
+       staying fixed keeps a speaker's color stable when toggling themes. */
+    --speaker-color-1: #00c7ae;
+    --speaker-color-2: #a3e635;
+    --speaker-color-3: #ffbe9c;
+    --speaker-color-4: #818cf8;
+    --speaker-color-5: #fb7185;
+    --speaker-color-6: #fbbf24;
+    --speaker-color-7: #38bdf8;
+    --speaker-color-8: #a78bfa;
+    --speaker-color-9: #34d399;
+    --speaker-color-10: #fb923c;
+    --speaker-color-11: #94a3b8;
+    --speaker-color-12: #fda4af;
+    --speaker-color-unknown: #94a3b8;
+
     color-scheme: light;
   }
 
@@ -35,7 +52,6 @@
     --color-surface-dim: 10 10 10;        /* #0a0a0a */
     --color-surface-container: 28 28 26;  /* #1c1c1a */
     --color-surface-container-low: 23 23 21;  /* #171715 */
-    --color-surface-container-high: 36 36 34; /* #242422 */
     --color-surface-container-high: 36 36 34; /* #242422 */
     --color-surface-container-highest: 46 46 43; /* #2e2e2b */
     --color-on-surface: 236 235 233;      /* #ecebe9 */

@@ -11,10 +11,32 @@ import { api } from "../../api.js";
 const STEPS = ["Welcome", "Auth", "Folder", "Webhook", "Review"] as const;
 type Step = (typeof STEPS)[number];
 
+const STEP_STORAGE_KEY = "applaud-setup-step";
+
+function loadPersistedStep(): Step {
+  try {
+    const saved = localStorage.getItem(STEP_STORAGE_KEY);
+    if (saved && (STEPS as readonly string[]).includes(saved)) return saved as Step;
+  } catch {
+    /* storage unavailable */
+  }
+  return "Welcome";
+}
+
 export function SetupWizard(): JSX.Element {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [step, setStep] = useState<Step>("Welcome");
+  // Resume from the last-reached step after a refresh mid-wizard.
+  const [step, setStepState] = useState<Step>(loadPersistedStep);
+
+  const setStep = (s: Step): void => {
+    setStepState(s);
+    try {
+      localStorage.setItem(STEP_STORAGE_KEY, s);
+    } catch {
+      /* storage unavailable */
+    }
+  };
 
   const idx = STEPS.indexOf(step);
   const pct = Math.round(((idx + 1) / STEPS.length) * 100);
@@ -29,6 +51,11 @@ export function SetupWizard(): JSX.Element {
 
   const finish = async (): Promise<void> => {
     await api.completeSetup();
+    try {
+      localStorage.removeItem(STEP_STORAGE_KEY);
+    } catch {
+      /* storage unavailable */
+    }
     await qc.invalidateQueries({ queryKey: ["setup-status"] });
     navigate("/", { replace: true });
   };
@@ -57,22 +84,29 @@ export function SetupWizard(): JSX.Element {
               />
             ))}
           </div>
-          {/* Step labels */}
+          {/* Step labels — earlier (completed) steps are clickable to jump back */}
           <div className="hidden md:grid grid-cols-5 gap-2 text-center">
-            {STEPS.map((label, i) => (
-              <span
-                key={label}
-                className={`font-label text-[10px] ${
-                  i === idx
-                    ? "text-primary font-bold"
-                    : i < idx
-                      ? "text-primary"
-                      : "text-on-surface-variant"
-                }`}
-              >
-                {label}
-              </span>
-            ))}
+            {STEPS.map((label, i) =>
+              i < idx ? (
+                <button
+                  key={label}
+                  type="button"
+                  className="font-label text-[10px] text-primary hover:underline cursor-pointer"
+                  onClick={() => setStep(label)}
+                >
+                  {label}
+                </button>
+              ) : (
+                <span
+                  key={label}
+                  className={`font-label text-[10px] ${
+                    i === idx ? "text-primary font-bold" : "text-on-surface-variant"
+                  }`}
+                >
+                  {label}
+                </span>
+              ),
+            )}
           </div>
         </header>
         <div className="card p-8">

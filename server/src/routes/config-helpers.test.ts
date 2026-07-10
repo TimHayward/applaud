@@ -52,6 +52,16 @@ describe("redactConfig", () => {
     expect(out.webhook).toBeNull();
   });
 
+  it("redacts a non-null lanToken", () => {
+    const out = redactConfig({ ...baseConfig, lanToken: "real-lan-token" });
+    expect(out.lanToken).toBe(SECRET_REDACTED);
+  });
+
+  it("leaves a null lanToken alone", () => {
+    const out = redactConfig({ ...baseConfig, lanToken: null });
+    expect(out.lanToken).toBeNull();
+  });
+
   it("does not mutate the input", () => {
     const cfg: AppConfig = { ...baseConfig, token: "real" };
     const snap = JSON.stringify(cfg);

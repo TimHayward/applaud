@@ -6,8 +6,8 @@ import { loadConfig } from "../config.js";
 import { getDb } from "../db.js";
 import { logger } from "../logger.js";
 import { signPayload } from "./sign.js";
+import { WEBHOOK_RETRY_BACKOFF_MS } from "../constants.js";
 
-const BACKOFF_MS = [5_000, 30_000, 120_000];
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".svg"]);
 
 interface DiscoveredAsset {
@@ -176,8 +176,11 @@ export async function fireRaw(
   secret?: string,
 ): Promise<boolean> {
   const body = JSON.stringify(payload);
-  const signature = secret ? signPayload(secret, body) : null;
-  for (let attempt = 0; attempt < BACKOFF_MS.length; attempt++) {
+  // Same timestamp/signature is reused across retries — they're the same
+  // logical delivery attempt, not a fresh request each time.
+  const timestampSec = Math.floor(Date.now() / 1000);
+  const signature = secret ? signPayload(secret, timestampSec, body) : null;
+  for (let attempt = 0; attempt < WEBHOOK_RETRY_BACKOFF_MS.length; attempt++) {
     const started = Date.now();
     try {
       const res = await fetch(url, {
@@ -186,7 +189,9 @@ export async function fireRaw(
           "content-type": "application/json",
           "user-agent": "applaud/0.1.0",
           "x-applaud-event": event,
-          ...(signature ? { "x-applaud-signature": signature } : {}),
+          ...(signature
+            ? { "x-applaud-signature": signature, "x-applaud-timestamp": String(timestampSec) }
+            : {}),
         },
         body,
       });
@@ -194,8 +199,8 @@ export async function fireRaw(
       const ok = res.status >= 200 && res.status < 300;
       logAttempt(recordingId, event, url, res.status, text, Date.now() - started, ok ? null : `HTTP ${res.status}`);
       if (ok) return true;
-      if (attempt < BACKOFF_MS.length - 1) {
-        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+      if (attempt < WEBHOOK_RETRY_BACKOFF_MS.length - 1) {
+        await new Promise((r) => setTimeout(r, WEBHOOK_RETRY_BACKOFF_MS[attempt]));
         continue;
       }
       return false;
@@ -209,8 +214,8 @@ export async function fireRaw(
         Date.now() - started,
         err instanceof Error ? err.message : String(err),
       );
-      if (attempt < BACKOFF_MS.length - 1) {
-        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+      if (attempt < WEBHOOK_RETRY_BACKOFF_MS.length - 1) {
+        await new Promise((r) => setTimeout(r, WEBHOOK_RETRY_BACKOFF_MS[attempt]));
         continue;
       }
       logger.warn({ err, url }, "webhook fired up all retries");
@@ -305,7 +310,8 @@ export async function testWebhook(
   const body = JSON.stringify(buildTestPayload());
   const cfg = loadConfig();
   const secret = cfg.webhook?.secret;
-  const signature = secret ? signPayload(secret, body) : null;
+  const timestampSec = Math.floor(Date.now() / 1000);
+  const signature = secret ? signPayload(secret, timestampSec, body) : null;
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -314,7 +320,9 @@ export async function testWebhook(
         "user-agent": "applaud/0.1.0",
         "x-applaud-event": "transcript_ready",
         "x-applaud-test": "1",
-        ...(signature ? { "x-applaud-signature": signature } : {}),
+        ...(signature
+          ? { "x-applaud-signature": signature, "x-applaud-timestamp": String(timestampSec) }
+          : {}),
       },
       body,
     });
