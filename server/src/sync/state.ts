@@ -2,7 +2,7 @@ import { renameSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { RecordingRow, PlaudRawRecording, RecordingsSort } from "@applaud/shared";
 import { getDb, rowToRecording, type RecordingDbRow } from "../db.js";
-import { folderName, recordingPaths } from "./layout.js";
+import { folderName, recordingPaths, audioFilenameForFiletype } from "./layout.js";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { emit } from "./events.js";
@@ -101,7 +101,7 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
   const cfg = loadConfig();
   if (!cfg.recordingsDir) throw new Error("recordingsDir not configured");
   const folder = folderName(item.start_time, item.filename, item.id);
-  const paths = recordingPaths(cfg.recordingsDir, folder);
+  const paths = recordingPaths(cfg.recordingsDir, folder, audioFilenameForFiletype(item.filetype));
 
   db.prepare(
     `INSERT INTO recordings (
@@ -157,7 +157,10 @@ function renameRecordingFolder(row: RecordingDbRow, newFilename: string): void {
     logger.info({ id: row.id, oldFolder: row.folder, newFolder }, "renamed recording folder");
   }
 
-  const newPaths = recordingPaths(cfg.recordingsDir, newFolder);
+  // Preserve the recording's actual audio filename (e.g. audio.mp3) across the
+  // folder move — don't recompute it back to the default.
+  const audioFilename = row.audio_path ? path.basename(row.audio_path) : undefined;
+  const newPaths = recordingPaths(cfg.recordingsDir, newFolder, audioFilename);
   getDb()
     .prepare(
       `UPDATE recordings

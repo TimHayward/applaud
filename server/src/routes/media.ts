@@ -7,9 +7,12 @@ export const mediaRouter = Router();
 
 const CONTENT_TYPES: Record<string, string> = {
   ".ogg": "audio/ogg",
+  ".opus": "audio/ogg",
   ".mp3": "audio/mpeg",
   ".m4a": "audio/mp4",
   ".wav": "audio/wav",
+  ".flac": "audio/flac",
+  ".webm": "audio/webm",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".png": "image/png",

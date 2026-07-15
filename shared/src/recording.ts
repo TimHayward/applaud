@@ -46,6 +46,8 @@ export interface RecordingRow {
   filesizeBytes: number;
   serialNumber: string;
   folder: string;
+  /** Basename of the audio file on disk (e.g. `audio.ogg`, `audio.mp3`), derived from Plaud's `filetype`. */
+  audioFilename: string;
   audioPath: string | null;
   transcriptPath: string | null;
   summaryPath: string | null;

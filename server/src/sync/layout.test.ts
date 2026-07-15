@@ -1,5 +1,29 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeFilename, dateStamp, folderName } from "./layout.js";
+import { sanitizeFilename, dateStamp, folderName, audioFilenameForFiletype } from "./layout.js";
+
+describe("audioFilenameForFiletype", () => {
+  it.each([
+    [undefined, "audio.ogg"],
+    [null, "audio.ogg"],
+    ["", "audio.ogg"],
+    ["ogg", "audio.ogg"],
+    ["mp3", "audio.mp3"],
+    ["MP3", "audio.mp3"],
+    [".mp3", "audio.mp3"],
+    ["opus", "audio.opus"],
+    ["m4a", "audio.m4a"],
+    ["aac", "audio.m4a"],
+    ["wav", "audio.wav"],
+    ["flac", "audio.flac"],
+    ["audio/mpeg", "audio.mp3"],
+    ["audio/mp4", "audio.m4a"],
+    ["audio/x-wav", "audio.wav"],
+    ["  Mp3  ", "audio.mp3"],
+    ["totally-unknown", "audio.ogg"],
+  ])("maps %j → %j", (input, expected) => {
+    expect(audioFilenameForFiletype(input as string | null | undefined)).toBe(expected);
+  });
+});
 
 describe("sanitizeFilename", () => {
   it.each([

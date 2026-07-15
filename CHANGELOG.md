@@ -18,6 +18,10 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 - ESLint + Prettier, CI lint/build steps, coverage thresholds; `docs/api.md`, `CONTRIBUTING.md`, this changelog.
 - Editable recording titles (`POST /api/recordings/:id/rename`) — local override shown everywhere in place of Plaud's filename; automatically cleared on the recording's next resync, since Plaud's filename is authoritative once re-pulled from source.
 - Server tuning is now overridable via environment variables (`server/src/constants.ts`, documented in the README): retry counts, page sizes, webhook backoff schedule, trash retention/probe cadence, User-Agent, and the recordings-list limit cap.
+- Real audio waveform: the player now decodes the audio (`AudioContext`) and renders actual amplitude peaks instead of a synthetic seeded shape, cached per recording, with a graceful fallback for very long/undecodable files.
+
+### Changed
+- Audio files are now saved and served under their true extension derived from Plaud's `filetype` (e.g. `audio.mp3`, `audio.opus`) instead of always `audio.ogg`; the download link, media URLs, and webhook payload all reference the real filename. Existing `audio.ogg` recordings are unaffected. Added `.opus`/`.flac`/`.webm` to the media content types.
 
 ### Changed
 - Transcript speaker colors and the sync-status glow now read from CSS custom properties instead of hardcoded hex/rgba — fixes the status dot glow showing the wrong theme's color in light mode.

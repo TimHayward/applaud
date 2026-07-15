@@ -80,12 +80,12 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
     },
     files: {
       folder: row.folder,
-      audio: `${row.folder}/audio.ogg`,
+      audio: `${row.folder}/${row.audioFilename}`,
       transcript: `${row.folder}/transcript.json`,
       summary: `${row.folder}/summary.md`,
     },
     http_urls: {
-      audio: `${base}/audio.ogg`,
+      audio: `${base}/${encodeURIComponent(row.audioFilename)}`,
       transcript: `${base}/transcript.json`,
       summary: `${base}/summary.md`,
     },

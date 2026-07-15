@@ -273,7 +273,9 @@ class Poller {
         try {
           if (!forceDetailRefresh) await this.refreshDetailAndAssets(row.id, paths.folder);
 
-          const bytes = await downloadAudio(row.id, paths.audioPath);
+          // Use the DB's stored audio path (extension derived from Plaud's
+          // filetype at insert) so disk and the served URL always agree.
+          const bytes = await downloadAudio(row.id, row.audioPath ?? paths.audioPath);
           markAudioDownloaded(row.id, bytes || row.filesizeBytes);
           emit("recording_new", { recordingId: row.id });
 

@@ -263,8 +263,9 @@ export function RecordingDetailPage(): JSX.Element {
         <div className="lg:col-span-7 space-y-6">
           {r.audioDownloadedAt && (
             <AudioPlayer
-              src={mediaUrl(`${mediaBase}/audio.ogg`)}
+              src={mediaUrl(`${mediaBase}/${r.audioFilename}`)}
               recordingId={r.id}
+              durationMs={r.durationMs}
               audioRef={audioRef}
               onTimeChange={setCurrentTime}
             />

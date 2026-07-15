@@ -113,6 +113,15 @@ describe("recordingsRouter", () => {
     expect(body).not.toHaveProperty("recordingsDir");
     // Folder/mediaBase is "<date>_<name>__<first-8-of-id>" (see README layout).
     expect(body.mediaBase).toContain(RECORDING_ID.slice(0, 8));
+    // Default audio filename is exposed for the player/download to reference.
+    expect(body.recording.audioFilename).toBe("audio.ogg");
+  });
+
+  it("GET /:id exposes a non-ogg audioFilename derived from filetype", async () => {
+    upsertFromPlaud(makePlaudItem({ filetype: "audio/mpeg" }));
+    const res = await fetch(`${baseUrl}/${RECORDING_ID}`);
+    const body = await res.json();
+    expect(body.recording.audioFilename).toBe("audio.mp3");
   });
 
   it("POST /:id/rename sets a display name override", async () => {

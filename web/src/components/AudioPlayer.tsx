@@ -25,14 +25,18 @@ function isTypingTarget(e: KeyboardEvent): boolean {
 export function AudioPlayer({
   src,
   recordingId,
+  durationMs,
   audioRef,
   onTimeChange,
 }: {
   src: string;
   recordingId: string;
+  durationMs: number;
   audioRef: React.RefObject<HTMLAudioElement>;
   onTimeChange?: (seconds: number) => void;
 }): JSX.Element {
+  // Extension for the download label, derived from the URL (minus any ?token).
+  const downloadExt = (src.split("?")[0] ?? src).match(/\.([a-z0-9]+)$/i)?.[1] ?? "audio";
   const [currentTime, setCurrentTime] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -179,12 +183,14 @@ export function AudioPlayer({
       </div>
       <Waveform
         recordingId={recordingId}
+        audioSrc={src}
+        durationMs={durationMs}
         progress={audioDuration > 0 ? currentTime / audioDuration : 0}
         onSeek={(frac) => { if (audioRef.current && audioDuration > 0) audioRef.current.currentTime = frac * audioDuration; }}
       />
       <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
       <div className="mt-3 flex justify-end">
-        <a href={src} className="btn-ghost text-xs" download>Download .ogg</a>
+        <a href={src} className="btn-ghost text-xs" download>Download .{downloadExt}</a>
       </div>
     </section>
   );

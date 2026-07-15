@@ -256,6 +256,9 @@ export function rowToRecording(row: RecordingDbRow): RecordingRow {
     filesizeBytes: row.filesize_bytes,
     serialNumber: row.serial_number,
     folder: row.folder,
+    // The extension lives in audio_path (set per-recording from Plaud's
+    // filetype at insert), so basename is the single source of truth.
+    audioFilename: row.audio_path ? path.basename(row.audio_path) : "audio.ogg",
     audioPath: row.audio_path,
     transcriptPath: row.transcript_path,
     summaryPath: row.summary_path,

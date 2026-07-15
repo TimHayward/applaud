@@ -23,10 +23,13 @@ import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 
 export const recordingsRouter = Router();
 
-const CORE_FILENAMES = new Set(["audio.ogg", "transcript.json", "transcript.txt", "summary.md", "metadata.json"]);
+const CORE_FILENAMES = new Set(["transcript.json", "transcript.txt", "summary.md", "metadata.json"]);
 
-/** Non-core files under the recording folder, as folder-relative POSIX paths. */
-function listAttachmentFilenames(folderAbs: string): string[] {
+/**
+ * Non-core files under the recording folder, as folder-relative POSIX paths.
+ * `audioFilename` is excluded too (it varies per recording, e.g. audio.mp3).
+ */
+function listAttachmentFilenames(folderAbs: string, audioFilename: string): string[] {
   const filenames: string[] = [];
   const walk = (dirAbs: string, relDir = ""): void => {
     for (const item of readdirSync(dirAbs)) {
@@ -38,7 +41,7 @@ function listAttachmentFilenames(folderAbs: string): string[] {
         continue;
       }
       if (!stat.isFile()) continue;
-      if (CORE_FILENAMES.has(relPath)) continue;
+      if (CORE_FILENAMES.has(relPath) || relPath === audioFilename) continue;
       filenames.push(relPath);
     }
   };
@@ -213,7 +216,7 @@ recordingsRouter.get("/:id", (req, res) => {
   if (row.folder && base) {
     const folderAbs = path.join(base, row.folder);
     attachments.push(
-      ...listAttachmentFilenames(folderAbs).map((filename) => ({
+      ...listAttachmentFilenames(folderAbs, row.audioFilename).map((filename) => ({
         filename,
         url: `/media/${encodeURI(`${row.folder}/${filename}`)}`,
       })),

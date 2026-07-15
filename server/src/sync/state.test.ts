@@ -97,9 +97,28 @@ describe("upsertFromPlaud", () => {
       path.normalize("/test/recordings/2026-04-11_Standup__abcdef01/audio.ogg"),
     );
 
+    // Default (no filetype) keeps the historical audio.ogg name.
+    expect(out.audioFilename).toBe("audio.ogg");
+
     // Row really exists in DB.
     const row = db.prepare("SELECT * FROM recordings WHERE id = ?").get("abcdef0123456789");
     expect(row).toBeDefined();
+  });
+
+  it("derives the audio filename/path from Plaud's filetype", () => {
+    const out = upsertFromPlaud(makePlaudItem({ filetype: "mp3" }));
+    expect(out.audioFilename).toBe("audio.mp3");
+    expect(path.normalize(out.audioPath ?? "")).toBe(
+      path.normalize("/test/recordings/2026-04-11_Standup__abcdef01/audio.mp3"),
+    );
+  });
+
+  it("preserves the derived audio filename across a folder rename", () => {
+    upsertFromPlaud(makePlaudItem({ filetype: "mp3" }));
+    const renamed = upsertFromPlaud(makePlaudItem({ filename: "Standup renamed", filetype: "mp3" }));
+    expect(renamed.audioFilename).toBe("audio.mp3");
+    expect(renamed.audioPath).toContain("audio.mp3");
+    expect(renamed.audioPath).toContain("2026-04-11_Standup_renamed__abcdef01");
   });
 
   it("renames folder on disk + DB when filename changes (different sanitized output)", () => {
