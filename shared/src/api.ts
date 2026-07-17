@@ -3,7 +3,20 @@ import type { RecordingRow, RecordingDetail } from "./recording.js";
 
 export interface AuthDetectResponse {
   found: boolean;
+  /**
+   * False when this OS can't read the browser session off disk. Windows cookies
+   * are DPAPI / App-Bound encrypted, so we skip auto-detection there entirely
+   * and the client goes straight to the manual paste flow. Absent means
+   * supported (legacy clients / Linux / macOS).
+   */
+  autoDetectSupported?: boolean;
+  /** Which credential model was detected: legacy `tokenstr` vs first-party cookies. */
+  authMode?: "legacy" | "first_party";
+  /** Legacy only: the detected bearer JWT. */
   token?: string;
+  /** First-party only: the detected `pld_ut` / `pld_urt` cookie pair. */
+  ut?: string;
+  urt?: string;
   profile?: string;
   browser?: string;
   email?: string;
@@ -16,12 +29,16 @@ export interface AuthWatchStartResponse {
 
 export type AuthWatchEvent =
   | { type: "waiting"; elapsedMs: number }
-  | { type: "found"; token: string; profile: string; browser: string; email?: string }
+  | { type: "found"; authMode: "legacy" | "first_party"; profile: string; browser: string; email?: string }
   | { type: "timeout" }
   | { type: "error"; message: string };
 
 export interface AuthManualRequest {
-  token: string;
+  /** Legacy: a pasted bearer JWT. */
+  token?: string;
+  /** First-party: pasted `pld_ut` / `pld_urt` cookie values. */
+  ut?: string;
+  urt?: string;
 }
 
 export interface AuthValidateResponse {

@@ -4,8 +4,19 @@ import { api } from "../../api.js";
 type DetectState =
   | { kind: "idle" }
   | { kind: "detecting" }
-  | { kind: "found"; email?: string; browser?: string; profile?: string; token: string }
+  | {
+      kind: "found";
+      authMode: "legacy" | "first_party";
+      email?: string;
+      browser?: string;
+      profile?: string;
+      token?: string;
+      ut?: string;
+      urt?: string;
+    }
   | { kind: "notfound" }
+  // Windows: auto-detection isn't supported, so we skip straight to manual paste.
+  | { kind: "unsupported" }
   | { kind: "error"; message: string };
 
 type WatchState =
@@ -29,6 +40,8 @@ export function AuthStep({
   const [watch, setWatch] = useState<WatchState>({ kind: "inactive" });
   const [manual, setManual] = useState<ManualState>({ kind: "idle" });
   const [manualText, setManualText] = useState("");
+  const [manualUt, setManualUt] = useState("");
+  const [manualUrt, setManualUrt] = useState("");
   const [accepted, setAccepted] = useState(false);
   const watchRef = useRef<{ es: EventSource; tick: ReturnType<typeof setInterval> } | null>(null);
 
@@ -49,8 +62,13 @@ export function AuthStep({
     api
       .authDetect()
       .then((r) => {
-        if (r.found && r.token) {
-          setDetect({ kind: "found", email: r.email, browser: r.browser, profile: r.profile, token: r.token });
+        if (r.autoDetectSupported === false) {
+          // Windows: no on-disk detection — go straight to manual paste.
+          setDetect({ kind: "unsupported" });
+        } else if (r.found && r.authMode === "first_party" && r.ut && r.urt) {
+          setDetect({ kind: "found", authMode: "first_party", browser: r.browser, profile: r.profile, ut: r.ut, urt: r.urt });
+        } else if (r.found && r.token) {
+          setDetect({ kind: "found", authMode: "legacy", email: r.email, browser: r.browser, profile: r.profile, token: r.token });
         } else if (r.error) {
           setDetect({ kind: "error", message: r.error });
         } else {
@@ -60,11 +78,22 @@ export function AuthStep({
       .catch((err: Error) => setDetect({ kind: "error", message: err.message }));
   }, []);
 
+  const acceptResult = (r: { ok: boolean; error?: string }): void => {
+    if (r.ok) { setAccepted(true); onNext(); }
+    else { setDetect({ kind: "error", message: r.error ?? "token validation failed" }); }
+  };
+
   const accept = async (token: string, email?: string): Promise<void> => {
     try {
-      const r = await api.authAccept(token, email);
-      if (r.ok) { setAccepted(true); onNext(); }
-      else { setDetect({ kind: "error", message: r.error ?? "token validation failed" }); }
+      acceptResult(await api.authAccept(token, email));
+    } catch (err) {
+      setDetect({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const acceptCookies = async (ut: string, urt: string): Promise<void> => {
+    try {
+      acceptResult(await api.authAcceptCookies(ut, urt));
     } catch (err) {
       setDetect({ kind: "error", message: err instanceof Error ? err.message : String(err) });
     }
@@ -99,16 +128,80 @@ export function AuthStep({
     }
   };
 
+  const onManualResult = (r: { ok: boolean; error?: string }): void => {
+    if (r.ok) { setAccepted(true); onNext(); }
+    else { setManual({ kind: "error", message: r.error ?? "validation failed" }); }
+  };
+
   const submitManual = async (): Promise<void> => {
     setManual({ kind: "validating" });
     try {
-      const r = await api.authAccept(manualText);
-      if (r.ok) { setAccepted(true); onNext(); }
-      else { setManual({ kind: "error", message: r.error ?? "validation failed" }); }
+      onManualResult(await api.authAccept(manualText));
     } catch (err) {
       setManual({ kind: "error", message: err instanceof Error ? err.message : String(err) });
     }
   };
+
+  const submitManualCookies = async (): Promise<void> => {
+    setManual({ kind: "validating" });
+    try {
+      onManualResult(await api.authAcceptCookies(manualUt.trim(), manualUrt.trim()));
+    } catch (err) {
+      setManual({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  // The manual-paste form body, reused by the "no session found" flow (tucked
+  // inside a <details>) and the Windows flow (shown directly, since auto-detect
+  // isn't available there).
+  const manualPasteBody = (): JSX.Element => (
+    <>
+      <div className="mt-4 space-y-3">
+        <ol className="text-xs text-on-surface-variant list-decimal list-inside space-y-1.5">
+          <li>Sign in at <a href="https://web.plaud.ai" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">web.plaud.ai</a>.</li>
+          <li>Open <a href="https://api.plaud.ai/auth/refresh-user-token" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">api.plaud.ai/auth/refresh-user-token</a> in the same browser. You'll see an error page. That's expected; it refreshes your session.</li>
+          <li>Open your browser cookies for <code>api.plaud.ai</code>, then copy <code>pld_urt</code> into the first box and <code>pld_ut</code> into the second.</li>
+        </ol>
+        <label className="font-label text-xs text-on-surface-variant uppercase tracking-wider block">pld_urt (refresh token)</label>
+        <textarea
+          className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-3 font-mono text-xs text-on-surface h-16 focus:ring-2 focus:ring-primary/40 focus:outline-none"
+          placeholder="eyJhbGciOiJIUzI1NiIs..."
+          value={manualUrt}
+          onChange={(e) => setManualUrt(e.target.value)}
+        />
+        <label className="font-label text-xs text-on-surface-variant uppercase tracking-wider block">pld_ut (user token)</label>
+        <textarea
+          className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-3 font-mono text-xs text-on-surface h-16 focus:ring-2 focus:ring-primary/40 focus:outline-none"
+          placeholder="eyJhbGciOiJIUzI1NiIs..."
+          value={manualUt}
+          onChange={(e) => setManualUt(e.target.value)}
+        />
+        <div className="flex items-center gap-2">
+          <button className="btn-primary" onClick={() => void submitManualCookies()} disabled={manual.kind === "validating" || manualUt.trim().length < 20 || manualUrt.trim().length < 20}>
+            {manual.kind === "validating" ? "Connecting…" : "Connect with cookies"}
+          </button>
+        </div>
+      </div>
+      <div className="mt-5 border-t border-outline-variant/30 pt-4 space-y-3">
+        <p className="text-xs text-on-surface-variant">
+          Don't see those cookies? You may be on Plaud's legacy platform. Open DevTools → Application → Local Storage and paste the old <code>tokenstr</code> value (starts with <code>bearer eyJ…</code>) or the raw JWT.
+        </p>
+        <label className="font-label text-xs text-on-surface-variant uppercase tracking-wider block">tokenstr (legacy)</label>
+        <textarea
+          className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-4 font-mono text-xs text-on-surface h-24 focus:ring-2 focus:ring-primary/40 focus:outline-none"
+          placeholder="bearer eyJhbGciOiJIUzI1NiIs..."
+          value={manualText}
+          onChange={(e) => setManualText(e.target.value)}
+        />
+        <div className="flex items-center gap-2">
+          <button className="btn-secondary" onClick={() => void submitManual()} disabled={manual.kind === "validating" || manualText.length < 20}>
+            {manual.kind === "validating" ? "Validating…" : "Use this token"}
+          </button>
+        </div>
+      </div>
+      {manual.kind === "error" && <p className="mt-3 text-sm text-error">{manual.message}</p>}
+    </>
+  );
 
   return (
     <div className="space-y-8">
@@ -132,7 +225,17 @@ export function AuthStep({
               {detect.email && <>{" "}for <span className="font-medium">{detect.email}</span></>}
             </p>
             <div className="mt-4 flex gap-2">
-              <button className="btn-primary" onClick={() => void accept(detect.token, detect.email)} disabled={accepted}>
+              <button
+                className="btn-primary"
+                onClick={() =>
+                  detect.authMode === "first_party" && detect.ut && detect.urt
+                    ? void acceptCookies(detect.ut, detect.urt)
+                    : detect.token
+                      ? void accept(detect.token, detect.email)
+                      : undefined
+                }
+                disabled={accepted}
+              >
                 Use this session
               </button>
               <button className="btn-secondary" onClick={() => setDetect({ kind: "notfound" })}>
@@ -156,26 +259,19 @@ export function AuthStep({
             )}
             {watch.kind === "error" && <p className="text-sm text-error">{watch.message}</p>}
             <details className="rounded-xl bg-surface-container p-4 text-sm">
-              <summary className="cursor-pointer font-medium text-on-surface">Paste a token manually</summary>
-              <div className="mt-4 space-y-3">
-                <p className="text-xs text-on-surface-variant">
-                  Open web.plaud.ai DevTools → Application → Local Storage → paste the value of <code>tokenstr</code> (starts with <code>bearer eyJ…</code>) or the raw JWT.
-                </p>
-                <label className="font-label text-xs text-on-surface-variant uppercase tracking-wider block">Token</label>
-                <textarea
-                  className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-4 font-mono text-xs text-on-surface h-24 focus:ring-2 focus:ring-primary/40 focus:outline-none"
-                  placeholder="bearer eyJhbGciOiJIUzI1NiIs..."
-                  value={manualText}
-                  onChange={(e) => setManualText(e.target.value)}
-                />
-                <div className="flex items-center gap-2">
-                  <button className="btn-primary" onClick={() => void submitManual()} disabled={manual.kind === "validating" || manualText.length < 20}>
-                    {manual.kind === "validating" ? "Validating…" : "Use this token"}
-                  </button>
-                  {manual.kind === "error" && <span className="text-sm text-error">{manual.message}</span>}
-                </div>
-              </div>
+              <summary className="cursor-pointer font-medium text-on-surface">Paste cookies manually</summary>
+              {manualPasteBody()}
             </details>
+          </div>
+        )}
+        {detect.kind === "unsupported" && (
+          <div className="space-y-4">
+            <p className="text-sm text-on-surface-variant">
+              Automatic session detection isn't available on Windows yet, so connect by pasting your Plaud session cookies below.
+            </p>
+            <div className="rounded-xl bg-surface-container p-4 text-sm">
+              {manualPasteBody()}
+            </div>
           </div>
         )}
         {detect.kind === "error" && (
