@@ -218,6 +218,16 @@ docker run -d \
   applaud
 ```
 
+### Docker Compose
+
+Or use the bundled compose file:
+
+```bash
+docker compose up -d
+```
+
+To build from source instead of pulling the image, uncomment `build: .` (and comment out `image:`) in `docker-compose.yml`.
+
 Open `http://localhost:44471/setup` to configure. On first run, the setup wizard will ask you to paste your Plaud token manually (browser auto-detect doesn't work inside a container).
 
 ## Running in the background

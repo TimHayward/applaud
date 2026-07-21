@@ -1,0 +1,18 @@
+services:
+  applaud:
+    build: .
+    container_name: applaud
+    restart: unless-stopped
+    ports:
+      - "44471:44471"
+    volumes:
+      - applaud-config:/data/config
+      - applaud-recordings:/data/recordings
+    # Optional tuning (all have sane defaults; safe to omit):
+    # environment:
+    #   LOG_LEVEL: info
+    #   APPLAUD_NO_OPEN: "1"   # container can't open a browser anyway
+
+volumes:
+  applaud-config:
+  applaud-recordings:
