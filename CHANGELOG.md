@@ -20,6 +20,16 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 - Server tuning is now overridable via environment variables (`server/src/constants.ts`, documented in the README): retry counts, page sizes, webhook backoff schedule, trash retention/probe cadence, User-Agent, and the recordings-list limit cap.
 - Real audio waveform: the player now decodes the audio (`AudioContext`) and renders actual amplitude peaks instead of a synthetic seeded shape, cached per recording, with a graceful fallback for very long/undecodable files.
 
+### Security
+- **Docker instances now require a LAN access token.** A container listens on `0.0.0.0`; on first start Applaud generates a token and prints it to the container log (`docker logs applaud`), then requires it on every `/api` and `/media` request. Pin your own with `APPLAUD_LAN_TOKEN`, or opt out with `APPLAUD_ALLOW_NO_AUTH=1` if something else authenticates in front. Local installs are unchanged (loopback, no auth unless you set a token).
+- **Webhook targets must resolve to a public address.** The URL is validated (http(s) only, no embedded credentials) and resolved before connecting, and redirects are no longer followed — closing the SSRF read-oracle in **Test webhook**. Set `APPLAUD_WEBHOOK_ALLOW_PRIVATE=1` if your webhook target is on localhost or your LAN (n8n, Home Assistant, Node-RED).
+- Files under `/media` are served with `X-Content-Type-Options: nosniff` and a sandboxing CSP, and anything that isn't audio or a raster image (`.svg`, `.html`, `.md`, `.json`, …) is served as a download — an `.svg` sitting in a recording folder can no longer run script in the app's origin.
+- Requests arriving under an unknown `Host` are rejected (DNS-rebinding defense); add your own hostname with `APPLAUD_ALLOWED_HOSTS` when behind a reverse proxy.
+- LAN tokens are compared in constant time, must be at least 16 characters, and repeated failed attempts are throttled. `/api` accepts the token by `Authorization` header only; `?token=` remains for `/media` elements, and every response sends `Referrer-Policy: no-referrer`.
+- Per-IP rate limits on `/api`, `/media`, and the outbound/filesystem routes (all env-tunable).
+- `POST /api/config/validate-recordings-dir` no longer creates directories implicitly: creation is opt-in and limited to a single folder under an existing parent. The setup wizard now offers an explicit **Create it** button.
+- Windows: the config directory ACL is locked to your account and `SYSTEM` on first run (`icacls /inheritance:r`), since `chmod 600` does nothing there. Skip with `APPLAUD_SKIP_ACL_HARDENING=1`.
+
 ### Changed
 - Audio files are now saved and served under their true extension derived from Plaud's `filetype` (e.g. `audio.mp3`, `audio.opus`) instead of always `audio.ogg`; the download link, media URLs, and webhook payload all reference the real filename. Existing `audio.ogg` recordings are unaffected. Added `.opus`/`.flac`/`.webm` to the media content types.
 

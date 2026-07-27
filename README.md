@@ -230,6 +230,24 @@ To build from source instead of pulling the image, uncomment `build: .` (and com
 
 Open `http://localhost:44471/setup` to configure. On first run, the setup wizard will ask you to paste your Plaud token manually (browser auto-detect doesn't work inside a container).
 
+### Docker access token
+
+A container listens on `0.0.0.0`, so anything that can route to it could otherwise read every recording and change your config. Applaud therefore **requires a LAN access token in container mode**: on first start it generates one and prints it to the container log —
+
+```bash
+docker logs applaud
+#   ┌─ LAN access token generated ────────────────────────────────
+#   │  8264b0defd648c33878b9ec045c726fefe7537c72057e494
+```
+
+Open `http://<host>:44471/?token=<token>` once per browser (it's saved in local storage and stripped from the URL), or change it later in **Settings → LAN Access**. Every `/api` and `/media` request needs it; `/api/health` stays open for the healthcheck.
+
+- Pin your own with `APPLAUD_LAN_TOKEN=<at least 16 chars>`.
+- Already have an authenticating reverse proxy in front? `APPLAUD_ALLOW_NO_AUTH=1` disables the requirement.
+- Serving it on a real hostname through that proxy? Add it to `APPLAUD_ALLOWED_HOSTS` (see the table below) — requests arriving under an unknown hostname are rejected as DNS rebinding.
+
+A local (non-Docker) install still binds `127.0.0.1` and stays unauthenticated by default; set a token only if you open it to your LAN.
+
 ## Running in the background
 
 Applaud is a foreground process. To keep it running without a terminal:
@@ -245,6 +263,15 @@ Applaud is a foreground process. To keep it running without a terminal:
 Settings live in `~/.config/applaud/settings.json` (or `~/Library/Application Support/applaud/` on macOS, `%APPDATA%\applaud\` on Windows). Recording state is in `state.sqlite` alongside. Both are managed through the web UI — you shouldn't need to edit them by hand.
 
 The Plaud tokens are stored as plaintext in `settings.json` (with `chmod 600`) — the bearer/workspace token, and for newer accounts the `pld_ut` / `pld_urt` cookie values used to keep it fresh. The file lives in a user-only directory, and their scope is equivalent to "read this user's own Plaud data." The web UI never receives these values back — they're redacted in the config API. OS keychain integration is a future enhancement.
+
+**On Windows**, `chmod 600` is a no-op, so on first run Applaud restricts the ACL on `%APPDATA%\applaud\` instead (`icacls /inheritance:r`, granting only your account and `SYSTEM`) and drops an `.acl-hardened` marker so it only does this once. The tokens, your `lanToken`, and `webhook.secret` are still stored in cleartext — anything running as your user can read them. Set `APPLAUD_SKIP_ACL_HARDENING=1` to skip the ACL change; DPAPI-encrypted storage is a future enhancement.
+
+### Security notes
+
+- **Webhook targets must be public by default.** Applaud resolves the URL and refuses private, loopback, and link-local addresses before connecting, so the "Test" button can't be used to probe your machine or LAN. Pointing it at a local n8n / Home Assistant / Node-RED instance is a normal thing to want — set `APPLAUD_WEBHOOK_ALLOW_PRIVATE=1` for that. Redirects are never followed (a 3xx is logged as a failed delivery).
+- **Files under `/media` are served as downloads** unless they're audio or a raster image, with `nosniff` and a sandboxing CSP, so an `.svg`/`.html` file inside a recording folder can't run script in the app's origin.
+- **Requests must arrive under a known hostname** — an IP literal, `localhost`, a `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net` name, your `bind.host`, or something in `APPLAUD_ALLOWED_HOSTS`. This is what stops a web page you visit from rebinding its own domain to `127.0.0.1` and driving the API.
+- **`/api` takes the LAN token by `Authorization: Bearer` header only.** `?token=` works on `/media` (for `<audio>`/`<a>`/`<img>`, which can't set headers) and is stripped from the URL after first load; responses send `Referrer-Policy: no-referrer` so it doesn't leak onward.
 
 ### Advanced tuning (environment variables)
 
@@ -262,6 +289,22 @@ These are optional and only matter for unusual setups (very large libraries, fla
 | `APPLAUD_TRASH_PROBE_SCHEDULED_LIMIT` | `25` | Max Plaud-trash rows probed per scheduled poll |
 | `APPLAUD_TRASH_PROBE_MANUAL_LIMIT` | `100` | Max Plaud-trash rows probed on a manual Sync Now |
 | `APPLAUD_RECORDINGS_MAX_LIMIT` | `500` | Hard cap on `limit` for any recordings list/search query |
+
+Security-related (see [Security notes](#security-notes)):
+
+| Variable | Default | What it controls |
+| --- | --- | --- |
+| `APPLAUD_WEBHOOK_ALLOW_PRIVATE` | unset | `1` allows webhook deliveries/tests to private, loopback, and link-local addresses (local n8n, Home Assistant, …) |
+| `APPLAUD_ALLOWED_HOSTS` | unset | Extra `Host` values to accept, comma-separated. `*.example.com` matches subdomains; `*` disables the check |
+| `APPLAUD_LAN_TOKEN` | unset | Container mode: use this LAN token instead of generating one (min. 16 chars) |
+| `APPLAUD_ALLOW_NO_AUTH` | unset | `1` lets container mode run unauthenticated (only if something else authenticates in front of it) |
+| `APPLAUD_LAN_TOKEN_MIN_LENGTH` | `16` | Minimum accepted LAN-token length |
+| `APPLAUD_RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window |
+| `APPLAUD_RATE_LIMIT_API_MAX` | `600` | Requests per window per client for `/api` |
+| `APPLAUD_RATE_LIMIT_MEDIA_MAX` | `900` | Requests per window per client for `/media` |
+| `APPLAUD_RATE_LIMIT_SENSITIVE_MAX` | `20` | Requests per window for `test-webhook` / `validate-recordings-dir` |
+| `APPLAUD_RATE_LIMIT_AUTH_FAILURES` | `20` | Failed LAN-token attempts per window before a client gets 429s |
+| `APPLAUD_SKIP_ACL_HARDENING` | unset | `1` skips the Windows config-directory ACL lockdown |
 
 ## Development
 

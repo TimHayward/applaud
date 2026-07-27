@@ -2,7 +2,13 @@
 
 The local server exposes a JSON API under `/api` and file serving under `/media`. Everything binds to `127.0.0.1:44471` by default (`0.0.0.0` in Docker).
 
-**Authentication:** none by default. If a **LAN access token** is set (Settings → LAN Access), every `/api` and `/media` request must carry it — either `Authorization: Bearer <token>` or `?token=<token>` (the query form exists for `<audio>`/`<img>`/download links, which can't set headers). `/api/health` is always unauthenticated.
+**Authentication:** none by default on a local install; **always required in Docker**, where a token is generated on first start and printed to the container log (see the README). When a **LAN access token** is set (Settings → LAN Access), every `/api` and `/media` request must carry it as `Authorization: Bearer <token>`. `/media` additionally accepts `?token=<token>` for `<audio>`/`<img>`/download links, which can't set headers; `/api` does not. `/api/health` is always unauthenticated. Tokens must be at least 16 characters, are compared in constant time, and repeated failures from one client get 429s.
+
+**Host header:** requests arriving under an unrecognised hostname are rejected with 403 (DNS-rebinding defense). IP literals, `localhost`, `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net` names, and `APPLAUD_ALLOWED_HOSTS` entries are accepted.
+
+**Rate limits:** ~600/min per client on `/api`, ~900/min on `/media`, 20/min on `test-webhook` and `validate-recordings-dir`. Over the limit returns 429 with `Retry-After`. All caps are env-tunable (README).
+
+**Response headers:** every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, and a CSP.
 
 Types for every payload live in [`shared/src/api.ts`](../shared/src/api.ts) and [`shared/src/recording.ts`](../shared/src/recording.ts).
 
@@ -28,9 +34,9 @@ Types for every payload live in [`shared/src/api.ts`](../shared/src/api.ts) and 
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/api/config` | Current config with secrets (`token`, `lanToken`, `webhook.secret`) redacted to `***REDACTED***`. |
-| POST | `/api/config` | Patch config. Accepts `recordingsDir`, `webhook` (`{ url, enabled?, secret? }` or `null`), `pollIntervalMinutes` (applies live), `bind` (returns `restartRequired: true`), `importPlaudDeleted`, `lanToken`. Sending the redaction sentinel preserves the stored secret; empty string clears it. |
-| POST | `/api/config/test-webhook` | POST a sample payload to a URL. Body: `{ url }`. |
-| POST | `/api/config/validate-recordings-dir` | Check/create a directory and report writability + free space. Body: `{ path }`. |
+| POST | `/api/config` | Patch config. Accepts `recordingsDir`, `webhook` (`{ url, enabled?, secret? }` or `null`; http(s) only), `pollIntervalMinutes` (applies live), `bind` (returns `restartRequired: true`), `importPlaudDeleted`, `lanToken` (min. 16 chars). Sending the redaction sentinel preserves the stored secret; empty string clears it. |
+| POST | `/api/config/test-webhook` | POST a sample payload to a URL. Body: `{ url }` — http(s) only, must resolve to a public address unless `APPLAUD_WEBHOOK_ALLOW_PRIVATE=1`, redirects not followed. |
+| POST | `/api/config/validate-recordings-dir` | Report a directory's existence, writability, and free space. Body: `{ path, create? }`. Read-only unless `create: true`, which makes a single directory under an existing parent (never a whole tree). |
 | POST | `/api/config/clear-sync-ignore` | Clear the purge blocklist and trigger a sync. |
 | POST | `/api/config/complete-setup` | Mark setup complete and start the poller. |
 
@@ -69,4 +75,4 @@ Outgoing webhook payloads, headers, and HMAC signature verification (with `X-App
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/media/<folder>/<file>` | Serves files from the recordings directory with `Range` support (audio seeking). Path-traversal safe; 404 outside the recordings dir. |
+| GET | `/media/<folder>/<file>` | Serves files from the recordings directory with `Range` support (audio seeking). Path-traversal safe; 404 outside the recordings dir. Audio and raster images are served inline; everything else (`.svg`, `.html`, `.md`, `.json`, unknown types) comes back as `Content-Disposition: attachment`, and every response carries `Content-Security-Policy: default-src 'none'; sandbox`. |

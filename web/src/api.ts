@@ -115,10 +115,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
-  validateRecordingsDir: (pathStr: string) =>
+  /** `create` is opt-in: the server won't make the folder unless asked to. */
+  validateRecordingsDir: (pathStr: string, create = false) =>
     jsonFetch<RecordingsDirValidateResponse>("/api/config/validate-recordings-dir", {
       method: "POST",
-      body: JSON.stringify({ path: pathStr }),
+      body: JSON.stringify({ path: pathStr, ...(create ? { create: true } : {}) }),
     }),
   completeSetup: () =>
     jsonFetch<{ ok: boolean }>("/api/config/complete-setup", {

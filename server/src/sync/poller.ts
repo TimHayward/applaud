@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
@@ -24,6 +24,7 @@ import {
   recordError,
   getRecordingById,
   findRecordingsNeedingAssets,
+  findRecordingsNeedingWebhook,
   purgeExpiredSoftDeletes,
   isSyncIgnoredId,
   findPlaudTrashAssetProbeCandidates,
@@ -37,7 +38,13 @@ import {
 } from "./state.js";
 import { ensureRecordingFolder } from "./layout.js";
 import { writeFileAtomic } from "../fsAtomic.js";
-import { POLLER_LIST_PAGE_SIZE, POLLER_LIST_MAX_PAGES } from "../constants.js";
+import {
+  POLLER_LIST_PAGE_SIZE,
+  POLLER_LIST_MAX_PAGES,
+  POLLER_LIST_PAGE_OVERLAP,
+  POLLER_RUN_WATCHDOG_MS,
+  HTTP_FETCH_TIMEOUT_MS,
+} from "../constants.js";
 import { sanitizeFilename } from "./layout.js";
 import { fireWebhookForRecording } from "../webhook/post.js";
 import { emit } from "./events.js";
@@ -128,12 +135,32 @@ class Poller {
     await this.processRecording(refreshed, true);
   }
 
+  /**
+   * Race an operation against a hard deadline. Even with per-fetch timeouts,
+   * this is a belt-and-suspenders guard so a single poll cycle can never hang
+   * `inFlight` (and thus silently no-op every later tick) forever.
+   */
+  private async withWatchdog<T>(op: () => Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout;
+    const watchdog = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`poll cycle exceeded ${POLLER_RUN_WATCHDOG_MS}ms watchdog`)),
+        POLLER_RUN_WATCHDOG_MS,
+      );
+    });
+    try {
+      return await Promise.race([op(), watchdog]);
+    } finally {
+      clearTimeout(timer!);
+    }
+  }
+
   private async runOnce(): Promise<void> {
     if (this.inFlight) return;
     this.inFlight = true;
     emit("poll_start");
     try {
-      await this.pollAndProcess();
+      await this.withWatchdog(() => this.pollAndProcess());
       this.lastError = null;
     } catch (err) {
       // First-party mid-poll 401: Plaud rejected an unexpired WT (revoked or
@@ -141,7 +168,7 @@ class Poller {
       if (err instanceof PlaudAuthError && loadConfig().authMode === "first_party") {
         try {
           await ensureFreshWorkspaceToken(true);
-          await this.pollAndProcess();
+          await this.withWatchdog(() => this.pollAndProcess());
           this.lastError = null;
           return;
         } catch (retryErr) {
@@ -206,8 +233,15 @@ class Poller {
     let fetched = 0;
     let totalReported = 0;
     for (let pageIdx = 0; pageIdx < POLLER_LIST_MAX_PAGES; pageIdx++) {
+      // Overlap a few rows with the previous page so a delete mid-walk (which
+      // shifts items up across the boundary) can't skip a brand-new recording
+      // for a cycle. Upsert is idempotent, so the re-reads cost nothing.
+      const skip = Math.max(
+        0,
+        pageIdx * POLLER_LIST_PAGE_SIZE - (pageIdx > 0 ? POLLER_LIST_PAGE_OVERLAP : 0),
+      );
       const page = await listRecordings({
-        skip: pageIdx * POLLER_LIST_PAGE_SIZE,
+        skip,
         limit: POLLER_LIST_PAGE_SIZE,
         isTrash: listTrashMode,
       });
@@ -242,11 +276,30 @@ class Poller {
     const needy = findRecordingsNeedingAssets();
     for (const row of needy) {
       await this.processRecording(row).catch((err) => {
+        // An auth failure must bubble out to runOnce so the 401 re-mint /
+        // "reconnect required" path fires — never get swallowed as a per-row
+        // recordError while status() keeps reporting success.
+        if (err instanceof PlaudAuthError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn({ err, id: row.id }, "processRecording failed");
         recordError(row.id, msg);
         emit("error", { recordingId: row.id, message: msg });
       });
+    }
+
+    // Phase 2b — Webhook re-drive: any downloaded asset whose delivery never
+    // succeeded (fired_at IS NULL) gets (re)fired here, so a delivery lost after
+    // the in-process backoff window recovers on its own instead of needing a
+    // manual Redeliver. No-op when no webhook is configured.
+    if (cfg.webhook?.enabled && cfg.webhook.url) {
+      for (const { row, event } of findRecordingsNeedingWebhook()) {
+        try {
+          const fired = await fireWebhookForRecording(event, row);
+          if (fired) markWebhookFired(row.id, event);
+        } catch (err) {
+          logger.warn({ err, id: row.id, event }, "webhook re-drive failed");
+        }
+      }
     }
 
     // Phase 3 — Plaud trash: best-effort transcript/summary check (throttled).
@@ -262,6 +315,10 @@ class Poller {
           clearError(row.id);
           await this.tryTranscriptAndSummary(row, true);
         } catch (err) {
+          // A real auth revocation must still surface as "reconnect required"
+          // even during the best-effort probe phase (the finally below still
+          // records the probe timestamp before this propagates).
+          if (err instanceof PlaudAuthError) throw err;
           logger.info(
             { err, id: row.id },
             "plaud trash asset probe: no transcript/summary to ingest or transient error (ignored)",
@@ -298,8 +355,14 @@ class Poller {
           if (!forceDetailRefresh) await this.refreshDetailAndAssets(row.id, paths.folder);
 
           // Use the DB's stored audio path (extension derived from Plaud's
-          // filetype at insert) so disk and the served URL always agree.
-          const bytes = await downloadAudio(row.id, row.audioPath ?? paths.audioPath);
+          // filetype at insert) so disk and the served URL always agree. The
+          // streamed byte count is verified against Content-Length/filesizeBytes
+          // so a short S3 close can't publish a truncated file.
+          const bytes = await downloadAudio(
+            row.id,
+            row.audioPath ?? paths.audioPath,
+            row.filesizeBytes,
+          );
           markAudioDownloaded(row.id, bytes || row.filesizeBytes);
           emit("recording_new", { recordingId: row.id });
 
@@ -309,6 +372,7 @@ class Poller {
             if (fired) markWebhookFired(row.id, "audio_ready");
           }
         } catch (err) {
+          if (err instanceof PlaudAuthError) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn({ err, id: row.id }, "audio download failed");
           recordError(row.id, msg);
@@ -321,6 +385,7 @@ class Poller {
         try {
           await this.tryTranscriptAndSummary(row);
         } catch (err) {
+          if (err instanceof PlaudAuthError) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn({ err, id: row.id }, "transcript/summary fetch failed");
           recordError(row.id, msg);
@@ -462,7 +527,7 @@ class Poller {
       if (existsSync(destPath) && !forceOverwrite) continue;
 
       try {
-        const res = await fetch(item.data_link);
+        const res = await fetch(item.data_link, { signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS) });
         if (!res.ok) {
           logger.warn(
             { id: recordingId, dataType: item.data_type, dataId: item.data_id, status: res.status },
@@ -479,7 +544,7 @@ class Poller {
         }
         const extracted = extractMarkdownFromSummaryPayload(raw);
         const out = extracted && extracted.trim().length > 0 ? extracted : raw;
-        writeFileSync(destPath, out, "utf8");
+        writeFileAtomic(destPath, out, "utf8");
         downloadedCount += 1;
         logger.info({ id: recordingId, dataType: item.data_type, fileName }, "downloaded content_list markdown");
       } catch (err) {
@@ -519,14 +584,14 @@ class Poller {
       }
       if (existsSync(destPath) && !forceOverwrite) continue;
       try {
-        const res = await fetch(url);
+        const res = await fetch(url, { signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS) });
         if (!res.ok) {
           logger.warn({ id: recordingId, filename, status: res.status }, "extra asset download failed");
           continue;
         }
         const buf = Buffer.from(await res.arrayBuffer());
         mkdirSync(path.dirname(destPath), { recursive: true });
-        writeFileSync(destPath, buf);
+        writeFileAtomic(destPath, buf);
         logger.info({ id: recordingId, filename }, "downloaded extra asset");
       } catch (err) {
         logger.warn({ err, id: recordingId, filename }, "extra asset download error");

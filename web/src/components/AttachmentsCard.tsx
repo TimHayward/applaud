@@ -1,7 +1,10 @@
 import type { RecordingAttachment } from "@applaud/shared";
 import { mediaUrl } from "../api.js";
 
-const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".svg"]);
+// `.svg` is deliberately absent: the server serves SVG as an attachment (an
+// SVG is a script-capable document and recording folders are user-writable),
+// so it can't render as a thumbnail — it shows in the file list below instead.
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 
 function isImageAttachment(filename: string): boolean {
   const idx = filename.lastIndexOf(".");

@@ -1,6 +1,6 @@
 import { logger } from "../logger.js";
 import { loadConfig } from "../config.js";
-import { PLAUD_USER_AGENT, PLAUD_FETCH_MAX_ATTEMPTS } from "../constants.js";
+import { PLAUD_USER_AGENT, PLAUD_FETCH_MAX_ATTEMPTS, HTTP_FETCH_TIMEOUT_MS } from "../constants.js";
 
 const REGION_API_BASES: Record<string, string> = {
   "aws:us-west-2": "https://api.plaud.ai",
@@ -132,7 +132,10 @@ export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promi
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const res = await fetch(url, { ...init, headers });
+      // A fresh per-attempt timeout so a half-open TCP stall aborts instead of
+      // hanging the poll forever. Callers may still pass their own signal.
+      const signal = init.signal ?? AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS);
+      const res = await fetch(url, { ...init, headers, signal });
       if (res.status === 401) {
         throw new PlaudAuthError("Plaud returned 401 — token expired or revoked");
       }

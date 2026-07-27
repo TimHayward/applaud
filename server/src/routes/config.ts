@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   existsSync,
   mkdirSync,
+  statSync,
   accessSync,
   constants,
   statfsSync,
@@ -12,19 +13,50 @@ import { loadConfig, updateConfig } from "../config.js";
 import { testWebhook } from "../webhook/post.js";
 import { poller } from "../sync/poller.js";
 import { clearSyncIgnore } from "../sync/state.js";
-import { redactConfig, mergeWebhookSecret } from "./config-helpers.js";
+import { redactConfig, mergeWebhookSecret, SECRET_REDACTED } from "./config-helpers.js";
+import { LAN_TOKEN_MIN_LENGTH, RATE_LIMIT_SENSITIVE_MAX, RATE_LIMIT_WINDOW_MS } from "../constants.js";
+import { createRateLimiter } from "../security/rate-limit.js";
 
 export const configRouter = Router();
+
+/**
+ * These two routes reach out of the process on caller-supplied input — one
+ * makes an outbound HTTP request, the other touches the filesystem — so they
+ * get a much tighter cap than ordinary API traffic.
+ */
+const sensitiveLimiter = createRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: RATE_LIMIT_SENSITIVE_MAX,
+  message: "too many requests — slow down",
+});
 
 configRouter.get("/", (_req, res) => {
   res.json({ config: redactConfig(loadConfig()) });
 });
 
+/** Webhook targets are fetched by the server — keep them to http(s). */
+const HttpUrl = z
+  .string()
+  .url()
+  .refine((v) => /^https?:$/.test(new URL(v).protocol), {
+    message: "webhook URL must use http or https",
+  });
+
+/**
+ * A `lanToken` is the only thing standing between a LAN-exposed instance and
+ * every recording on it, so reject values short enough to guess. The redaction
+ * sentinel (preserve) and "" (clear) stay valid — see `mergeWebhookSecret`.
+ */
+const LanToken = z.string().refine(
+  (v) => v === "" || v === SECRET_REDACTED || v.length >= LAN_TOKEN_MIN_LENGTH,
+  { message: `LAN token must be at least ${LAN_TOKEN_MIN_LENGTH} characters` },
+);
+
 const PatchSchema = z.object({
-  recordingsDir: z.string().min(1).optional(),
+  recordingsDir: z.string().min(1).max(4096).optional(),
   webhook: z
     .object({
-      url: z.string().url().or(z.literal("")),
+      url: HttpUrl.or(z.literal("")),
       enabled: z.boolean().optional(),
       secret: z.string().optional(),
     })
@@ -38,7 +70,7 @@ const PatchSchema = z.object({
     })
     .optional(),
   importPlaudDeleted: z.boolean().optional(),
-  lanToken: z.string().optional(),
+  lanToken: LanToken.optional(),
 });
 
 configRouter.post("/", (req, res) => {
@@ -86,21 +118,30 @@ configRouter.post("/", (req, res) => {
   res.json({ config: redactConfig(next), ...(restartRequired ? { restartRequired: true } : {}) });
 });
 
-const TestWebhookSchema = z.object({ url: z.string().url() });
+const TestWebhookSchema = z.object({ url: HttpUrl });
 
-configRouter.post("/test-webhook", async (req, res) => {
+configRouter.post("/test-webhook", sensitiveLimiter, async (req, res) => {
   const parsed = TestWebhookSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ ok: false, error: "invalid URL" });
+    res.status(400).json({ ok: false, error: "invalid URL — must be an http(s) URL" });
     return;
   }
   const result = await testWebhook(parsed.data.url);
   res.json(result);
 });
 
-const ValidateDirSchema = z.object({ path: z.string().min(1) });
+const ValidateDirSchema = z.object({
+  path: z.string().min(1).max(4096),
+  /**
+   * Opt-in creation. Without this the route is a pure read-only probe; with it
+   * it creates a single leaf directory under an existing parent (never
+   * `recursive`), so it can't be used to scaffold arbitrary directory trees
+   * anywhere the process can write.
+   */
+  create: z.boolean().optional(),
+});
 
-configRouter.post("/validate-recordings-dir", (req, res) => {
+configRouter.post("/validate-recordings-dir", sensitiveLimiter, (req, res) => {
   const parsed = ValidateDirSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ ok: false, error: "invalid body" });
@@ -108,17 +149,37 @@ configRouter.post("/validate-recordings-dir", (req, res) => {
   }
   const p = path.resolve(parsed.data.path);
   try {
-    const exists = existsSync(p);
+    let exists = existsSync(p);
+    if (exists && !statSync(p).isDirectory()) {
+      res.json({ ok: false, absolutePath: p, exists: true, error: "path is not a directory" });
+      return;
+    }
     if (!exists) {
-      try {
-        mkdirSync(p, { recursive: true });
-      } catch (err) {
+      if (!parsed.data.create) {
         res.json({
           ok: false,
           absolutePath: p,
           exists: false,
-          error: `cannot create: ${err instanceof Error ? err.message : String(err)}`,
+          error: "directory does not exist",
         });
+        return;
+      }
+      const parent = path.dirname(p);
+      if (parent === p || !existsSync(parent)) {
+        res.json({
+          ok: false,
+          absolutePath: p,
+          exists: false,
+          error: "parent directory does not exist — create it first, or pick an existing folder",
+        });
+        return;
+      }
+      try {
+        mkdirSync(p);
+        exists = true;
+      } catch (err) {
+        const code = err instanceof Error && "code" in err ? String(err.code) : "unknown";
+        res.json({ ok: false, absolutePath: p, exists: false, error: `cannot create (${code})` });
         return;
       }
     }
@@ -137,7 +198,8 @@ configRouter.post("/validate-recordings-dir", (req, res) => {
     }
     res.json({ ok: true, absolutePath: p, exists: true, writable: true, freeBytes });
   } catch (err) {
-    res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    const code = err instanceof Error && "code" in err ? String(err.code) : "unknown";
+    res.json({ ok: false, absolutePath: p, error: `cannot inspect path (${code})` });
   }
 });
 

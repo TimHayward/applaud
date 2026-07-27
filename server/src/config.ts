@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
+import { readFileSync, existsSync, chmodSync } from "node:fs";
 import { DEFAULT_CONFIG, type AppConfig } from "@applaud/shared";
 import { ensureConfigDir, settingsPath } from "./paths.js";
+import { writeFileAtomic } from "./fsAtomic.js";
 import { logger } from "./logger.js";
 
 let cached: AppConfig | null = null;
@@ -28,7 +29,11 @@ export function loadConfig(): AppConfig {
 export function saveConfig(next: AppConfig): void {
   ensureConfigDir();
   const p = settingsPath();
-  writeFileSync(p, JSON.stringify(next, null, 2), { mode: 0o600 });
+  // Atomic write so a crash mid-write can't leave corrupt JSON that loadConfig
+  // would silently fall back to DEFAULT_CONFIG for — permanently destroying the
+  // stored session on the next updateConfig. The temp file carries mode 0o600
+  // so the secrets are never briefly world-readable.
+  writeFileAtomic(p, JSON.stringify(next, null, 2), { mode: 0o600 });
   try {
     chmodSync(p, 0o600);
   } catch {

@@ -3,9 +3,14 @@ import { vi } from "vitest";
 export interface QueuedResponse {
   status?: number;
   body?: string;
+  /** Extra response headers, e.g. `location` for a redirect. */
+  headers?: Record<string, string>;
   /** If set, the mock throws this on the matching call (network error simulation). */
   throws?: unknown;
 }
+
+/** Statuses the Response constructor refuses to pair with a body. */
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export interface FetchMock {
   /** Vitest mock function installed on globalThis.fetch. */
@@ -37,10 +42,10 @@ export function installFetchMock(): FetchMock {
     }
     if (next.throws !== undefined) throw next.throws;
     const status = next.status ?? 200;
-    const body = next.body ?? "";
+    const body = NULL_BODY_STATUSES.has(status) ? null : (next.body ?? "");
     return new Response(body, {
       status,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...next.headers },
     });
   });
 

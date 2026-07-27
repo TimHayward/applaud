@@ -15,15 +15,18 @@ export function RecordingsDirStep({
   const [result, setResult] = useState<null | {
     ok: boolean;
     absolutePath?: string;
+    exists?: boolean;
     freeBytes?: number;
     error?: string;
   }>(null);
 
-  const validate = async (): Promise<void> => {
+  // Creating the folder is a separate, explicit action — the check itself is
+  // read-only so the endpoint can't be used to scatter directories around.
+  const validate = async (create = false): Promise<void> => {
     setChecking(true);
     setResult(null);
     try {
-      const r = await api.validateRecordingsDir(value);
+      const r = await api.validateRecordingsDir(value, create);
       setResult(r);
     } catch (err) {
       setResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -31,6 +34,8 @@ export function RecordingsDirStep({
       setChecking(false);
     }
   };
+
+  const canCreate = result != null && !result.ok && result.exists === false;
 
   const save = async (): Promise<void> => {
     if (!result?.ok || !result.absolutePath) return;
@@ -67,6 +72,15 @@ export function RecordingsDirStep({
           <button className="btn-primary px-6 py-4" onClick={() => void validate()} disabled={checking}>
             {checking ? "Checking…" : "Check"}
           </button>
+          {canCreate && (
+            <button
+              className="px-6 py-4 rounded-lg border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/10 transition-colors"
+              onClick={() => void validate(true)}
+              disabled={checking}
+            >
+              Create it
+            </button>
+          )}
         </div>
 
         {/* Info box */}

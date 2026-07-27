@@ -8,10 +8,16 @@ services:
     volumes:
       - applaud-config:/data/config
       - applaud-recordings:/data/recordings
+    # This container listens on 0.0.0.0, so a LAN access token is required.
+    # One is generated on first start and printed to `docker logs applaud`;
+    # set APPLAUD_LAN_TOKEN below to pin your own instead (min. 16 chars).
     # Optional tuning (all have sane defaults; safe to omit):
     # environment:
     #   LOG_LEVEL: info
     #   APPLAUD_NO_OPEN: "1"   # container can't open a browser anyway
+    #   APPLAUD_LAN_TOKEN: "change-me-to-a-long-random-string"
+    #   APPLAUD_ALLOWED_HOSTS: "applaud.example.com"  # if behind a reverse proxy
+    #   APPLAUD_WEBHOOK_ALLOW_PRIVATE: "1"            # webhook target on your LAN/host
 
 volumes:
   applaud-config:

@@ -250,7 +250,9 @@ describe("poller asset overwrite behavior", () => {
 
     await poller.resyncRecording("abcdef0123456789");
 
-    const writtenPaths = fsMocks.writeFileSync.mock.calls.map((call) => path.normalize(String(call[0])));
+    // Writes go through writeFileAtomic (temp file + rename), so the final
+    // destination is the rename target, not the raw writeFileSync path.
+    const writtenPaths = fsMocks.renameSync.mock.calls.map((call) => path.normalize(String(call[1])));
     expect(writtenPaths).toContain(path.normalize(markdownPath));
     expect(writtenPaths).toContain(path.normalize(extraPath));
 

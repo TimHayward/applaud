@@ -130,13 +130,18 @@ function parseSetCookie(raw: string): ParsedCookie | null {
   let cleared = false;
   const attrs = semi === -1 ? "" : raw.slice(semi + 1);
   for (const attr of attrs.split(";")) {
-    const a = attr.trim().toLowerCase();
-    if (a === "max-age=0" || a === "max-age=-1") {
+    const trimmed = attr.trim();
+    const a = trimmed.toLowerCase();
+    if (a === "max-age=0" || a.startsWith("max-age=-")) {
       cleared = true;
       break;
     }
     if (a.startsWith("expires=")) {
-      if (a.includes("1970")) {
+      // A cookie is a clear when its Expires is in the past. Parse the actual
+      // date rather than substring-matching "1970", which misclassified any
+      // unrelated attribute value containing that year.
+      const ts = Date.parse(trimmed.slice("expires=".length));
+      if (!Number.isNaN(ts) && ts <= Date.now()) {
         cleared = true;
         break;
       }

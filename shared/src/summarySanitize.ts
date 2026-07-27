@@ -23,6 +23,15 @@ function formatMeetingDate(ms: number): string {
  * - Turns markdown images `![alt](url)` into **alt** (Plaud often ships a logo / note icon URL that
  *   cannot be loaded in the browser without Plaud cookies → broken `<img>`).
  * - Strips raw `<img …>` tags if present.
+ *
+ * ⚠️ This is a *display normalizer, not an HTML sanitizer.* The `<img …>` strip
+ * is a naive regex that a crafted tag can slip past, and nothing else here
+ * touches HTML. It's safe today only because the renderer treats raw HTML as
+ * text: `react-markdown` is used without `rehype-raw`, and the webhook payload
+ * ships markdown, not HTML. If anyone adds `rehype-raw` (or renders this
+ * through `dangerouslySetInnerHTML`), route the output through a real
+ * sanitizer such as DOMPurify or `rehype-sanitize` first — this function will
+ * not stop XSS.
  */
 export function sanitizePlaudSummaryMarkdown(md: string, opts: SummarySanitizeOptions = {}): string {
   let s = md;

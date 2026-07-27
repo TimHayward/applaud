@@ -161,6 +161,11 @@ export interface WebhookTestResponse {
 
 export interface RecordingsDirValidateRequest {
   path: string;
+  /**
+   * Create the directory if it's missing. Off by default — the server only
+   * creates a single leaf under an existing parent, and only when asked.
+   */
+  create?: boolean;
 }
 
 export interface RecordingsDirValidateResponse {

@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type Database from "better-sqlite3";
 import type { WebhookPayload } from "@applaud/shared";
+
+// The SSRF guard resolves the target before connecting (see security/ssrf.ts).
+// `hook.example` doesn't exist, so pin it to a public address and let the real
+// guard run — the blocked-target case below still exercises it for real.
+const { lookup } = vi.hoisted(() => ({
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+}));
+vi.mock("node:dns/promises", () => ({ lookup }));
+
 import { fireRaw } from "./post.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 import { installFetchMock, type FetchMock } from "../test/fixtures/fetch.js";
@@ -155,5 +164,34 @@ describe("fireRaw retry loop", () => {
     );
     expect(new Set(sigs).size).toBe(1);
     expect(new Set(timestamps).size).toBe(1);
+  });
+
+  it("never connects to a private/loopback target, and doesn't burn the retry schedule", async () => {
+    mock.enqueue({ status: 200 });
+    const ok = await runWithTimers(
+      fireRaw("http://169.254.169.254/latest/meta-data/", samplePayload, "rec-1", "audio_ready"),
+    );
+    expect(ok).toBe(false);
+    expect(mock.calls.length).toBe(0);
+    const row = db
+      .prepare<[], { error: string | null }>("SELECT error FROM webhook_log ORDER BY id ASC LIMIT 1")
+      .get();
+    expect(row?.error).toMatch(/private\/loopback/);
+  });
+
+  it("does not follow a redirect (a 302 counts as a failed attempt)", async () => {
+    // Following it would let a public URL bounce the delivery to an internal one.
+    mock.enqueue({ status: 302, headers: { location: "http://127.0.0.1:8080/" } });
+    mock.enqueue({ status: 302, headers: { location: "http://127.0.0.1:8080/" } });
+    mock.enqueue({ status: 302, headers: { location: "http://127.0.0.1:8080/" } });
+    const ok = await runWithTimers(
+      fireRaw("https://hook.example/x", samplePayload, "rec-1", "audio_ready"),
+    );
+    expect(ok).toBe(false);
+    expect(mock.calls[0]?.init?.redirect).toBe("manual");
+    const row = db
+      .prepare<[], { error: string | null }>("SELECT error FROM webhook_log ORDER BY id ASC LIMIT 1")
+      .get();
+    expect(row?.error).toMatch(/redirect not followed/);
   });
 });

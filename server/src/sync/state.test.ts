@@ -146,6 +146,28 @@ describe("upsertFromPlaud", () => {
     expect(row?.filename).toBe("Standup renamed");
   });
 
+  it("survives a folder-rename collision by updating the filename only (no throw)", () => {
+    upsertFromPlaud(makePlaudItem({ filename: "Standup" }));
+    fsMocks.renameSync.mockClear();
+    // Simulate the target folder already existing: renameSync throws (as it does
+    // on a real collision) instead of silently succeeding.
+    fsMocks.renameSync.mockImplementationOnce(() => {
+      throw new Error("EEXIST: file already exists");
+    });
+
+    // Must not throw — a throw here would re-fail the row on every poll.
+    expect(() => upsertFromPlaud(makePlaudItem({ filename: "Standup renamed" }))).not.toThrow();
+
+    const row = db
+      .prepare<[string], { folder: string; filename: string }>(
+        "SELECT folder, filename FROM recordings WHERE id = ?",
+      )
+      .get("abcdef0123456789");
+    // Filename is updated, but the folder stays put (files remain where they are).
+    expect(row?.filename).toBe("Standup renamed");
+    expect(row?.folder).toBe("2026-04-11_Standup__abcdef01");
+  });
+
   it("skips rename when filename change does not affect sanitized folder name", () => {
     upsertFromPlaud(makePlaudItem({ filename: "Stand:up" }));
     fsMocks.renameSync.mockClear();

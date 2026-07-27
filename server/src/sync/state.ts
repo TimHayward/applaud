@@ -153,8 +153,22 @@ function renameRecordingFolder(row: RecordingDbRow, newFilename: string): void {
   const newAbs = path.join(cfg.recordingsDir, newFolder);
 
   if (existsSync(oldAbs)) {
-    renameSync(oldAbs, newAbs);
-    logger.info({ id: row.id, oldFolder: row.folder, newFolder }, "renamed recording folder");
+    try {
+      renameSync(oldAbs, newAbs);
+      logger.info({ id: row.id, oldFolder: row.folder, newFolder }, "renamed recording folder");
+    } catch (err) {
+      // Rename failed — most commonly a folder-name collision (rare; the 8-char
+      // id suffix usually disambiguates). Letting it throw here aborts before the
+      // DB update, so the row would re-fail on every poll. Keep the existing
+      // folder and update only the display filename so the row settles.
+      logger.warn(
+        { err, id: row.id, oldFolder: row.folder, newFolder },
+        "folder rename failed — keeping existing folder, updating filename only",
+      );
+      getDb().prepare("UPDATE recordings SET filename = ? WHERE id = ?").run(newFilename, row.id);
+      emit("recording_renamed", { recordingId: row.id });
+      return;
+    }
   }
 
   // Preserve the recording's actual audio filename (e.g. audio.mp3) across the
@@ -443,6 +457,45 @@ export function findRecordingsNeedingAssets(): RecordingRow[] {
     .prepare<[], RecordingDbRow>(`SELECT * FROM recordings WHERE ${w} ORDER BY start_time DESC`)
     .all();
   return rows.map(rowToRecording);
+}
+
+/**
+ * Rows with a downloaded asset whose webhook was never confirmed delivered
+ * (`*_fired_at IS NULL`). Drives automatic re-delivery on each poll so a
+ * delivery lost after the in-process backoff window recovers without a manual
+ * Redeliver. Mirrors the fire semantics of the download path: audio_ready fires
+ * for any downloaded audio; transcript_ready only for non-trash rows.
+ */
+export function findRecordingsNeedingWebhook(): {
+  row: RecordingRow;
+  event: "audio_ready" | "transcript_ready";
+}[] {
+  const rows = getDb()
+    .prepare<[], RecordingDbRow>(
+      `SELECT * FROM recordings
+       WHERE user_deleted_at IS NULL
+         AND (
+           (audio_downloaded_at IS NOT NULL AND webhook_audio_fired_at IS NULL)
+           OR (is_trash = 0 AND transcript_downloaded_at IS NOT NULL AND webhook_transcript_fired_at IS NULL)
+         )
+       ORDER BY start_time DESC`,
+    )
+    .all();
+  const out: { row: RecordingRow; event: "audio_ready" | "transcript_ready" }[] = [];
+  for (const dbRow of rows) {
+    const row = rowToRecording(dbRow);
+    if (dbRow.audio_downloaded_at != null && dbRow.webhook_audio_fired_at == null) {
+      out.push({ row, event: "audio_ready" });
+    }
+    if (
+      dbRow.is_trash === 0 &&
+      dbRow.transcript_downloaded_at != null &&
+      dbRow.webhook_transcript_fired_at == null
+    ) {
+      out.push({ row, event: "transcript_ready" });
+    }
+  }
+  return out;
 }
 
 export function findPlaudTrashAssetProbeCandidates(probeOlderThan: number, limit: number): RecordingRow[] {

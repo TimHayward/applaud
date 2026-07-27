@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { plaudJson } from "./client.js";
 import { gunzipSync } from "node:zlib";
+import { HTTP_FETCH_TIMEOUT_MS } from "../constants.js";
 import type { ContentListItem } from "./detail.js";
 
 export interface TranscriptSegment {
@@ -98,7 +99,7 @@ export async function fetchTranscriptFromContentList(
 
   let segments: TranscriptSegment[] = [];
   if (transItem?.data_link) {
-    const res = await fetch(transItem.data_link);
+    const res = await fetch(transItem.data_link, { signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS) });
     if (res.ok) {
       const buf = Buffer.from(await res.arrayBuffer());
       let text: string;
@@ -116,7 +117,7 @@ export async function fetchTranscriptFromContentList(
 
   let summaryMd: string | null = null;
   if (summItem?.data_link) {
-    const res = await fetch(summItem.data_link);
+    const res = await fetch(summItem.data_link, { signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS) });
     if (res.ok) {
       const buf = Buffer.from(await res.arrayBuffer());
       let raw: string;

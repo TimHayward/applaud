@@ -11,11 +11,9 @@ import {
   softDeleteRecording,
   restoreRecording,
   purgeSoftDeletedRecordingNow,
-  markWebhookFired,
   setRecordingDisplayName,
 } from "../sync/state.js";
 import { loadConfig } from "../config.js";
-import { fireWebhookForRecording } from "../webhook/post.js";
 import { poller } from "../sync/poller.js";
 import { RECORDINGS_LIST_MAX_LIMIT } from "../constants.js";
 import type { RecordingDetail } from "@applaud/shared";
@@ -268,6 +266,11 @@ recordingsRouter.post("/:id/resync", async (req, res) => {
     return;
   }
   try {
+    // resyncRecording → processRecording already fires audio_ready /
+    // transcript_ready internally (and marks them) as each asset lands, so the
+    // route must NOT fire again — doing so delivered a duplicate webhook and
+    // turned a receiver-side failure into a misleading 502 even though the
+    // resync itself succeeded.
     await poller.resyncRecording(id);
     const fresh = getRecordingById(id);
     if (!fresh) {
@@ -275,12 +278,6 @@ recordingsRouter.post("/:id/resync", async (req, res) => {
       return;
     }
     const event = fresh.transcriptDownloadedAt ? "transcript_ready" : "audio_ready";
-    const fired = await fireWebhookForRecording(event, fresh);
-    if (!fired) {
-      res.status(502).json({ error: "webhook failed" });
-      return;
-    }
-    markWebhookFired(id, event);
     res.json({ ok: true, event });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

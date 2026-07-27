@@ -6,7 +6,8 @@ import { loadConfig } from "../config.js";
 import { getDb } from "../db.js";
 import { logger } from "../logger.js";
 import { signPayload } from "./sign.js";
-import { WEBHOOK_RETRY_BACKOFF_MS } from "../constants.js";
+import { assertWebhookTargetAllowed, redirectFailureMessage } from "../security/ssrf.js";
+import { WEBHOOK_RETRY_BACKOFF_MS, HTTP_FETCH_TIMEOUT_MS } from "../constants.js";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".svg"]);
 
@@ -180,10 +181,20 @@ export async function fireRaw(
   // logical delivery attempt, not a fresh request each time.
   const timestampSec = Math.floor(Date.now() / 1000);
   const signature = secret ? signPayload(secret, timestampSec, body) : null;
+  // A rejected target is a permanent condition — don't burn the retry schedule.
+  try {
+    await assertWebhookTargetAllowed(url);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logAttempt(recordingId, event, url, null, null, 0, message);
+    logger.warn({ url, message }, "webhook target rejected");
+    return false;
+  }
   for (let attempt = 0; attempt < WEBHOOK_RETRY_BACKOFF_MS.length; attempt++) {
     const started = Date.now();
     try {
       const res = await fetch(url, {
+        redirect: "manual",
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -194,10 +205,20 @@ export async function fireRaw(
             : {}),
         },
         body,
+        signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
       });
-      const text = (await res.text().catch(() => "")).slice(0, 500);
-      const ok = res.status >= 200 && res.status < 300;
-      logAttempt(recordingId, event, url, res.status, text, Date.now() - started, ok ? null : `HTTP ${res.status}`);
+      const redirected = redirectFailureMessage(res);
+      const text = redirected ? null : (await res.text().catch(() => "")).slice(0, 500);
+      const ok = !redirected && res.status >= 200 && res.status < 300;
+      logAttempt(
+        recordingId,
+        event,
+        url,
+        res.status,
+        text,
+        Date.now() - started,
+        ok ? null : (redirected ?? `HTTP ${res.status}`),
+      );
       if (ok) return true;
       if (attempt < WEBHOOK_RETRY_BACKOFF_MS.length - 1) {
         await new Promise((r) => setTimeout(r, WEBHOOK_RETRY_BACKOFF_MS[attempt]));
@@ -313,7 +334,19 @@ export async function testWebhook(
   const timestampSec = Math.floor(Date.now() / 1000);
   const signature = secret ? signPayload(secret, timestampSec, body) : null;
   try {
+    // This route hands the response body back to the caller, so an unchecked
+    // URL would make it a read oracle for anything the server can reach.
+    await assertWebhookTargetAllowed(url);
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - started,
+    };
+  }
+  try {
     const res = await fetch(url, {
+      redirect: "manual",
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -325,7 +358,17 @@ export async function testWebhook(
           : {}),
       },
       body,
+      signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
     });
+    const redirected = redirectFailureMessage(res);
+    if (redirected) {
+      return {
+        ok: false,
+        statusCode: res.status,
+        error: redirected,
+        durationMs: Date.now() - started,
+      };
+    }
     const text = (await res.text().catch(() => "")).slice(0, 500);
     return {
       ok: res.status >= 200 && res.status < 300,
