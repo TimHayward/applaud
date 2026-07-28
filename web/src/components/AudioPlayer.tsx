@@ -17,6 +17,27 @@ function isTypingTarget(e: KeyboardEvent): boolean {
 }
 
 /**
+ * True when the event came from a widget that owns the arrow keys itself —
+ * today that's the waveform (`role="slider"`, ±5% per press). Without this the
+ * document-level ±10s/+30s handler also fired and won, so the waveform's own
+ * arrow behavior never took effect.
+ */
+function isSliderTarget(e: KeyboardEvent): boolean {
+  const t = e.target;
+  return t instanceof Element && !!t.closest("[role='slider']");
+}
+
+/**
+ * True when the target is something the browser activates on Space (a button
+ * or link). Letting our Space shortcut through as well would toggle playback
+ * twice — e.g. a transcript block seeks *and* the player pauses.
+ */
+function isSpaceActivatedTarget(e: KeyboardEvent): boolean {
+  const t = e.target;
+  return t instanceof Element && !!t.closest("button, a[href], [role='button']");
+}
+
+/**
  * Audio player card: play/pause, ±skips, waveform seek, playback speed,
  * volume, keyboard shortcuts (Space, ←/→), and a download link.
  * Owns the <audio> element; the parent supplies the ref so e.g. the
@@ -103,12 +124,15 @@ export function AudioPlayer({
       if (isTypingTarget(e)) return;
       if (document.querySelector("[role='dialog'],[role='alertdialog']")) return;
       if (e.key === " ") {
+        if (isSpaceActivatedTarget(e)) return;
         e.preventDefault();
         togglePlay();
       } else if (e.key === "ArrowLeft") {
+        if (isSliderTarget(e)) return;
         e.preventDefault();
         skipBack();
       } else if (e.key === "ArrowRight") {
+        if (isSliderTarget(e)) return;
         e.preventDefault();
         skipForward();
       }

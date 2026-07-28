@@ -20,6 +20,13 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 - Server tuning is now overridable via environment variables (`server/src/constants.ts`, documented in the README): retry counts, page sizes, webhook backoff schedule, trash retention/probe cadence, User-Agent, and the recordings-list limit cap.
 - Real audio waveform: the player now decodes the audio (`AudioContext`) and renders actual amplitude peaks instead of a synthetic seeded shape, cached per recording, with a graceful fallback for very long/undecodable files.
 
+### Accessibility
+- Transcript click-to-seek is now a real button: reachable by Tab, activated with Enter/Space, and announced as "Play from &lt;timestamp&gt;, &lt;speaker&gt;".
+- Closing a dialog, the expanded summary, or transcript search returns focus to whatever opened it instead of dropping it at the top of the page.
+- Ctrl/Cmd+F opens transcript search when focus is inside the transcript, not just while hovering it.
+- Error toasts announce assertively and stay long enough to read — timing now scales with message length, and messages over ~160 characters wait for you to dismiss them. Adding a toast no longer re-announces the ones already on screen.
+- The Settings sync-status indicator uses a check / warning icon rather than colour alone.
+
 ### Security
 - **Docker instances now require a LAN access token.** A container listens on `0.0.0.0`; on first start Applaud generates a token and prints it to the container log (`docker logs applaud`), then requires it on every `/api` and `/media` request. Pin your own with `APPLAUD_LAN_TOKEN`, or opt out with `APPLAUD_ALLOW_NO_AUTH=1` if something else authenticates in front. Local installs are unchanged (loopback, no auth unless you set a token).
 - **Webhook targets must resolve to a public address.** The URL is validated (http(s) only, no embedded credentials) and resolved before connecting, and redirects are no longer followed — closing the SSRF read-oracle in **Test webhook**. Set `APPLAUD_WEBHOOK_ALLOW_PRIVATE=1` if your webhook target is on localhost or your LAN (n8n, Home Assistant, Node-RED).
@@ -29,6 +36,14 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 - Per-IP rate limits on `/api`, `/media`, and the outbound/filesystem routes (all env-tunable).
 - `POST /api/config/validate-recordings-dir` no longer creates directories implicitly: creation is opt-in and limited to a single folder under an existing parent. The setup wizard now offers an explicit **Create it** button.
 - Windows: the config directory ACL is locked to your account and `SYSTEM` on first run (`icacls /inheritance:r`), since `chmod 600` does nothing there. Skip with `APPLAUD_SKIP_ACL_HARDENING=1`.
+
+### Fixed (UI)
+- Opening a second recording no longer inherits the previous one's playhead, open rename box, or resync error.
+- The recordings and Trash lists no longer collapse to a skeleton on every keystroke or page turn — the current rows stay put (dimmed) while the next result loads.
+- Editing Settings is no longer clobbered by a background config refresh; unsaved changes survive until you save or leave.
+- Arrow keys on the waveform now step ±5% as documented, instead of being overridden by the player's ∓10s/+30s shortcut.
+- Per-row resync errors on the dashboard are cleared when the filter, sort, or page changes, so a returning row can't show a stale message.
+- Links inside an AI summary open in a new tab with `rel="noopener noreferrer"`.
 
 ### Changed
 - Audio files are now saved and served under their true extension derived from Plaud's `filetype` (e.g. `audio.mp3`, `audio.opus`) instead of always `audio.ogg`; the download link, media URLs, and webhook payload all reference the real filename. Existing `audio.ogg` recordings are unaffected. Added `.opus`/`.flac`/`.webm` to the media content types.

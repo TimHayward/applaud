@@ -27,17 +27,7 @@ _All items remediated — see [backlog-completed.md](backlog-completed.md) §2 (
 
 ## 3. Usability & UI
 
-- [ ] **P2 — Detail page keeps stale state across recordings.** `/recordings/:id` reuses the same element, so navigating A→B carries A's playhead, an open rename box, and any resync error until events overwrite them. Add `key={id}` to force a remount. (`web/src/routes/RecordingDetail.tsx`, `web/src/App.tsx:46`)
-- [ ] **P2 — List collapses to a skeleton on every search/page change.** No `placeholderData: keepPreviousData`, so `list.data` drops to `undefined` and the total/pagination footer flickers away and back on each keystroke and page turn. (`web/src/routes/Dashboard.tsx:121`, `web/src/routes/Trash.tsx:15`)
-- [ ] **P2 — Background config refetch silently wipes unsaved Settings edits.** The reset effect reruns on any `cfg.data` reference change (the always-mounted sync badge keeps `["config"]` alive and several mutations invalidate it); a refetch mid-edit clobbers the form. Guard "don't reset while dirty." (`web/src/routes/Settings.tsx:40-55`)
-- [ ] **P2 — Waveform arrow-key seek is broken by a double handler.** The slider's `onKeyDown` (±5%) and the document-level AudioPlayer handler (∓10s/+30s) both fire with no `stopPropagation`, and the global one wins, so the documented waveform arrow behavior never happens. (`web/src/components/Waveform.tsx:192-210`, `web/src/components/AudioPlayer.tsx:101-118`)
-- [ ] **P2 — Transcript click-to-seek is not keyboard-accessible.** Seek is a bare `<div onClick>` with no `role`/`tabIndex`/`onKeyDown`, so keyboard and screen-reader users can't seek from the transcript. Make each block a `<button>` (or add `role="button"` + Enter/Space). (`web/src/components/TranscriptCard.tsx:293-300`)
-- [ ] **P2 — Dialogs/overlays don't restore focus on close.** `ConfirmDialog`, `SummaryPanel`, and the transcript-search close drop focus to `<body>` (the trap, Escape, and initial focus are all correct). Capture `document.activeElement` on open and refocus it on close. (`web/src/components/ConfirmDialog.tsx`, `web/src/components/SummaryPanel.tsx`, `web/src/components/TranscriptCard.tsx:151,267`)
-- [ ] **P3 — Error toasts announce weakly, auto-dismiss too fast, and re-announce siblings.** Use `role="alert"`/`aria-live="assertive"` for errors, don't fixed-5s-dismiss long error messages, and move `aria-atomic` off the whole list so adding one toast doesn't re-announce all of them. (`web/src/components/Toast.tsx:41,56-63`)
-- [ ] **P3 — Ctrl/Cmd+F transcript search requires mouse hover.** The shortcut only binds while hovering, so a keyboard-only user who has tabbed into the transcript can never open in-card search. Also enable it on focus-within. (`web/src/components/TranscriptCard.tsx:137-148`)
-- [ ] **P3 — Stale per-row resync errors persist across filter/sort/page changes.** The error map is keyed by id and only cleared on the next resync of that row, so a reappearing row shows an old error. (`web/src/routes/Dashboard.tsx:136,153`)
-- [ ] **P3 — Settings health dot conveys state by color only.** Pair the dot with a text/icon cue for color-blind users. (`web/src/routes/Settings.tsx:164`)
-- [ ] **P3 — Summary-markdown external links lack `rel="noopener noreferrer"`.** Links open in-tab with `window.opener` intact. (`web/src/components/SummaryPanel.tsx`)
+_All items remediated — see [backlog-completed.md](backlog-completed.md) §3 (2026-07-28 pass)._
 
 ## 4. Feature enhancements
 

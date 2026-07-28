@@ -37,8 +37,14 @@ export function Settings(): JSX.Element {
   const [clearIgnoreBusy, setClearIgnoreBusy] = useState(false);
   const [clearIgnoreMsg, setClearIgnoreMsg] = useState<null | { ok: boolean; text: string }>(null);
 
+  // Sync the form from the server config — but never on top of unsaved edits.
+  // The `["config"]` query is kept alive by the always-mounted sync badge and
+  // is invalidated by several mutations, so a background refetch lands at
+  // arbitrary times; without the `dirty` guard it silently wipes whatever the
+  // user is typing. Saving clears `dirty`, which re-runs this and picks up the
+  // freshly persisted values.
   useEffect(() => {
-    if (!cfg.data) return;
+    if (!cfg.data || dirty) return;
     const c = cfg.data.config;
     setWebhookUrl(c.webhook?.url ?? "");
     setSecretExists(Boolean(c.webhook?.secret));
@@ -51,8 +57,7 @@ export function Settings(): JSX.Element {
     setLanTokenInput("");
     setLanTokenTouched(false);
     setShowLanToken(false);
-    setDirty(false);
-  }, [cfg.data]);
+  }, [cfg.data, dirty]);
 
   if (cfg.isLoading) return <p className="text-on-surface-variant">loading…</p>;
   const c = cfg.data?.config;
@@ -160,8 +165,21 @@ export function Settings(): JSX.Element {
       <section className="bg-surface-container-low rounded-xl p-8 transition-all hover:bg-surface-container">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="space-y-3">
+            {/* Icon + label, not just a colored dot: the shape carries the
+                state for anyone who can't distinguish the green/red fill. */}
             <div className="flex items-center gap-2">
-              <div className={`w-2.5 h-2.5 rounded-full ${isHealthy ? "bg-secondary shadow-[0_0_8px_rgb(var(--color-secondary)/0.4)]" : "bg-error shadow-[0_0_8px_rgb(var(--color-error)/0.4)]"}`} />
+              {isHealthy ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-secondary shrink-0" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="8 12.5 11 15.5 16 9" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-error shrink-0" aria-hidden="true">
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              )}
               <span className={`font-label text-xs font-bold tracking-widest uppercase ${isHealthy ? "text-secondary" : "text-error"}`}>
                 {isHealthy ? "All systems operational" : s?.authRequired ? "Auth required" : "Error detected"}
               </span>

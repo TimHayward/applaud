@@ -189,21 +189,25 @@ export function Waveform({ recordingId, audioSrc, durationMs, progress, onSeek }
     containerRef.current?.releasePointerCapture(e.pointerId);
   }, []);
 
+  // stopPropagation matters as much as preventDefault here: AudioPlayer has a
+  // document-level keydown handler (←/→ = ∓10s/+30s) that would otherwise also
+  // run for these presses and override the slider's ±5% step.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<SVGSVGElement>) => {
       const clamped = Math.max(0, Math.min(1, progress));
+      const seekTo = (frac: number): void => {
+        e.preventDefault();
+        e.stopPropagation();
+        onSeek(frac);
+      };
       if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
-        e.preventDefault();
-        onSeek(Math.max(0, clamped - 0.05));
+        seekTo(Math.max(0, clamped - 0.05));
       } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
-        e.preventDefault();
-        onSeek(Math.min(1, clamped + 0.05));
+        seekTo(Math.min(1, clamped + 0.05));
       } else if (e.key === "Home") {
-        e.preventDefault();
-        onSeek(0);
+        seekTo(0);
       } else if (e.key === "End") {
-        e.preventDefault();
-        onSeek(1);
+        seekTo(1);
       }
     },
     [onSeek, progress],

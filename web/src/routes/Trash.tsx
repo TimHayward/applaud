@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { RecordingRow } from "@applaud/shared";
 import { api } from "../api.js";
 import { useRecordingActions } from "../hooks/useRecordingActions.js";
@@ -15,6 +15,8 @@ export function Trash(): JSX.Element {
   const list = useQuery({
     queryKey: ["recordings-trash", { page }],
     queryFn: () => api.listTrashRecordings({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+    // Hold the current page on screen while the next one loads (see Dashboard).
+    placeholderData: keepPreviousData,
   });
 
   const toggleSelected = (id: string): void => {
@@ -113,7 +115,10 @@ export function Trash(): JSX.Element {
       )}
 
       {list.data && list.data.items.length > 0 && (
-        <ul className="space-y-3">
+        <ul
+          className={`space-y-3 transition-opacity ${list.isPlaceholderData ? "opacity-60" : "opacity-100"}`}
+          aria-busy={list.isPlaceholderData}
+        >
           {list.data.items.map((r: RecordingRow) => (
             <li
               key={r.id}

@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { parseTranscript, type TranscriptBlock } from "../lib/transcript.js";
+import { useFocusReturn } from "../hooks/useFocusReturn.js";
 import { useToast } from "./Toast.js";
 
 // Defined in index.css (:root) so the palette lives in one theme-owned place
@@ -94,7 +95,7 @@ export function TranscriptCard({
   onSeek: (seconds: number) => void;
 }): JSX.Element {
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const blockRefs = useRef<Map<number, HTMLElement>>(new Map());
   const toast = useToast();
   const blocks = useMemo(() => parseTranscript(text), [text]);
   const speakerMap = useMemo(() => new Map<string, string>(), []);
@@ -103,7 +104,21 @@ export function TranscriptCard({
   const [searchQuery, setSearchQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
   const [isHovering, setIsHovering] = useState(false);
+  const [isFocusWithin, setIsFocusWithin] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchFocus = useFocusReturn();
+
+  const openSearch = useCallback((): void => {
+    searchFocus.capture();
+    setSearchOpen(true);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, [searchFocus]);
+
+  const closeSearch = useCallback((): void => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    searchFocus.restore();
+  }, [searchFocus]);
 
   const allMatches = useMemo(() => findAllMatches(blocks, searchQuery), [blocks, searchQuery]);
 
@@ -132,23 +147,24 @@ export function TranscriptCard({
     setActiveMatch((a) => (a - 1 + allMatches.length) % allMatches.length);
   }, [allMatches.length]);
 
-  // Ctrl/Cmd+F to open search — only while the pointer is over the transcript,
-  // so the browser's native find-in-page still works everywhere else on the page.
+  // Ctrl/Cmd+F opens in-card search while the transcript is "engaged" — the
+  // pointer is over it, or focus is inside it. Hover alone locked keyboard-only
+  // users out entirely; outside those cases the browser's native find-in-page
+  // is left alone.
   useEffect(() => {
-    if (!isHovering) return;
+    if (!isHovering && !isFocusWithin) return;
     const handler = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
         e.preventDefault();
-        setSearchOpen(true);
-        setTimeout(() => searchInputRef.current?.focus(), 50);
+        openSearch();
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [isHovering]);
+  }, [isHovering, isFocusWithin, openSearch]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === "Escape") { setSearchOpen(false); setSearchQuery(""); }
+    if (e.key === "Escape") { closeSearch(); }
     else if (e.key === "Enter" && e.shiftKey) { goPrev(); }
     else if (e.key === "Enter") { goNext(); }
   };
@@ -234,6 +250,12 @@ export function TranscriptCard({
       style={{ maxHeight: "600px" }}
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
+      // React's onFocus/onBlur bubble, so these fire for any descendant —
+      // giving the keyboard equivalent of the hover state above.
+      onFocus={() => setIsFocusWithin(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsFocusWithin(false);
+      }}
     >
       {/* Header with search */}
       <div className="p-6 bg-surface-container-high flex justify-between items-center border-b border-outline-variant/30 flex-shrink-0 gap-3">
@@ -264,7 +286,7 @@ export function TranscriptCard({
             <button onClick={goNext} className="p-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Next (Enter)" aria-label="Next match">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
             </button>
-            <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Close (Esc)" aria-label="Close search">
+            <button onClick={closeSearch} className="p-1 text-on-surface-variant hover:text-on-surface transition-colors" title="Close (Esc)" aria-label="Close search">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
             </button>
           </div>
@@ -272,7 +294,7 @@ export function TranscriptCard({
           <div className="flex items-center gap-1">
             {copyButton}
             <button
-              onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }}
+              onClick={openSearch}
               className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors"
               title="Search transcript (Ctrl+F)"
               aria-label="Search transcript"
@@ -290,28 +312,35 @@ export function TranscriptCard({
           const color = speakerColor(block.speaker, speakerMap);
           const bm = blockMatchMap.get(i);
           return (
-            <div
+            // A <button>, not a <div onClick>: click-to-seek has to be
+            // reachable with Enter/Space and announced as an action, and the
+            // browser's own button semantics beat a hand-rolled role/tabIndex.
+            <button
               key={i}
+              type="button"
               ref={(el) => { if (el) blockRefs.current.set(i, el); }}
-              className={`flex gap-6 cursor-pointer group transition-opacity duration-200 ${
+              className={`w-full text-left flex gap-6 cursor-pointer group transition-opacity duration-200 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
                 activeIndex >= 0 && !isActive && !searchQuery ? "opacity-50" : "opacity-100"
               }`}
               onClick={() => onSeek(block.seconds)}
+              aria-label={`Play from ${block.timestamp}, ${block.speaker}`}
             >
-              <div className="w-20 shrink-0 text-right">
-                <p className="text-[10px] font-label text-on-surface-variant/60 leading-tight">{block.timestamp}</p>
-                <p className="text-xs font-bold tracking-tight mt-1 uppercase" style={{ color }}>{block.speaker}</p>
-              </div>
-              <div className="flex-1">
-                <p className={`text-on-surface leading-relaxed text-base ${isActive && !searchQuery ? "font-medium" : ""}`}>
+              {/* spans, not p/div: a <button> may only contain phrasing
+                  content, and the layout is all flex/block utilities anyway. */}
+              <span className="w-20 shrink-0 text-right">
+                <span className="block text-[10px] font-label text-on-surface-variant/60 leading-tight">{block.timestamp}</span>
+                <span className="block text-xs font-bold tracking-tight mt-1 uppercase" style={{ color }}>{block.speaker}</span>
+              </span>
+              <span className="flex-1">
+                <span className={`block text-on-surface leading-relaxed text-base ${isActive && !searchQuery ? "font-medium" : ""}`}>
                   {bm ? (
                     <HighlightedText text={block.text} matches={bm.matches} activeMatchIndex={activeMatch} globalOffset={bm.globalOffset} />
                   ) : (
                     block.text
                   )}
-                </p>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           );
         })}
       </div>

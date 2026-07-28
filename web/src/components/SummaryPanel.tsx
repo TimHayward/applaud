@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import type { Components } from "react-markdown";
+import { useFocusReturn } from "../hooks/useFocusReturn.js";
 import { useToast } from "./Toast.js";
 
 const PROSE_CLASSES =
@@ -14,12 +16,37 @@ function SummaryTitle({ id }: { id?: string }): JSX.Element {
   );
 }
 
+/**
+ * Summary markdown is third-party text (Plaud's AI output), so any link it
+ * contains opens in a new tab with the opener severed — `noopener` also blocks
+ * the `window.opener` handle back into this origin.
+ */
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ children, ...props }) => (
+    <a {...props} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ),
+};
+
 /** AI-summary sidebar card with copy-to-clipboard and an accessible expand modal. */
 export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const toast = useToast();
+  const openerFocus = useFocusReturn();
+
+  const openExpanded = useCallback((): void => {
+    openerFocus.capture();
+    setExpanded(true);
+  }, [openerFocus]);
+
+  // Return focus to the Expand button rather than dropping it on <body>.
+  const closeExpanded = useCallback((): void => {
+    setExpanded(false);
+    openerFocus.restore();
+  }, [openerFocus]);
 
   // Modal a11y: focus the close button on open, Escape to close, and trap
   // Tab focus inside the dialog while it's up.
@@ -28,7 +55,7 @@ export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
     closeRef.current?.focus();
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
-        setExpanded(false);
+        closeExpanded();
         return;
       }
       if (e.key === "Tab" && dialogRef.current) {
@@ -47,7 +74,7 @@ export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [expanded]);
+  }, [expanded, closeExpanded]);
 
   const copySummary = async (): Promise<void> => {
     try {
@@ -73,7 +100,7 @@ export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
             </button>
             <button
-              onClick={() => setExpanded(true)}
+              onClick={openExpanded}
               className="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors"
               title="Expand summary"
               aria-label="Expand summary"
@@ -87,7 +114,7 @@ export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
         </div>
         <div className="overflow-hidden relative" style={{ maxHeight: "50vh" }}>
           <div className={PROSE_CLASSES}>
-            <Markdown>{markdown}</Markdown>
+            <Markdown components={MARKDOWN_COMPONENTS}>{markdown}</Markdown>
           </div>
           {/* Fade overlay at bottom */}
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-surface-container-high to-transparent pointer-events-none" />
@@ -96,7 +123,7 @@ export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
 
       {/* Expanded modal */}
       {expanded && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6" onClick={() => setExpanded(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6" onClick={closeExpanded}>
           <div className="absolute inset-0 bg-surface/80 backdrop-blur-sm" />
           <div
             ref={dialogRef}
@@ -111,7 +138,7 @@ export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
               <SummaryTitle id="summary-dialog-title" />
               <button
                 ref={closeRef}
-                onClick={() => setExpanded(false)}
+                onClick={closeExpanded}
                 className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-lg transition-colors"
                 title="Close"
                 aria-label="Close"
@@ -123,7 +150,7 @@ export function SummaryPanel({ markdown }: { markdown: string }): JSX.Element {
             </div>
             <div className="overflow-y-auto p-6" style={{ maxHeight: "calc(90vh - 73px)" }}>
               <div className={PROSE_CLASSES}>
-                <Markdown>{markdown}</Markdown>
+                <Markdown components={MARKDOWN_COMPONENTS}>{markdown}</Markdown>
               </div>
             </div>
           </div>

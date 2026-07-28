@@ -11,8 +11,19 @@ import { SummaryPanel } from "../components/SummaryPanel.js";
 import { AttachmentsCard } from "../components/AttachmentsCard.js";
 import { formatDurationVerbose, formatDateTime, formatBytes } from "../lib/format.js";
 
+/**
+ * Route wrapper whose only job is the `key`: react-router reuses the same
+ * element across `/recordings/:id` navigations, so without a remount the next
+ * recording inherits the previous one's playhead, open rename box, and resync
+ * error until something happens to overwrite them.
+ */
 export function RecordingDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
+  const id = params.id ?? "";
+  return <RecordingDetail key={id} id={id} />;
+}
+
+function RecordingDetail({ id }: { id: string }): JSX.Element {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
@@ -23,7 +34,6 @@ export function RecordingDetailPage(): JSX.Element {
   const [resyncError, setResyncError] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
-  const id = params.id ?? "";
   const q = useQuery({
     queryKey: ["recording", id],
     queryFn: () => api.recordingDetail(id),

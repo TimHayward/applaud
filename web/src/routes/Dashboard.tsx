@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { MouseEvent } from "react";
 import { Link } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api.js";
 import { useDebouncedValue } from "../hooks/useDebouncedValue.js";
 import { useRecordingActions } from "../hooks/useRecordingActions.js";
@@ -109,14 +109,20 @@ export function Dashboard(): JSX.Element {
   const [starredOnly, setStarredOnly] = useState(false);
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [triggering, setTriggering] = useState(false);
+  const [resyncingIds, setResyncingIds] = useState<Set<string>>(new Set());
+  const [resyncErrors, setResyncErrors] = useState<Record<string, string>>({});
   const { bulkMoveToTrash } = useRecordingActions();
   const toast = useToast();
   useEffect(() => {
     setPage(0);
   }, [debouncedSearch, sort, fromDate, toDate, starredOnly]);
-  // Selection is page-scoped; clear it whenever the visible rows change.
+  // Selection and per-row resync errors are both page-scoped: clear them
+  // whenever the visible rows change, so a row that scrolls back into view on
+  // another page/filter doesn't reappear carrying a stale error.
   useEffect(() => {
     setSelected(new Set());
+    setResyncErrors({});
   }, [debouncedSearch, sort, fromDate, toDate, starredOnly, page]);
   const list = useQuery({
     queryKey: ["recordings", { search: debouncedSearch, sort, fromDate, toDate, starredOnly, page }],
@@ -130,10 +136,11 @@ export function Dashboard(): JSX.Element {
         to: dateStringToToMs(toDate),
         starred: starredOnly || undefined,
       }),
+    // Keep the current rows on screen while the next page / search result
+    // loads, so the list and its footer don't collapse to a skeleton on every
+    // keystroke and page turn. `isPlaceholderData` dims them meanwhile.
+    placeholderData: keepPreviousData,
   });
-  const [triggering, setTriggering] = useState(false);
-  const [resyncingIds, setResyncingIds] = useState<Set<string>>(new Set());
-  const [resyncErrors, setResyncErrors] = useState<Record<string, string>>({});
 
   const resyncRecording = async (id: string, e: MouseEvent): Promise<void> => {
     e.preventDefault();
@@ -372,7 +379,10 @@ export function Dashboard(): JSX.Element {
 
       {/* Recordings Grid */}
       {list.data && list.data.items.length > 0 && (
-        <div className="grid gap-3">
+        <div
+          className={`grid gap-3 transition-opacity ${list.isPlaceholderData ? "opacity-60" : "opacity-100"}`}
+          aria-busy={list.isPlaceholderData}
+        >
           {list.data.items.map((r: RecordingRow) => (
             <Link
               key={r.id}

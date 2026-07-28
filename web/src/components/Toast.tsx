@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useState } from "react";
 import type { ReactNode } from "react";
+import { toastDurationMs, type ToastKind } from "../lib/toastDuration.js";
 
-type ToastKind = "success" | "error" | "info";
 interface ToastItem {
   id: number;
   kind: ToastKind;
@@ -37,7 +37,9 @@ export function ToastProvider({ children }: { children: ReactNode }): JSX.Elemen
     (kind: ToastKind, message: string) => {
       const id = nextId++;
       setItems((prev) => [...prev, { id, kind, message }]);
-      setTimeout(() => dismiss(id), 5_000);
+      // `null` = stays until dismissed (long errors) — see toastDuration.ts.
+      const ms = toastDurationMs(kind, message);
+      if (ms != null) setTimeout(() => dismiss(id), ms);
     },
     [dismiss],
   );
@@ -51,15 +53,20 @@ export function ToastProvider({ children }: { children: ReactNode }): JSX.Elemen
   return (
     <ToastContext.Provider value={api}>
       {children}
+      {/* aria-atomic lives on each toast, not the list: on the list it made a
+          new toast re-announce every toast still on screen. */}
       <div
         className="fixed bottom-4 right-4 z-[200] flex flex-col gap-2 items-end pointer-events-none"
         aria-live="polite"
-        aria-atomic="true"
       >
         {items.map((t) => (
           <div
             key={t.id}
-            role="status"
+            // Errors interrupt (assertive) — they're the ones that change what
+            // the user should do next, and they may not auto-dismiss.
+            role={t.kind === "error" ? "alert" : "status"}
+            aria-live={t.kind === "error" ? "assertive" : "polite"}
+            aria-atomic="true"
             className={`pointer-events-auto max-w-sm rounded-lg px-4 py-3 text-sm font-medium shadow-lg border flex items-start gap-3 ${
               t.kind === "success"
                 ? "bg-secondary/15 border-secondary/30 text-secondary"

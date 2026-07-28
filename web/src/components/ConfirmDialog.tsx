@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useFocusReturn } from "../hooks/useFocusReturn.js";
 
 interface ConfirmOptions {
   title: string;
@@ -28,18 +29,30 @@ export function ConfirmProvider({ children }: { children: ReactNode }): JSX.Elem
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
-  const confirm = useCallback<ConfirmFn>((options) => {
-    return new Promise<boolean>((resolve) => {
-      setPending({ options, resolve });
-    });
-  }, []);
+  // Captured here, in the caller's event handler, so it's the button that
+  // asked for confirmation — not the dialog's own Cancel button, which has
+  // focus by the time any effect runs.
+  const openerFocus = useFocusReturn();
+
+  const confirm = useCallback<ConfirmFn>(
+    (options) => {
+      openerFocus.capture();
+      return new Promise<boolean>((resolve) => {
+        setPending({ options, resolve });
+      });
+    },
+    [openerFocus],
+  );
 
   const close = useCallback(
     (result: boolean) => {
       pending?.resolve(result);
       setPending(null);
+      // Hand focus back to whatever opened the dialog instead of dropping it
+      // on <body>, which would send a keyboard user back to the page top.
+      openerFocus.restore();
     },
-    [pending],
+    [pending, openerFocus],
   );
 
   useEffect(() => {
