@@ -4,6 +4,8 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-10-13
+
 ### Changed
 - **Requires Node.js 22 or newer** (Node 20 reached end-of-life in April 2026). The Docker image now uses `node:22-slim`.
 - **The database is migrated on first start** (versioned migrations; one-way). File locations are no longer stored as absolute paths, so you can move your recordings folder or change the Docker mount path without breaking the library.
@@ -24,6 +26,7 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 - You can now reconnect an expired or revoked Plaud session: Settings → Account Details → **Reconnect Plaud account**. The "auth required" badge links there, and syncing resumes as soon as the new session is accepted.
 
 ### Added
+- App version shown at the bottom of Settings.
 - **Settings → Webhook Outbound → Public URL**: webhook `http_urls` use this address, and with a LAN access token each link carries a read-only ticket for that one recording (valid 7 days, `APPLAUD_WEBHOOK_URL_TTL_HOURS`), so receivers like n8n can download files without the token or URL rewriting.
 - LAN access token: optional bearer/`?token=` auth gating `/api` and `/media` for LAN-exposed instances (Settings → LAN Access).
 - `/api/health` liveness endpoint + Docker `HEALTHCHECK`; container now runs as the non-root `node` user.

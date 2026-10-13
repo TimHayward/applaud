@@ -594,6 +594,9 @@ export function Settings(): JSX.Element {
         <p className="mt-4 font-label text-[10px] text-on-surface-variant uppercase tracking-[0.15em]">
           Changes take effect immediately on local engine.
         </p>
+        <p className="mt-2 font-label text-[10px] text-on-surface-variant uppercase tracking-[0.15em]">
+          Applaud v{__APP_VERSION__}
+        </p>
       </footer>
     </div>
   );

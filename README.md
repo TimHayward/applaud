@@ -30,12 +30,12 @@ First, you should never run commands you find on the internet that end in `| sh`
 
 **macOS / Linux / WSL:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rsteckler/applaud/v0.5.11/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/TimHayward/applaud/v0.5.12/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/rsteckler/applaud/v0.5.11/install.ps1 | iex
+irm https://raw.githubusercontent.com/TimHayward/applaud/v0.5.12/install.ps1 | iex
 ```
 
 The installer does everything needed to install Applaud into a subfolder named `./applaud`. To run it:
@@ -50,7 +50,7 @@ Your browser will open to `http://127.0.0.1:44471/setup`. Walk through the 5-ste
 ### Manual install
 
 ```bash
-git clone https://github.com/rsteckler/applaud.git
+git clone https://github.com/TimHayward/applaud.git
 cd applaud
 pnpm install
 pnpm build
@@ -205,7 +205,7 @@ docker run -d \
   -p 44471:44471 \
   -v applaud-config:/data/config \
   -v applaud-recordings:/data/recordings \
-  ghcr.io/rsteckler/applaud:latest
+  ghcr.io/timhayward/applaud:latest
 ```
 
 Or build from source:
