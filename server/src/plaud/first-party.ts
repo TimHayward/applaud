@@ -18,6 +18,7 @@ import { logger } from "../logger.js";
 import { loadConfig, updateConfig } from "../config.js";
 import { apiBaseForRegion, PlaudAuthError } from "./client.js";
 import { parseJwtClaims } from "../auth/jwt.js";
+import { HTTP_FETCH_TIMEOUT_MS, PLAUD_USER_AGENT } from "../constants.js";
 import {
   isExpiryWithinSkew,
   listWorkspaces,
@@ -32,8 +33,6 @@ import {
   type SessionTokens,
 } from "./session.js";
 
-const PLAUD_USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 /** The subset of config written when a first-party session is (re)established. */
 export type FirstPartyPatch = Pick<
@@ -68,6 +67,7 @@ async function probeEmail(workspaceToken: string, region: string): Promise<strin
         "user-agent": PLAUD_USER_AGENT,
         authorization: `Bearer ${workspaceToken}`,
       },
+      signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     const body = (await res.json()) as { status?: number; data_user?: { email?: string | null } };
@@ -199,13 +199,36 @@ export async function ensureFreshWorkspaceToken(force = false): Promise<void> {
     }
   }
 
-  // 2. Mint a fresh WT from the (possibly refreshed) UT.
+  // 2. Mint a fresh WT from the (possibly refreshed) UT. A `stale` mint means
+  // the stored workspace id is no longer valid (workspace removed/migrated):
+  // re-list, pick the personal workspace again, and re-mint once.
+  let workspaceId = cfg.plaudWorkspaceId;
   try {
-    const minted = await mintWorkspaceToken(ut, cfg.plaudWorkspaceId, region);
+    let minted: { workspaceToken: string; region: string };
+    try {
+      minted = await mintWorkspaceToken(ut, workspaceId, region);
+    } catch (err) {
+      if (!(err instanceof PlaudMintError) || err.kind !== "stale") throw err;
+      logger.warn({ workspaceId, err: err.message }, "first-party: workspace token mint stale — re-listing workspaces");
+      workspaceId = await relistWorkspaceId(ut, region);
+      try {
+        minted = await mintWorkspaceToken(ut, workspaceId, region);
+      } catch (retryErr) {
+        // Still stale against a freshly listed workspace: nothing more we can
+        // do automatically — the session needs to be re-established.
+        if (retryErr instanceof PlaudMintError && retryErr.kind === "stale") {
+          throw new PlaudAuthError(
+            `Plaud workspace token mint still rejected after re-listing workspaces — reconnect required: ${retryErr.message}`,
+          );
+        }
+        throw retryErr;
+      }
+    }
     updateConfig({
       token: minted.workspaceToken,
       tokenExp: jwtExp(minted.workspaceToken),
       plaudRegion: minted.region,
+      ...(workspaceId !== cfg.plaudWorkspaceId ? { plaudWorkspaceId: workspaceId } : {}),
     });
     logger.info({ region: minted.region }, "first-party: minted fresh workspace token");
   } catch (err) {
@@ -217,4 +240,23 @@ export async function ensureFreshWorkspaceToken(force = false): Promise<void> {
     }
     throw err;
   }
+}
+
+/** Re-list workspaces for a stale-mint recovery. Throws PlaudAuthError if the account has none. */
+async function relistWorkspaceId(ut: string, region: string): Promise<string> {
+  let workspaces;
+  try {
+    ({ workspaces } = await listWorkspaces(ut, region));
+  } catch (err) {
+    if (err instanceof PlaudRelayError) {
+      if (err.kind === "rejected") {
+        throw new PlaudAuthError(`Plaud workspace list rejected — reconnect required: ${err.message}`);
+      }
+      throw new Error(`Plaud workspace list ${err.kind}: ${err.message}`);
+    }
+    throw err;
+  }
+  const id = pickPersonalWorkspaceId(workspaces);
+  if (!id) throw new PlaudAuthError("This Plaud account no longer has any workspaces — reconnect required");
+  return id;
 }

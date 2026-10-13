@@ -48,6 +48,17 @@ export interface AuthValidateResponse {
   error?: string;
 }
 
+/**
+ * `GET /api/auth/ticket`: a short-lived signed credential for requests that
+ * can't send the bearer header (media links, `EventSource`), passed as
+ * `?ticket=`. Both fields are null when no LAN token is configured.
+ */
+export interface TicketResponse {
+  ticket: string | null;
+  /** Expiry, epoch ms. */
+  expiresAt: number | null;
+}
+
 export interface SetupStatusResponse {
   setupComplete: boolean;
   hasToken: boolean;

@@ -34,6 +34,7 @@ const baseConfig: AppConfig = {
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
+  publicBaseUrl: null,
   lanToken: null,
   authMode: null,
   ut: null,
@@ -102,20 +103,40 @@ describe("plaudJson", () => {
     expect(updateConfig).not.toHaveBeenCalledWith({ plaudRegion: expect.anything() });
   });
 
-  it("returns Plaud -302 JSON body as-is in current architecture", async () => {
-    mock.enqueue({
-      status: 200,
-      body: JSON.stringify({
-        status: -302,
-        msg: "wrong region",
-        data: { domains: { api: "https://api-rogue.plaud.ai" } },
-      }),
-    });
+  const redirectTo = (api: string): string =>
+    JSON.stringify({ status: -302, msg: "user region mismatch", data: { domains: { api } } });
 
-    const out = await plaudJson<{ status: number; msg: string }>("/file/list");
-    expect(out.status).toBe(-302);
-    expect(out.msg).toBe("wrong region");
+  it("follows a -302 region redirect once and persists the corrected region", async () => {
+    mock.enqueue({ status: 200, body: redirectTo("https://api-euc1.plaud.ai") });
+    mock.enqueue({ status: 200, body: JSON.stringify({ status: 0, items: [] }) });
+
+    const out = await plaudJson<{ status: number }>("/file/list");
+    expect(out.status).toBe(0);
+    expect(mock.calls.map((c) => c.url)).toEqual([
+      "https://api.plaud.ai/file/list",
+      "https://api-euc1.plaud.ai/file/list",
+    ]);
+    expect(updateConfig).toHaveBeenCalledWith({ plaudRegion: "aws:eu-central-1" });
+  });
+
+  it("refuses a -302 to an unknown host instead of sending the token there", async () => {
+    mock.enqueue({ status: 200, body: redirectTo("https://api-rogue.plaud.ai") });
+    await expect(plaudJson("/file/list")).rejects.toBeInstanceOf(PlaudApiError);
     expect(mock.calls.length).toBe(1);
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("stops after a second -302 rather than looping", async () => {
+    mock.enqueue({ status: 200, body: redirectTo("https://api-euc1.plaud.ai") });
+    mock.enqueue({ status: 200, body: redirectTo("https://api-apse1.plaud.ai") });
+    await expect(plaudJson("/file/list")).rejects.toThrow(/second region redirect/);
+    expect(mock.calls.length).toBe(2);
+  });
+
+  it("returns the -302 envelope unchanged when the caller pinned apiBase", async () => {
+    mock.enqueue({ status: 200, body: redirectTo("https://api-euc1.plaud.ai") });
+    const out = await plaudJson<{ status: number }>("/file/list", { apiBase: "https://api.plaud.ai" });
+    expect(out.status).toBe(-302);
     expect(updateConfig).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,5 @@
 import { logger } from "../logger.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, updateConfig } from "../config.js";
 import { PLAUD_USER_AGENT, PLAUD_FETCH_MAX_ATTEMPTS, HTTP_FETCH_TIMEOUT_MS } from "../constants.js";
 
 const REGION_API_BASES: Record<string, string> = {
@@ -173,6 +173,33 @@ export async function plaudFetch(pathOrUrl: string, init: FetchInit = {}): Promi
 }
 
 export async function plaudJson<T>(path: string, init: FetchInit = {}): Promise<T> {
+  const body = await plaudJsonOnce(path, init);
+  // Region `-302`: the account lives in another region (Plaud can migrate
+  // accounts). When the call used the configured region, persist the corrected
+  // one and retry once; callers that pinned `apiBase` (token validation walks
+  // the regions itself) get the envelope back unchanged.
+  const redirect = init.apiBase ? null : parseRegionRedirect(body);
+  if (!redirect) return body as T;
+  if (!redirect.ok) {
+    throw new PlaudApiError(
+      `Plaud region redirect for ${path} points at ${redirect.apiBase ?? "no endpoint"}, which is not a known Plaud region`,
+      200,
+      "",
+    );
+  }
+  logger.info(
+    { previousRegion: loadConfig().plaudRegion, region: redirect.region },
+    "Plaud region mismatch — switching region and retrying",
+  );
+  updateConfig({ plaudRegion: redirect.region });
+  const retried = await plaudJsonOnce(path, { ...init, apiBase: redirect.apiBase });
+  if (parseRegionRedirect(retried)) {
+    throw new PlaudApiError(`Plaud ${path} returned a second region redirect after switching region`, 200, "");
+  }
+  return retried as T;
+}
+
+async function plaudJsonOnce(path: string, init: FetchInit): Promise<unknown> {
   const res = await plaudFetch(path, init);
   const text = await res.text();
   if (!res.ok) {
@@ -183,7 +210,7 @@ export async function plaudJson<T>(path: string, init: FetchInit = {}): Promise<
     );
   }
   try {
-    return JSON.parse(text) as T;
+    return JSON.parse(text) as unknown;
   } catch (err) {
     throw new PlaudApiError(
       `Plaud ${path} returned non-JSON: ${String(err)}`,

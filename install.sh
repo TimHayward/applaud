@@ -6,7 +6,7 @@
 #
 # What it does:
 #   1. Installs pnpm (via the official installer) if not already present.
-#   2. Ensures Node.js >= 20 is available (installs via pnpm if missing).
+#   2. Ensures Node.js >= 22 is available (installs via pnpm if missing).
 #   3. Clones the applaud repo into ./applaud (or $APPLAUD_DIR).
 #   4. Runs `pnpm install` and `pnpm build`.
 #   5. Prints the commands to start applaud.
@@ -15,7 +15,7 @@ set -eu
 REPO_URL="${APPLAUD_REPO:-https://github.com/rsteckler/applaud.git}"
 REPO_REF="${APPLAUD_REF:-v0.5.11}"
 INSTALL_DIR="${APPLAUD_DIR:-$PWD/applaud}"
-MIN_NODE_MAJOR=20
+MIN_NODE_MAJOR=22
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }

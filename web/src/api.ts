@@ -15,6 +15,7 @@ import type {
   WebhookLogResponse,
   WebhookRedeliverResponse,
   RenameRecordingResponse,
+  TicketResponse,
 } from "@applaud/shared";
 
 export class ApiError extends Error {
@@ -47,15 +48,26 @@ export function setLanToken(token: string | null): void {
 }
 
 /**
- * Appends the LAN token as a query param for elements that can't set request
- * headers (<audio src>, <a href download>, <img src>) — e.g. /media/* URLs.
- * No-op when no lanToken is configured.
+ * Appends a signed ticket (from `GET /api/auth/ticket`) for requests that can't
+ * set the bearer header — `<audio src>`, `<a href download>`, `<img src>`,
+ * `EventSource`. Unlike the raw LAN token, a ticket only grants read access
+ * and expires on its own, so it's harmless if it ends up in history or logs.
+ * Components get one via `useMediaUrl()`; see `ticketedUrl` for one-offs.
  */
-export function mediaUrl(path: string): string {
-  const token = getLanToken();
-  if (!token) return path;
+export function withTicket(path: string, ticket: string | null): string {
+  if (!ticket) return path;
   const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}token=${encodeURIComponent(token)}`;
+  return `${path}${sep}ticket=${encodeURIComponent(ticket)}`;
+}
+
+/**
+ * `path` with a freshly issued ticket appended — for `EventSource`, which
+ * reconnects with a new URL each time. Plain `path` when no LAN token is set.
+ */
+export async function ticketedUrl(path: string): Promise<string> {
+  if (!getLanToken()) return path;
+  const { ticket } = await api.mediaTicket();
+  return withTicket(path, ticket);
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -104,6 +116,7 @@ export const api = {
     }),
   authStartWatch: () =>
     jsonFetch<{ watchId: string }>("/api/auth/watch", { method: "POST", body: "{}" }),
+  mediaTicket: () => jsonFetch<TicketResponse>("/api/auth/ticket"),
   config: () => jsonFetch<ConfigResponse>("/api/config"),
   updateConfig: (patch: Partial<AppConfig>) =>
     jsonFetch<ConfigResponse>("/api/config", {

@@ -13,6 +13,7 @@ const baseConfig: AppConfig = {
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
+  publicBaseUrl: null,
   lanToken: null,
   authMode: null,
   ut: null,

@@ -21,15 +21,11 @@
 import { logger } from "../logger.js";
 import { parseJwtClaims } from "../auth/jwt.js";
 import { apiBaseForRegion, parseRegionRedirect } from "./client.js";
+import { HTTP_FETCH_TIMEOUT_MS, PLAUD_USER_AGENT } from "../constants.js";
 
 // Default region key used when a call succeeds without a `-302` follow and the
 // caller supplied no starting region. Matches Plaud's default (api.plaud.ai).
 const DEFAULT_REGION = "aws:us-west-2";
-
-// Present as a current desktop Chrome so Plaud sees browser-shaped traffic
-// rather than a bot-flagged custom UA (same rationale as client.ts).
-const PLAUD_USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 /** Refresh a UT this close to (or past) its expiry before using it. */
 export const UT_REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -228,7 +224,14 @@ async function doFetch(opts: DoFetchOpts): Promise<RawAttempt | AttemptFailure> 
 
   let res: Response;
   try {
-    res = await fetch(url, { method: opts.method, headers, body: opts.body });
+    // Bounded like every other Plaud call, so a stalled connection surfaces as
+    // a transient failure instead of hanging the poll or the accept request.
+    res = await fetch(url, {
+      method: opts.method,
+      headers,
+      body: opts.body,
+      signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
+    });
   } catch (err) {
     return {
       ok: false,

@@ -1,8 +1,87 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "node:fs";
+import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resolveSafe, computeRange, contentDisposition } from "./media.js";
+import express from "express";
+import type { Server } from "node:http";
+
+const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
+const streamMock = vi.hoisted(() => ({ fail: false as false | string }));
+vi.mock("../config.js", () => ({ loadConfig }));
+vi.mock("../logger.js", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    // Simulates a file that vanishes / is locked between the stat and the open:
+    // the stream errors before ever emitting 'open', like a real fs.ReadStream.
+    createReadStream: (...args: Parameters<typeof actual.createReadStream>) => {
+      if (!streamMock.fail) return actual.createReadStream(...args);
+      const r = new Readable({ read() {} });
+      process.nextTick(() => r.destroy(Object.assign(new Error("EBUSY: resource busy or locked"), { code: streamMock.fail })));
+      return r;
+    },
+  };
+});
+
+import { resolveSafe, computeRange, contentDisposition, mediaRouter } from "./media.js";
+
+describe("mediaRouter streaming", () => {
+  let base: string;
+  let server: Server;
+  let url: string;
+
+  beforeEach(async () => {
+    base = realpathSync(mkdtempSync(path.join(tmpdir(), "applaud-media-route-")));
+    mkdirSync(path.join(base, "rec1"));
+    writeFileSync(path.join(base, "rec1", "audio.ogg"), "0123456789");
+    loadConfig.mockReturnValue({ recordingsDir: base });
+    streamMock.fail = false;
+    const app = express();
+    app.use("/media", mediaRouter);
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, "127.0.0.1", () => resolve());
+    });
+    const addr = server.address();
+    url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/media/rec1/audio.ogg`;
+  });
+
+  afterEach(async () => {
+    // The client can finish reading a body a tick before the server marks the
+    // request finished; drop sockets outright so close() doesn't wait on that.
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("serves a file and a byte range", async () => {
+    expect(await (await fetch(url)).text()).toBe("0123456789");
+    const ranged = await fetch(url, { headers: { range: "bytes=2-4" } });
+    expect(ranged.status).toBe(206);
+    expect(await ranged.text()).toBe("234");
+  });
+
+  it("answers 500 (not a crash) when the file can't be opened, and keeps serving", async () => {
+    streamMock.fail = "EBUSY";
+    const res = await fetch(url, { headers: { range: "bytes=2-4" } });
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-range")).toBeNull();
+    // Drain the body so undici releases the keep-alive connection.
+    expect(await res.text()).toBe("could not read file");
+    streamMock.fail = false;
+    expect(await (await fetch(url)).text()).toBe("0123456789");
+  });
+
+  it("answers 404 when the file disappears between the stat and the open", async () => {
+    streamMock.fail = "ENOENT";
+    const r = await fetch(url, { headers: { range: "bytes=2-4" } });
+    expect(r.status).toBe(404);
+    await r.text();
+  });
+});
 
 describe("resolveSafe (media path-traversal guard)", () => {
   let base: string;

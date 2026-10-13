@@ -204,6 +204,51 @@ describe("ensureFreshWorkspaceToken", () => {
     await expect(ensureFreshWorkspaceToken()).rejects.toBeInstanceOf(PlaudAuthError);
   });
 
+  const staleWtConfig = (): AppConfig =>
+    base({
+      authMode: "first_party",
+      token: "old-wt",
+      tokenExp: soonSec(),
+      ut: jwt({ exp: laterSec() }),
+      utExp: laterSec(),
+      urt: jwt({ exp: laterSec() }),
+      plaudWorkspaceId: "gone",
+      plaudRegion: "aws:us-west-2",
+    });
+  const staleMint = { body: JSON.stringify({ status: -1, msg: "workspace not found" }) };
+
+  it("re-lists workspaces and re-mints when the stored workspace id is stale", async () => {
+    loadConfig.mockReturnValue(staleWtConfig());
+    const newWt = jwt({ exp: laterSec() });
+    mock = installFetch([staleMint, { body: wsListOk }, { body: mintOk(newWt) }]);
+    await ensureFreshWorkspaceToken();
+    expect(mock.calls[1]!.url).toContain("/team-app/workspaces/list");
+    expect(mock.calls[2]!.url).toContain("/user-app/auth/workspace/token/me");
+    expect(updateConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ token: newWt, plaudWorkspaceId: "me" }),
+    );
+  });
+
+  it("asks for a reconnect when the mint is still stale after re-listing", async () => {
+    loadConfig.mockReturnValue(staleWtConfig());
+    mock = installFetch([staleMint, { body: wsListOk }, staleMint]);
+    await expect(ensureFreshWorkspaceToken()).rejects.toBeInstanceOf(PlaudAuthError);
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("asks for a reconnect when re-listing finds no workspaces", async () => {
+    loadConfig.mockReturnValue(staleWtConfig());
+    mock = installFetch([staleMint, { body: JSON.stringify({ status: 0, data: { workspaces: [] } }) }]);
+    await expect(ensureFreshWorkspaceToken()).rejects.toBeInstanceOf(PlaudAuthError);
+  });
+
+  it("bounds every first-party call with a timeout signal", async () => {
+    loadConfig.mockReturnValue(staleWtConfig());
+    mock = installFetch([staleMint, { body: wsListOk }, { body: mintOk(jwt({ exp: laterSec() })) }]);
+    await ensureFreshWorkspaceToken();
+    for (const call of mock.calls) expect(call.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
   it("throws PlaudAuthError when first-party tokens are missing", async () => {
     loadConfig.mockReturnValue(base({ authMode: "first_party", token: null, tokenExp: null }));
     mock = installFetch([]);

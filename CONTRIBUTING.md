@@ -11,7 +11,7 @@ pnpm install
 pnpm dev        # Vite dev server on :44470 proxying /api + /media to the Express server on :44471
 ```
 
-Requires Node.js >= 20 and pnpm >= 9. `better-sqlite3` ships prebuilt binaries for Node 20–26; other versions may need a local C++ toolchain.
+Requires Node.js >= 22 (Node 20 reached end-of-life in April 2026) and pnpm >= 9. `better-sqlite3` ships prebuilt binaries for Node 20–26; other versions may need a local C++ toolchain.
 
 ## Repository layout
 

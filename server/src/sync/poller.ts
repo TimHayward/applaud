@@ -21,6 +21,7 @@ import {
   markTranscriptDownloaded,
   markSummaryDownloaded,
   markWebhookFired,
+  recordWebhookFailure,
   recordError,
   getRecordingById,
   findRecordingsNeedingAssets,
@@ -44,9 +45,10 @@ import {
   POLLER_LIST_PAGE_OVERLAP,
   POLLER_RUN_WATCHDOG_MS,
   HTTP_FETCH_TIMEOUT_MS,
+  WEBHOOK_REDRIVE_MAX_PER_POLL,
 } from "../constants.js";
 import { sanitizeFilename } from "./layout.js";
-import { fireWebhookForRecording } from "../webhook/post.js";
+import { fireWebhookForRecording, type FireOptions } from "../webhook/post.js";
 import { emit } from "./events.js";
 import type { RecordingRow } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
@@ -68,6 +70,12 @@ class Poller {
   private pendingManualSync = false;
   /** Recording ids currently being fetched/written, guarding scheduled and manual (resync) processing from overlapping on the same row. */
   private processingIds = new Set<string>();
+  /**
+   * A cycle the watchdog gave up on, still winding down to its next abort
+   * checkpoint. New cycles wait for it (up to another watchdog period) so two
+   * never run side by side.
+   */
+  private abandoned: { settled: Promise<void>; since: number } | null = null;
   lastPollAt: number | null = null;
   nextPollAt: number | null = null;
   lastError: string | null = null;
@@ -129,27 +137,55 @@ class Poller {
     if (this.processingIds.has(id)) {
       throw new Error("recording is already being synced — try again in a moment");
     }
+    // Resync runs outside the poll cycle, so it keeps the first-party
+    // workspace token fresh itself (no-op for legacy installs).
+    await ensureFreshWorkspaceToken();
     resetDownloadStateForResync(id);
     const refreshed = getRecordingById(id);
     if (!refreshed) throw new Error("recording not found");
-    await this.processRecording(refreshed, true);
+    try {
+      await this.processRecording(refreshed, true);
+    } catch (err) {
+      // Same mid-flight 401 recovery as a poll: Plaud rejected a WT that
+      // hadn't hit its expiry skew — force one re-mint and retry.
+      if (!(err instanceof PlaudAuthError) || loadConfig().authMode !== "first_party") throw err;
+      await ensureFreshWorkspaceToken(true);
+      const again = getRecordingById(id);
+      if (again) await this.processRecording(again, true);
+    }
   }
 
   /**
-   * Race an operation against a hard deadline. Even with per-fetch timeouts,
-   * this is a belt-and-suspenders guard so a single poll cycle can never hang
-   * `inFlight` (and thus silently no-op every later tick) forever.
+   * Run a cycle against a hard deadline. Even with per-fetch timeouts, this is
+   * a belt-and-suspenders guard so a single poll cycle can never hang
+   * `inFlight` (and thus silently no-op every later tick) forever. On timeout
+   * the cycle's signal is aborted, so it stops at its next checkpoint rather
+   * than running on alongside the next cycle (see `abandoned`).
    */
-  private async withWatchdog<T>(op: () => Promise<T>): Promise<T> {
+  private async withWatchdog<T>(op: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const running = op(controller.signal);
     let timer: NodeJS.Timeout;
     const watchdog = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`poll cycle exceeded ${POLLER_RUN_WATCHDOG_MS}ms watchdog`)),
-        POLLER_RUN_WATCHDOG_MS,
-      );
+      timer = setTimeout(() => {
+        const err = new Error(`poll cycle exceeded ${POLLER_RUN_WATCHDOG_MS}ms watchdog`);
+        controller.abort(err);
+        const abandoned = {
+          settled: running.then(
+            () => undefined,
+            () => undefined,
+          ),
+          since: Date.now(),
+        };
+        this.abandoned = abandoned;
+        void abandoned.settled.then(() => {
+          if (this.abandoned === abandoned) this.abandoned = null;
+        });
+        reject(err);
+      }, POLLER_RUN_WATCHDOG_MS);
     });
     try {
-      return await Promise.race([op(), watchdog]);
+      return await Promise.race([running, watchdog]);
     } finally {
       clearTimeout(timer!);
     }
@@ -157,10 +193,20 @@ class Poller {
 
   private async runOnce(): Promise<void> {
     if (this.inFlight) return;
+    if (this.abandoned) {
+      if (Date.now() - this.abandoned.since < POLLER_RUN_WATCHDOG_MS) {
+        logger.warn("previous poll cycle is still stopping after its watchdog fired — skipping this run");
+        return;
+      }
+      // Every unit of work is bounded by a fetch timeout, so this shouldn't
+      // happen — but never let one stuck cycle disable syncing for good.
+      logger.error("abandoned poll cycle never stopped — starting a new cycle anyway");
+      this.abandoned = null;
+    }
     this.inFlight = true;
     emit("poll_start");
     try {
-      await this.withWatchdog(() => this.pollAndProcess());
+      await this.withWatchdog((signal) => this.pollAndProcess(signal));
       this.lastError = null;
     } catch (err) {
       // First-party mid-poll 401: Plaud rejected an unexpired WT (revoked or
@@ -168,7 +214,7 @@ class Poller {
       if (err instanceof PlaudAuthError && loadConfig().authMode === "first_party") {
         try {
           await ensureFreshWorkspaceToken(true);
-          await this.withWatchdog(() => this.pollAndProcess());
+          await this.withWatchdog((signal) => this.pollAndProcess(signal));
           this.lastError = null;
           return;
         } catch (retryErr) {
@@ -201,7 +247,13 @@ class Poller {
     }
   }
 
-  private async pollAndProcess(): Promise<void> {
+  /**
+   * One poll cycle. `signal` is aborted by the watchdog; it is checked between
+   * units of work (list pages, recordings, deliveries, probes), each of which
+   * is bounded by its own fetch timeouts — so an abandoned cycle stops within
+   * one unit instead of running to completion in the background.
+   */
+  private async pollAndProcess(signal: AbortSignal): Promise<void> {
     const cfg = loadConfig();
     if (!cfg.token || !cfg.recordingsDir || !cfg.setupComplete) return;
 
@@ -240,11 +292,14 @@ class Poller {
         0,
         pageIdx * POLLER_LIST_PAGE_SIZE - (pageIdx > 0 ? POLLER_LIST_PAGE_OVERLAP : 0),
       );
+      signal.throwIfAborted();
       const page = await listRecordings({
         skip,
         limit: POLLER_LIST_PAGE_SIZE,
         isTrash: listTrashMode,
       });
+      // The cycle may have been abandoned while this page was in flight.
+      signal.throwIfAborted();
       if (page.status !== 0) {
         throw new Error(`Plaud list returned status=${page.status} msg=${page.msg}`);
       }
@@ -275,6 +330,7 @@ class Poller {
     // every poll until it's downloaded.
     const needy = findRecordingsNeedingAssets();
     for (const row of needy) {
+      signal.throwIfAborted();
       await this.processRecording(row).catch((err) => {
         // An auth failure must bubble out to runOnce so the 401 re-mint /
         // "reconnect required" path fires — never get swallowed as a per-row
@@ -287,17 +343,24 @@ class Poller {
       });
     }
 
-    // Phase 2b — Webhook re-drive: any downloaded asset whose delivery never
-    // succeeded (fired_at IS NULL) gets (re)fired here, so a delivery lost after
-    // the in-process backoff window recovers on its own instead of needing a
-    // manual Redeliver. No-op when no webhook is configured.
+    // Phase 2b — Webhook re-drive: a downloaded asset whose delivery never
+    // succeeded is re-fired here, so a delivery lost after the in-process
+    // backoff window recovers without a manual Redeliver. Bounded so a dead
+    // receiver can't stall the cycle: only assets downloaded since the webhook
+    // was enabled, per-row DB back-off, one attempt each, a per-poll cap, and
+    // the batch stops at the first failure (the receiver is likely down — the
+    // rest wait for the next poll). No-op when no webhook is configured.
     if (cfg.webhook?.enabled && cfg.webhook.url) {
-      for (const { row, event } of findRecordingsNeedingWebhook()) {
-        try {
-          const fired = await fireWebhookForRecording(event, row);
-          if (fired) markWebhookFired(row.id, event);
-        } catch (err) {
-          logger.warn({ err, id: row.id, event }, "webhook re-drive failed");
+      const due = findRecordingsNeedingWebhook({
+        cutoff: cfg.webhook.enabledAt ?? 0,
+        now: Date.now(),
+        limit: WEBHOOK_REDRIVE_MAX_PER_POLL,
+      });
+      for (const { row, event } of due) {
+        signal.throwIfAborted();
+        if (!(await this.deliverWebhook(event, row, { maxAttempts: 1 }))) {
+          logger.info({ id: row.id, event }, "webhook re-drive failed — deferring the rest to the next poll");
+          break;
         }
       }
     }
@@ -311,6 +374,7 @@ class Poller {
         : PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT;
       const trashProbe = findPlaudTrashAssetProbeCandidates(probeCutoff, probeLimit);
       for (const row of trashProbe) {
+        signal.throwIfAborted();
         try {
           clearError(row.id);
           await this.tryTranscriptAndSummary(row, true);
@@ -342,7 +406,7 @@ class Poller {
       if (row.userDeletedAt) return;
       if (row.isTrash && !cfg.importPlaudDeleted) return;
 
-      const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
+      const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder, row.audioFilename);
 
       if (forceDetailRefresh) {
         await this.refreshDetailAndAssets(row.id, paths.folder, true);
@@ -354,23 +418,16 @@ class Poller {
         try {
           if (!forceDetailRefresh) await this.refreshDetailAndAssets(row.id, paths.folder);
 
-          // Use the DB's stored audio path (extension derived from Plaud's
-          // filetype at insert) so disk and the served URL always agree. The
-          // streamed byte count is verified against Content-Length/filesizeBytes
-          // so a short S3 close can't publish a truncated file.
-          const bytes = await downloadAudio(
-            row.id,
-            row.audioPath ?? paths.audioPath,
-            row.filesizeBytes,
-          );
+          // The audio filename (extension derived from Plaud's filetype at
+          // insert) comes from the DB so disk and the served URL always agree.
+          // The streamed byte count is verified against Content-Length/
+          // filesizeBytes so a short S3 close can't publish a truncated file.
+          const bytes = await downloadAudio(row.id, paths.audioPath, row.filesizeBytes);
           markAudioDownloaded(row.id, bytes || row.filesizeBytes);
           emit("recording_new", { recordingId: row.id });
 
           const fresh = getRecordingById(row.id);
-          if (fresh) {
-            const fired = await fireWebhookForRecording("audio_ready", fresh);
-            if (fired) markWebhookFired(row.id, "audio_ready");
-          }
+          if (fresh) await this.deliverWebhook("audio_ready", fresh);
         } catch (err) {
           if (err instanceof PlaudAuthError) throw err;
           const msg = err instanceof Error ? err.message : String(err);
@@ -380,10 +437,13 @@ class Poller {
         }
       }
 
+      // A transcript is only requested once Plaud reports one (is_trans); a
+      // manual resync asks regardless, as the escape hatch.
+      const wantTranscript = !row.transcriptDownloadedAt && (row.plaudIsTrans || forceDetailRefresh);
       const wantSummary = !row.summaryDownloadedAt && row.plaudIsSummary;
-      if (!row.isTrash && (!row.transcriptDownloadedAt || wantSummary)) {
+      if (!row.isTrash && (wantTranscript || wantSummary)) {
         try {
-          await this.tryTranscriptAndSummary(row);
+          await this.tryTranscriptAndSummary(row, false, forceDetailRefresh);
         } catch (err) {
           if (err instanceof PlaudAuthError) throw err;
           const msg = err instanceof Error ? err.message : String(err);
@@ -397,7 +457,11 @@ class Poller {
     }
   }
 
-  private async tryTranscriptAndSummary(row: RecordingRow, opportunistic = false): Promise<void> {
+  private async tryTranscriptAndSummary(
+    row: RecordingRow,
+    opportunistic = false,
+    ignoreIsTrans = false,
+  ): Promise<void> {
     if (opportunistic) {
       if (!row.isTrash) return;
     } else if (row.isTrash) {
@@ -405,10 +469,12 @@ class Poller {
     }
     const cfg = loadConfig();
     if (!cfg.recordingsDir) return;
-    const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder);
 
-    const needTranscript = !row.transcriptDownloadedAt;
+    const needTranscript = !row.transcriptDownloadedAt && (row.plaudIsTrans || ignoreIsTrans);
     const needSummary = !row.summaryDownloadedAt && row.plaudIsSummary;
+    // Nothing Plaud says it has: don't spend API calls asking.
+    if (!needTranscript && !needSummary) return;
+    const paths = ensureRecordingFolder(cfg.recordingsDir, row.folder, row.audioFilename);
     let wroteTranscript = false;
     let wroteSummary = false;
 
@@ -476,11 +542,33 @@ class Poller {
     if (wroteTranscript) {
       emit("recording_downloaded", { recordingId: row.id });
       const fresh = getRecordingById(row.id);
-      if (fresh) {
-        const fired = await fireWebhookForRecording("transcript_ready", fresh);
-        if (fired) markWebhookFired(row.id, "transcript_ready");
-      }
+      if (fresh) await this.deliverWebhook("transcript_ready", fresh);
     }
+  }
+
+  /**
+   * Fire a webhook and record the outcome: success marks it delivered; failure
+   * schedules the next automatic re-delivery (so Phase 2b doesn't immediately
+   * re-fire a delivery that just failed). Returns whether it was delivered;
+   * false without side effects when no webhook is configured.
+   */
+  private async deliverWebhook(
+    event: "audio_ready" | "transcript_ready",
+    row: RecordingRow,
+    opts?: FireOptions,
+  ): Promise<boolean> {
+    const cfg = loadConfig();
+    if (!cfg.webhook?.enabled || !cfg.webhook.url) return false;
+    try {
+      if (await fireWebhookForRecording(event, row, opts)) {
+        markWebhookFired(row.id, event);
+        return true;
+      }
+    } catch (err) {
+      logger.warn({ err, id: row.id, event }, "webhook delivery threw");
+    }
+    recordWebhookFailure(row.id, event);
+    return false;
   }
 
   private async refreshDetailAndAssets(

@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { ensureConfigDir, dbPath } from "./paths.js";
+import { logger } from "./logger.js";
+import { DEFAULT_AUDIO_FILENAME } from "./sync/layout.js";
 import type { RecordingRow, RecordingStatus } from "@applaud/shared";
 
 let db: Database.Database | null = null;
@@ -22,6 +24,9 @@ export function getDb(): Database.Database {
     throw err;
   }
   db.pragma("journal_mode = WAL");
+  // Wait for a competing writer (another process on the same volume, or a
+  // checkpoint) instead of failing immediately with SQLITE_BUSY.
+  db.pragma("busy_timeout = 5000");
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
   migrate(db);
@@ -41,7 +46,95 @@ export function runMigrations(d: Database.Database): void {
   migrate(d);
 }
 
+interface Migration {
+  version: number;
+  name: string;
+  up: (d: Database.Database) => void;
+}
+
+/**
+ * Ordered schema migrations, gated on `PRAGMA user_version`. Each runs once,
+ * inside a transaction together with its version bump, so a failure (locked
+ * DB, disk full) rolls back cleanly and stops startup with a clear error
+ * instead of surfacing later as "no such column". To change the schema,
+ * append a migration — never edit one that has shipped.
+ */
+const MIGRATIONS: Migration[] = [
+  { version: 1, name: "baseline schema (pre-versioning history)", up: migrateBaseline },
+  {
+    version: 2,
+    name: "persist Plaud is_trans",
+    // Default 1 keeps existing rows eligible for transcript fetches until the
+    // next list walk (the first phase of every poll) records the real value.
+    up: (d) => addColumn(d, "recordings", "plaud_is_trans", "INTEGER NOT NULL DEFAULT 1"),
+  },
+  { version: 3, name: "folder-relative file paths", up: migrateRelativePaths },
+];
+
+/** Schema version this build writes. */
+export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+
 function migrate(d: Database.Database): void {
+  const current = d.pragma("user_version", { simple: true }) as number;
+  if (current > SCHEMA_VERSION) {
+    logger.warn(
+      { dbVersion: current, supported: SCHEMA_VERSION },
+      "database was written by a newer Applaud — running without migrating; downgrades are not supported",
+    );
+    return;
+  }
+  for (const m of MIGRATIONS) {
+    if (m.version <= current) continue;
+    try {
+      d.transaction(() => {
+        m.up(d);
+        d.pragma(`user_version = ${m.version}`);
+      })();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`database migration ${m.version} (${m.name}) failed: ${message}`, { cause: err });
+    }
+    if (current > 0 || m.version > 1) logger.info({ version: m.version, name: m.name }, "applied database migration");
+  }
+}
+
+/** `ALTER TABLE … ADD COLUMN` only when the column is missing — no blanket catch. */
+function addColumn(d: Database.Database, table: string, column: string, definition: string): void {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) return;
+  d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+/**
+ * v3: the DB used to store absolute paths (audio/transcript/summary/metadata)
+ * under whatever `recordingsDir` was set at insert time, so moving the library
+ * or changing the mount path broke every row. Keep only the audio filename
+ * (its extension varies per recording); everything else is derived from
+ * `recordingsDir` + `folder` at use time (see `sync/layout.ts`).
+ */
+function migrateRelativePaths(d: Database.Database): void {
+  addColumn(d, "recordings", "audio_filename", "TEXT");
+  const rows = d.prepare("SELECT id, audio_path FROM recordings").all() as {
+    id: string;
+    audio_path: string | null;
+  }[];
+  const update = d.prepare("UPDATE recordings SET audio_filename = ? WHERE id = ?");
+  for (const row of rows) {
+    // Split on both separators: the DB may have been written on another OS.
+    const name = row.audio_path?.split(/[\\/]/).pop() || null;
+    update.run(name, row.id);
+  }
+  for (const col of ["audio_path", "transcript_path", "summary_path", "metadata_path"]) {
+    d.exec(`ALTER TABLE recordings DROP COLUMN ${col}`);
+  }
+}
+
+/**
+ * v1: every schema change made before migrations were versioned. Idempotent
+ * (`addColumn` checks first), because pre-versioning databases are at
+ * `user_version` 0 with any subset of these already applied.
+ */
+function migrateBaseline(d: Database.Database): void {
   d.exec(`
     CREATE TABLE IF NOT EXISTS recordings (
       id TEXT PRIMARY KEY,
@@ -79,30 +172,17 @@ function migrate(d: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_webhook_log_fired_at ON webhook_log(fired_at DESC);
   `);
 
-  // v2: add is_trash column
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN is_trash INTEGER NOT NULL DEFAULT 0");
-  } catch {
-    // column already exists — ignore
-  }
+  // Plaud trash flag.
+  addColumn(d, "recordings", "is_trash", "INTEGER NOT NULL DEFAULT 0");
 
-  // v3: add transcript_text column for full-text search
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN transcript_text TEXT");
-  } catch {
-    // column already exists — ignore
-  }
+  // Transcript text for search.
+  addColumn(d, "recordings", "transcript_text", "TEXT");
 
-  // v4: add summary_downloaded_at column. The dashboard previously used
-  // `summary_path` as a "has summary" signal, but that field is set
-  // speculatively at insert time — so it lit up the pill even for recordings
-  // where Plaud never produced a summary. This timestamp is only set when
-  // summary.md is actually written.
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN summary_downloaded_at INTEGER");
-  } catch {
-    // column already exists — ignore
-  }
+  // summary_downloaded_at: the dashboard previously used `summary_path` as a
+  // "has summary" signal, but that field was set speculatively at insert time
+  // — so it lit up the pill even for recordings where Plaud never produced a
+  // summary. This timestamp is only set when summary.md is actually written.
+  addColumn(d, "recordings", "summary_downloaded_at", "INTEGER");
 
   // Backfill summary_downloaded_at for existing rows: if the summary.md file
   // is on disk, use transcript_downloaded_at as the timestamp (best proxy we
@@ -152,49 +232,27 @@ function migrate(d: Database.Database): void {
     );
   `);
 
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN user_deleted_at INTEGER");
-  } catch {
-    /* exists */
-  }
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN user_purge_at INTEGER");
-  } catch {
-    /* exists */
-  }
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN plaud_is_summary INTEGER NOT NULL DEFAULT 0");
-  } catch {
-    /* exists */
-  }
+  addColumn(d, "recordings", "user_deleted_at", "INTEGER");
+  addColumn(d, "recordings", "user_purge_at", "INTEGER");
+  addColumn(d, "recordings", "plaud_is_summary", "INTEGER NOT NULL DEFAULT 0");
   // Rows that already have summary.md on disk should not show as "missing summary"
   // until the next Plaud sync; align plaud_is_summary with summary_downloaded_at.
   d.exec(
     "UPDATE recordings SET plaud_is_summary = 1 WHERE summary_downloaded_at IS NOT NULL",
   );
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN trash_asset_probe_at INTEGER");
-  } catch {
-    /* exists */
-  }
-  // v5: persist Plaud's is_markmemo (starred/favorite) and filetag_id_list
-  // (JSON array of tag ids) so the UI can show favorites and filter by them.
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0");
-  } catch {
-    /* exists */
-  }
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN plaud_tags TEXT");
-  } catch {
-    /* exists */
-  }
-  // v6: local display-name override. NULL means "use Plaud's filename" (the
+  addColumn(d, "recordings", "trash_asset_probe_at", "INTEGER");
+  // Plaud's is_markmemo (starred/favorite) and filetag_id_list (JSON array of
+  // tag ids) so the UI can show favorites and filter by them.
+  addColumn(d, "recordings", "is_starred", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(d, "recordings", "plaud_tags", "TEXT");
+  // Local display-name override. NULL means "use Plaud's filename" (the
   // default). Resyncing a recording clears this — the source is authoritative.
-  try {
-    d.exec("ALTER TABLE recordings ADD COLUMN display_name TEXT");
-  } catch {
-    /* exists */
+  addColumn(d, "recordings", "display_name", "TEXT");
+  // Per-event webhook re-delivery back-off (poller Phase 2b). Attempts count
+  // failed deliveries; next_at is the earliest time to try again.
+  for (const event of ["audio", "transcript"]) {
+    addColumn(d, "recordings", `webhook_${event}_attempts`, "INTEGER NOT NULL DEFAULT 0");
+    addColumn(d, "recordings", `webhook_${event}_next_at`, "INTEGER");
   }
 }
 
@@ -214,15 +272,17 @@ interface RecordingDbRow {
   filesize_bytes: number;
   serial_number: string;
   folder: string;
-  audio_path: string | null;
-  transcript_path: string | null;
-  summary_path: string | null;
-  metadata_path: string | null;
+  /** Audio basename within `folder` (e.g. `audio.mp3`); NULL means the default. */
+  audio_filename: string | null;
   audio_downloaded_at: number | null;
   transcript_downloaded_at: number | null;
   summary_downloaded_at: number | null;
   webhook_audio_fired_at: number | null;
   webhook_transcript_fired_at: number | null;
+  webhook_audio_attempts: number;
+  webhook_audio_next_at: number | null;
+  webhook_transcript_attempts: number;
+  webhook_transcript_next_at: number | null;
   is_trash: number;
   last_error: string | null;
   metadata_json: string | null;
@@ -230,6 +290,7 @@ interface RecordingDbRow {
   user_deleted_at: number | null;
   user_purge_at: number | null;
   plaud_is_summary: number;
+  plaud_is_trans: number;
   trash_asset_probe_at: number | null;
   is_starred: number;
   plaud_tags: string | null;
@@ -256,13 +317,9 @@ export function rowToRecording(row: RecordingDbRow): RecordingRow {
     filesizeBytes: row.filesize_bytes,
     serialNumber: row.serial_number,
     folder: row.folder,
-    // The extension lives in audio_path (set per-recording from Plaud's
-    // filetype at insert), so basename is the single source of truth.
-    audioFilename: row.audio_path ? path.basename(row.audio_path) : "audio.ogg",
-    audioPath: row.audio_path,
-    transcriptPath: row.transcript_path,
-    summaryPath: row.summary_path,
-    metadataPath: row.metadata_path,
+    // Set per-recording from Plaud's filetype at insert. Absolute paths are
+    // never stored: callers resolve recordingsDir + folder + name at use time.
+    audioFilename: row.audio_filename ?? DEFAULT_AUDIO_FILENAME,
     audioDownloadedAt: row.audio_downloaded_at,
     transcriptDownloadedAt: row.transcript_downloaded_at,
     summaryDownloadedAt: row.summary_downloaded_at,
@@ -274,6 +331,7 @@ export function rowToRecording(row: RecordingDbRow): RecordingRow {
     userDeletedAt: row.user_deleted_at ?? null,
     userPurgeAt: row.user_purge_at ?? null,
     plaudIsSummary: (row.plaud_is_summary ?? 0) === 1,
+    plaudIsTrans: (row.plaud_is_trans ?? 1) === 1,
     isStarred: (row.is_starred ?? 0) === 1,
     plaudTagIds: parseTagIds(row.plaud_tags),
     displayName: row.display_name ?? null,

@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type Database from "better-sqlite3";
-import type { WebhookPayload } from "@applaud/shared";
+import { DEFAULT_CONFIG, type AppConfig, type RecordingRow, type WebhookPayload } from "@applaud/shared";
+
+const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
+vi.mock("../config.js", () => ({ loadConfig }));
 
 // The SSRF guard resolves the target before connecting (see security/ssrf.ts).
 // `hook.example` doesn't exist, so pin it to a public address and let the real
@@ -10,7 +13,8 @@ const { lookup } = vi.hoisted(() => ({
 }));
 vi.mock("node:dns/promises", () => ({ lookup }));
 
-import { fireRaw } from "./post.js";
+import { fireRaw, fireWebhookForRecording } from "./post.js";
+import { verifyTicket } from "../auth/ticket.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 import { installFetchMock, type FetchMock } from "../test/fixtures/fetch.js";
 
@@ -103,6 +107,17 @@ describe("fireRaw retry loop", () => {
     expect(logRowCount()).toBe(3);
   });
 
+  it("makes exactly one attempt with maxAttempts: 1 (automatic re-delivery)", async () => {
+    mock.enqueue({ status: 500 });
+    mock.enqueue({ status: 200, body: "ok" });
+    const ok = await runWithTimers(
+      fireRaw("https://hook.example/x", samplePayload, "rec-1", "audio_ready", undefined, { maxAttempts: 1 }),
+    );
+    expect(ok).toBe(false);
+    expect(mock.calls.length).toBe(1);
+    expect(logRowCount()).toBe(1);
+  });
+
   it("retries on network throw and succeeds on the second attempt", async () => {
     mock.enqueue({ throws: new Error("ECONNREFUSED") });
     mock.enqueue({ status: 200, body: "ok" });
@@ -193,5 +208,65 @@ describe("fireRaw retry loop", () => {
       .prepare<[], { error: string | null }>("SELECT error FROM webhook_log ORDER BY id ASC LIMIT 1")
       .get();
     expect(row?.error).toMatch(/redirect not followed/);
+  });
+});
+
+describe("webhook payload http_urls", () => {
+  let db: Database.Database;
+  let mock: FetchMock;
+  const row = {
+    id: "rec-1",
+    filename: "Standup",
+    startTime: 1_000_000,
+    endTime: 1_060_000,
+    durationMs: 60_000,
+    filesizeBytes: 100,
+    serialNumber: "S1",
+    folder: "2026-04-11_Standup__rec10000",
+    audioFilename: "audio.mp3",
+  } as RecordingRow;
+  const config = (over: Partial<AppConfig>): AppConfig =>
+    ({
+      ...DEFAULT_CONFIG,
+      webhook: { url: "https://hook.example/x", enabled: true },
+      ...over,
+    }) as AppConfig;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    mock = installFetchMock();
+    mock.enqueue({ status: 200 });
+  });
+  afterEach(() => {
+    mock.restore();
+    teardownTestDb(db);
+    loadConfig.mockReset();
+  });
+
+  const sentUrls = async (): Promise<WebhookPayload["http_urls"]> => {
+    expect(await fireWebhookForRecording("audio_ready", row, { maxAttempts: 1 })).toBe(true);
+    return (JSON.parse(String(mock.calls[0]!.init!.body)) as WebhookPayload).http_urls;
+  };
+
+  it("roots URLs at publicBaseUrl and signs them for just this folder when a LAN token is set", async () => {
+    loadConfig.mockReturnValue(
+      config({ publicBaseUrl: "https://applaud.example.com", lanToken: "a-long-enough-lan-token" }),
+    );
+    const urls = await sentUrls();
+    const audio = new URL(urls.audio);
+    expect(`${audio.origin}${audio.pathname}`).toBe(
+      "https://applaud.example.com/media/2026-04-11_Standup__rec10000/audio.mp3",
+    );
+    const ticket = audio.searchParams.get("ticket")!;
+    expect(verifyTicket(ticket, "/media/2026-04-11_Standup__rec10000/transcript.json")).toBe(true);
+    expect(verifyTicket(ticket, "/media/some-other-recording/audio.mp3")).toBe(false);
+    // The LAN token itself never appears in the payload.
+    expect(JSON.stringify(urls)).not.toContain("a-long-enough-lan-token");
+  });
+
+  it("falls back to the bind address with no ticket when nothing is configured", async () => {
+    loadConfig.mockReturnValue(config({}));
+    const urls = await sentUrls();
+    expect(urls.audio).toBe("http://127.0.0.1:44471/media/2026-04-11_Standup__rec10000/audio.mp3");
   });
 });

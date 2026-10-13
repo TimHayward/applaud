@@ -46,12 +46,13 @@ export interface RecordingRow {
   filesizeBytes: number;
   serialNumber: string;
   folder: string;
-  /** Basename of the audio file on disk (e.g. `audio.ogg`, `audio.mp3`), derived from Plaud's `filetype`. */
+  /**
+   * Basename of the audio file in `folder` (e.g. `audio.ogg`, `audio.mp3`),
+   * derived from Plaud's `filetype`. Files are addressed as
+   * `<recordingsDir>/<folder>/<name>` (or `/media/<folder>/<name>`); absolute
+   * paths are never stored, so the library can be moved.
+   */
   audioFilename: string;
-  audioPath: string | null;
-  transcriptPath: string | null;
-  summaryPath: string | null;
-  metadataPath: string | null;
   audioDownloadedAt: number | null;
   transcriptDownloadedAt: number | null;
   summaryDownloadedAt: number | null;
@@ -66,6 +67,11 @@ export interface RecordingRow {
   userPurgeAt: number | null;
   /** Last-seen Plaud `is_summary` from list API (drives summary backfill). */
   plaudIsSummary: boolean;
+  /**
+   * Last-seen Plaud `is_trans`: whether Plaud has transcribed the recording.
+   * Transcript fetches are skipped while false (a resync still tries).
+   */
+  plaudIsTrans: boolean;
   /** Plaud's `is_markmemo` — the star/favorite flag set in the Plaud app. */
   isStarred: boolean;
   /** Plaud's `filetag_id_list` — raw tag ids (names require Plaud's tag API, not yet mapped). */

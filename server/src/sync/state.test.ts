@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type Database from "better-sqlite3";
 import type { AppConfig, PlaudRawRecording } from "@applaud/shared";
-import path from "node:path";
 
 // Hoisted mocks. Must be set up before importing state.ts.
 const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
@@ -30,7 +29,14 @@ import {
   resetDownloadStateForResync,
   setRecordingDisplayName,
   getRecordingById,
+  findRecordingsNeedingWebhook,
+  findRecordingsNeedingAssets,
+  countPendingTranscripts,
+  markWebhookFired,
+  recordWebhookFailure,
+  webhookRedriveDelayMs,
 } from "./state.js";
+import { WEBHOOK_REDRIVE_MAX_ATTEMPTS } from "../constants.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 
 const baseConfig: AppConfig = {
@@ -44,6 +50,7 @@ const baseConfig: AppConfig = {
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
+  publicBaseUrl: null,
   lanToken: null,
   authMode: null,
   ut: null,
@@ -92,39 +99,48 @@ describe("upsertFromPlaud", () => {
     teardownTestDb(db);
   });
 
-  it("inserts a new recording with computed folder + paths", () => {
+  it("inserts a new recording with computed folder and a folder-relative audio name", () => {
     const out = upsertFromPlaud(makePlaudItem());
     expect(out.id).toBe("abcdef0123456789");
     expect(out.folder).toBe("2026-04-11_Standup__abcdef01");
     expect(out.filesizeBytes).toBe(12345);
     expect(out.isTrash).toBe(false);
     expect(out.plaudIsSummary).toBe(true);
-    expect(path.normalize(out.audioPath ?? "")).toBe(
-      path.normalize("/test/recordings/2026-04-11_Standup__abcdef01/audio.ogg"),
-    );
 
     // Default (no filetype) keeps the historical audio.ogg name.
     expect(out.audioFilename).toBe("audio.ogg");
 
-    // Row really exists in DB.
-    const row = db.prepare("SELECT * FROM recordings WHERE id = ?").get("abcdef0123456789");
-    expect(row).toBeDefined();
+    // No absolute paths are persisted — only names relative to the folder.
+    const row = db
+      .prepare<[string], Record<string, unknown>>("SELECT * FROM recordings WHERE id = ?")
+      .get("abcdef0123456789");
+    expect(row?.audio_filename).toBe("audio.ogg");
+    expect(JSON.stringify(row)).not.toContain("/test/recordings");
   });
 
-  it("derives the audio filename/path from Plaud's filetype", () => {
+  it("derives the audio filename from Plaud's filetype", () => {
     const out = upsertFromPlaud(makePlaudItem({ filetype: "mp3" }));
     expect(out.audioFilename).toBe("audio.mp3");
-    expect(path.normalize(out.audioPath ?? "")).toBe(
-      path.normalize("/test/recordings/2026-04-11_Standup__abcdef01/audio.mp3"),
-    );
   });
 
   it("preserves the derived audio filename across a folder rename", () => {
     upsertFromPlaud(makePlaudItem({ filetype: "mp3" }));
     const renamed = upsertFromPlaud(makePlaudItem({ filename: "Standup renamed", filetype: "mp3" }));
     expect(renamed.audioFilename).toBe("audio.mp3");
-    expect(renamed.audioPath).toContain("audio.mp3");
-    expect(renamed.audioPath).toContain("2026-04-11_Standup_renamed__abcdef01");
+    expect(renamed.folder).toBe("2026-04-11_Standup_renamed__abcdef01");
+  });
+
+  it("records Plaud's is_trans and only queues a transcript fetch once it is true", () => {
+    upsertFromPlaud(makePlaudItem({ is_trans: false, is_summary: false }));
+    db.prepare("UPDATE recordings SET audio_downloaded_at = 1 WHERE id = ?").run("abcdef0123456789");
+    expect(getRecordingById("abcdef0123456789")?.plaudIsTrans).toBe(false);
+    expect(findRecordingsNeedingAssets()).toEqual([]);
+    expect(countPendingTranscripts()).toBe(0);
+
+    upsertFromPlaud(makePlaudItem({ is_trans: true, is_summary: false }));
+    expect(getRecordingById("abcdef0123456789")?.plaudIsTrans).toBe(true);
+    expect(findRecordingsNeedingAssets().map((r) => r.id)).toEqual(["abcdef0123456789"]);
+    expect(countPendingTranscripts()).toBe(1);
   });
 
   it("renames folder on disk + DB when filename changes (different sanitized output)", () => {
@@ -254,6 +270,93 @@ describe("upsertFromPlaud", () => {
 
     setRecordingDisplayName("abcdef0123456789", "   ");
     expect(getRecordingById("abcdef0123456789")?.displayName).toBeNull();
+  });
+});
+
+describe("webhook re-delivery queue", () => {
+  let db: Database.Database;
+  const NOW = Date.UTC(2026, 9, 13, 12, 0);
+  const ID = "abcdef0123456789";
+
+  const markDownloaded = (id: string, at: number, transcript = true): void => {
+    db.prepare(
+      "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ? WHERE id = ?",
+    ).run(at, transcript ? at : null, id);
+  };
+  const due = (cutoff = 0, now = NOW, limit = 100) =>
+    findRecordingsNeedingWebhook({ cutoff, now, limit }).map((d) => `${d.row.id}:${d.event}`);
+
+  beforeEach(() => {
+    db = setupTestDb();
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue(baseConfig);
+  });
+
+  afterEach(() => {
+    teardownTestDb(db);
+  });
+
+  it("returns both events for a downloaded, never-delivered recording", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000);
+    expect(due()).toEqual([`${ID}:audio_ready`, `${ID}:transcript_ready`]);
+  });
+
+  it("skips assets downloaded before the webhook was enabled (no first-enable flood)", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 60_000);
+    expect(due(NOW - 1000)).toEqual([]);
+  });
+
+  it("re-drives a transcript that landed after enablement even if the audio predates it", () => {
+    upsertFromPlaud(makePlaudItem());
+    db.prepare(
+      "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ? WHERE id = ?",
+    ).run(NOW - 60_000, NOW - 10, ID);
+    expect(due(NOW - 1000)).toEqual([`${ID}:transcript_ready`]);
+  });
+
+  it("recordWebhookFailure backs the event off until next_at, then it is due again", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000);
+    recordWebhookFailure(ID, "audio_ready", NOW);
+    expect(due()).toEqual([`${ID}:transcript_ready`]);
+    expect(due(0, NOW + webhookRedriveDelayMs(1))).toEqual([`${ID}:audio_ready`, `${ID}:transcript_ready`]);
+  });
+
+  it("back-off grows with each failure and is capped", () => {
+    expect(webhookRedriveDelayMs(2)).toBe(webhookRedriveDelayMs(1) * 3);
+    expect(webhookRedriveDelayMs(50)).toBe(webhookRedriveDelayMs(51));
+  });
+
+  it("stops re-driving after the attempt cap", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000, false);
+    for (let i = 0; i < WEBHOOK_REDRIVE_MAX_ATTEMPTS; i++) recordWebhookFailure(ID, "audio_ready", NOW);
+    expect(due(0, NOW + 365 * 24 * 60 * 60 * 1000)).toEqual([]);
+  });
+
+  it("markWebhookFired removes the event and clears its back-off", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000, false);
+    recordWebhookFailure(ID, "audio_ready", NOW);
+    markWebhookFired(ID, "audio_ready");
+    const row = db
+      .prepare<[string], { attempts: number; next_at: number | null }>(
+        "SELECT webhook_audio_attempts AS attempts, webhook_audio_next_at AS next_at FROM recordings WHERE id = ?",
+      )
+      .get(ID);
+    expect(row).toEqual({ attempts: 0, next_at: null });
+    expect(due()).toEqual([]);
+  });
+
+  it("caps the number of events returned per call", () => {
+    for (let i = 0; i < 5; i++) {
+      const id = `rec${i}000000000000`;
+      upsertFromPlaud(makePlaudItem({ id, filename: `R${i}` }));
+      markDownloaded(id, NOW - 1000);
+    }
+    expect(due(0, NOW, 3)).toHaveLength(3);
   });
 });
 

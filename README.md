@@ -57,7 +57,7 @@ pnpm build
 pnpm start
 ```
 
-Requires Node.js >= 20 and pnpm >= 9.
+Requires Node.js >= 22 and pnpm >= 9.
 
 ## How it works
 
@@ -115,6 +115,8 @@ Each recording gets its own folder under your chosen recordings directory:
 ```
 
 - `content` is only present on `transcript_ready` events. Both fields are nullable — if Plaud didn't generate a summary for a recording, `summary_markdown` will be `null`.
+- `http_urls` are rooted at **Settings → Webhook Outbound → Public URL** (`publicBaseUrl`). Set it to an address your receiver can reach (e.g. `http://192.168.1.20:44471`); left empty, URLs use `127.0.0.1`, which only works when the receiver runs on the same machine. When a LAN access token is set, each URL carries a `?ticket=` that grants read-only access to that one recording's folder for 7 days (`APPLAUD_WEBHOOK_URL_TTL_HOURS`), so receivers can download files without ever holding the token.
+- Failed deliveries are retried automatically on later syncs with a growing back-off (see `APPLAUD_WEBHOOK_REDRIVE_*` below). Turning a webhook on doesn't replay recordings downloaded before it was enabled; use **Redeliver** in Settings for those.
 - Webhook consumers should treat `(id, event)` as idempotent. `audio_ready` always fires before `transcript_ready`; on recordings that are already fully transcribed when first seen, both fire back-to-back in the same poll cycle.
 - Custom headers on every webhook: `User-Agent: applaud/0.1.0` and `X-Applaud-Event: audio_ready|transcript_ready`.
 
@@ -271,7 +273,7 @@ The Plaud tokens are stored as plaintext in `settings.json` (with `chmod 600`) �
 - **Webhook targets must be public by default.** Applaud resolves the URL and refuses private, loopback, and link-local addresses before connecting, so the "Test" button can't be used to probe your machine or LAN. Pointing it at a local n8n / Home Assistant / Node-RED instance is a normal thing to want — set `APPLAUD_WEBHOOK_ALLOW_PRIVATE=1` for that. Redirects are never followed (a 3xx is logged as a failed delivery).
 - **Files under `/media` are served as downloads** unless they're audio or a raster image, with `nosniff` and a sandboxing CSP, so an `.svg`/`.html` file inside a recording folder can't run script in the app's origin.
 - **Requests must arrive under a known hostname** — an IP literal, `localhost`, a `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net` name, your `bind.host`, or something in `APPLAUD_ALLOWED_HOSTS`. This is what stops a web page you visit from rebinding its own domain to `127.0.0.1` and driving the API.
-- **`/api` takes the LAN token by `Authorization: Bearer` header only.** `?token=` works on `/media` (for `<audio>`/`<a>`/`<img>`, which can't set headers) and is stripped from the URL after first load; responses send `Referrer-Policy: no-referrer` so it doesn't leak onward.
+- **`/api` takes the LAN token by `Authorization: Bearer` header only.** Things that can't send headers — audio/image/download links and the live-update stream — use a short-lived signed `?ticket=` instead: read-only, scoped, expiring, and revoked when you change the token. The raw token never appears in a URL the UI generates. (`?token=<token>` on `/media` still works for existing automations but is deprecated.) The `?token=` in the share link from Settings → LAN Access is stripped from the address bar after first load.
 
 ### Advanced tuning (environment variables)
 
@@ -284,6 +286,12 @@ These are optional and only matter for unusual setups (very large libraries, fla
 | `APPLAUD_POLLER_PAGE_SIZE` | `50` | Page size when walking your Plaud recording list |
 | `APPLAUD_POLLER_MAX_PAGES` | `200` | Hard cap on pages walked per poll (safety limit) |
 | `APPLAUD_WEBHOOK_BACKOFF_MS` | `5000,30000,120000` | Comma-separated retry backoff schedule for webhook delivery |
+| `APPLAUD_WEBHOOK_REDRIVE_BASE_MINUTES` | `5` | Delay before the first automatic re-delivery of a failed webhook; each further failure triples it |
+| `APPLAUD_WEBHOOK_REDRIVE_MAX_HOURS` | `24` | Upper bound on the automatic re-delivery delay |
+| `APPLAUD_WEBHOOK_REDRIVE_MAX_ATTEMPTS` | `8` | Failed deliveries before automatic re-delivery gives up (manual **Redeliver** still works) |
+| `APPLAUD_WEBHOOK_REDRIVE_MAX_PER_POLL` | `10` | Most webhook re-deliveries attempted in one sync cycle |
+| `APPLAUD_WEBHOOK_URL_TTL_HOURS` | `168` | How long the signed `http_urls` in a webhook payload stay valid (LAN token installs) |
+| `APPLAUD_BROWSER_TICKET_TTL_HOURS` | `24` | Lifetime of the signed ticket the web UI uses for media links and live updates |
 | `APPLAUD_TRASH_RETENTION_DAYS` | `7` | Days a soft-deleted recording stays in Trash before local files are purged |
 | `APPLAUD_TRASH_PROBE_INTERVAL_HOURS` | `6` | How often Plaud-trashed recordings are re-checked for a transcript/summary |
 | `APPLAUD_TRASH_PROBE_SCHEDULED_LIMIT` | `25` | Max Plaud-trash rows probed per scheduled poll |

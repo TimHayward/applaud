@@ -18,6 +18,7 @@ import { poller } from "../sync/poller.js";
 import { RECORDINGS_LIST_MAX_LIMIT } from "../constants.js";
 import type { RecordingDetail } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
+import { recordingPaths } from "../sync/layout.js";
 
 export const recordingsRouter = Router();
 
@@ -176,45 +177,42 @@ recordingsRouter.get("/:id", (req, res) => {
     return;
   }
   const cfg = loadConfig();
-  const base = cfg.recordingsDir ?? "";
 
   let transcriptText: string | null = null;
   let summaryMarkdown: string | null = null;
   let metadata: Record<string, unknown> | null = null;
-
-  try {
-    if (row.transcriptPath) {
-      const txtPath = path.join(path.dirname(row.transcriptPath), "transcript.txt");
-      if (existsSync(txtPath)) transcriptText = readFileSync(txtPath, "utf8");
-    }
-  } catch {
-    /* ignore */
-  }
-  try {
-    if (row.summaryPath && existsSync(row.summaryPath)) {
-      repairSummaryMarkdownFile(row.summaryPath);
-      const raw = readFileSync(row.summaryPath, "utf8");
-      summaryMarkdown = sanitizePlaudSummaryMarkdown(raw, {
-        startTimeMs: row.startTime,
-        endTimeMs: row.endTime,
-      });
-    }
-  } catch {
-    /* ignore */
-  }
-  try {
-    if (row.metadataPath && existsSync(row.metadataPath)) {
-      metadata = JSON.parse(readFileSync(row.metadataPath, "utf8")) as Record<string, unknown>;
-    }
-  } catch {
-    /* ignore */
-  }
-
   const attachments: { filename: string; url: string }[] = [];
-  if (row.folder && base) {
-    const folderAbs = path.join(base, row.folder);
+
+  // Files are resolved against the *current* recordings dir, so a moved
+  // library (or a different Docker mount) keeps working.
+  const paths = cfg.recordingsDir ? recordingPaths(cfg.recordingsDir, row.folder, row.audioFilename) : null;
+  if (paths) {
+    try {
+      if (existsSync(paths.transcriptTxtPath)) transcriptText = readFileSync(paths.transcriptTxtPath, "utf8");
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (existsSync(paths.summaryMdPath)) {
+        repairSummaryMarkdownFile(paths.summaryMdPath);
+        const raw = readFileSync(paths.summaryMdPath, "utf8");
+        summaryMarkdown = sanitizePlaudSummaryMarkdown(raw, {
+          startTimeMs: row.startTime,
+          endTimeMs: row.endTime,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (existsSync(paths.metadataPath)) {
+        metadata = JSON.parse(readFileSync(paths.metadataPath, "utf8")) as Record<string, unknown>;
+      }
+    } catch {
+      /* ignore */
+    }
     attachments.push(
-      ...listAttachmentFilenames(folderAbs, row.audioFilename).map((filename) => ({
+      ...listAttachmentFilenames(paths.folder, row.audioFilename).map((filename) => ({
         filename,
         url: `/media/${encodeURI(`${row.folder}/${filename}`)}`,
       })),

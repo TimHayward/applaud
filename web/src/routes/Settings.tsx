@@ -5,6 +5,7 @@ import { useToast } from "../components/Toast.js";
 import { useConfirm } from "../components/ConfirmDialog.js";
 import { ResultCard } from "../components/ResultCard.js";
 import { WebhookDeliveries } from "../components/WebhookDeliveries.js";
+import { AuthStep } from "./setup/AuthStep.js";
 import { formatRelative, daysUntil } from "../lib/format.js";
 
 export function Settings(): JSX.Element {
@@ -21,6 +22,7 @@ export function Settings(): JSX.Element {
   });
 
   const [webhookUrl, setWebhookUrl] = useState("");
+  const [publicBaseUrl, setPublicBaseUrl] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [secretExists, setSecretExists] = useState(false);
   const [secretTouched, setSecretTouched] = useState(false);
@@ -36,6 +38,8 @@ export function Settings(): JSX.Element {
   const [testResult, setTestResult] = useState<null | { ok: boolean; message: string }>(null);
   const [clearIgnoreBusy, setClearIgnoreBusy] = useState(false);
   const [clearIgnoreMsg, setClearIgnoreMsg] = useState<null | { ok: boolean; text: string }>(null);
+  // Mounted only on demand: AuthStep scans local browsers for a session on mount.
+  const [reconnecting, setReconnecting] = useState(false);
 
   // Sync the form from the server config — but never on top of unsaved edits.
   // The `["config"]` query is kept alive by the always-mounted sync badge and
@@ -47,6 +51,7 @@ export function Settings(): JSX.Element {
     if (!cfg.data || dirty) return;
     const c = cfg.data.config;
     setWebhookUrl(c.webhook?.url ?? "");
+    setPublicBaseUrl(c.publicBaseUrl ?? "");
     setSecretExists(Boolean(c.webhook?.secret));
     setWebhookSecret("");
     setSecretTouched(false);
@@ -77,6 +82,7 @@ export function Settings(): JSX.Element {
         : null;
       await api.updateConfig({
         webhook,
+        publicBaseUrl: publicBaseUrl.trim() || null,
         pollIntervalMinutes: pollMinutes,
         importPlaudDeleted,
         ...(lanTokenTouched ? { lanToken: lanTokenInput } : {}),
@@ -150,8 +156,17 @@ export function Settings(): JSX.Element {
     }
   };
 
+  const onReconnected = async (): Promise<void> => {
+    setReconnecting(false);
+    // The server kicks off a sync as soon as it accepts the new session.
+    await qc.invalidateQueries({ queryKey: ["config"] });
+    await qc.invalidateQueries({ queryKey: ["sync-status"] });
+    toast.success("Plaud account reconnected — syncing now.");
+  };
+
   const s = syncStatus.data;
   const isHealthy = s && !s.authRequired && !s.lastError;
+  const expiresInDays = c.tokenExp ? daysUntil(c.tokenExp) : null;
 
   return (
     <div className="max-w-[48rem] mx-auto space-y-8">
@@ -260,6 +275,11 @@ export function Settings(): JSX.Element {
           </svg>
           <h2 className="text-xl font-bold text-on-surface">Account Details</h2>
         </div>
+        {s?.authRequired && !reconnecting && (
+          <p className="text-sm font-semibold text-error bg-error/10 border border-error/30 rounded-lg px-3 py-2">
+            Plaud rejected the saved session, so syncing is paused. Reconnect your account to resume.
+          </p>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-2">
             <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Email Address</label>
@@ -271,11 +291,25 @@ export function Settings(): JSX.Element {
             <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Token Expiration</label>
             <div className="bg-surface-container-highest/50 border border-outline-variant/20 rounded-lg p-4 flex items-center justify-between">
               <span className="text-sm text-on-surface">
-                {c.tokenExp ? `Expires in ${daysUntil(c.tokenExp)} days` : "—"}
+                {expiresInDays === null ? "—" : expiresInDays > 0 ? `Expires in ${expiresInDays} days` : "Expired"}
               </span>
             </div>
           </div>
         </div>
+        {reconnecting ? (
+          <div className="rounded-xl bg-surface-container-low p-6 space-y-2">
+            <h3 className="text-base font-bold text-on-surface">Reconnect Plaud</h3>
+            <AuthStep variant="reconnect" onNext={() => void onReconnected()} onBack={() => setReconnecting(false)} />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={s?.authRequired ? "btn-primary px-4 py-2 text-sm" : "btn-ghost px-4 py-2 text-sm"}
+            onClick={() => setReconnecting(true)}
+          >
+            Reconnect Plaud account
+          </button>
+        )}
         <div className="space-y-2">
           <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Local Storage Path</label>
           <div className="relative">
@@ -447,6 +481,33 @@ export function Settings(): JSX.Element {
             <p className="text-xs text-on-surface-variant">
               When set, outgoing webhooks include <span className="font-mono">X-Applaud-Signature: sha256=&lt;hex&gt;</span>{" "}
               (HMAC-SHA256 of the raw body). See the README for receiver verification snippets.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <label
+              htmlFor="public-base-url"
+              className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider"
+            >
+              Public URL of this Applaud (optional)
+            </label>
+            <input
+              id="public-base-url"
+              className="input py-3 border-transparent font-mono"
+              type="url"
+              placeholder={`e.g. http://192.168.1.20:${c.bind.port} or https://applaud.example.com`}
+              value={publicBaseUrl}
+              onChange={(e) => {
+                setPublicBaseUrl(e.target.value);
+                setDirty(true);
+              }}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="text-xs text-on-surface-variant">
+              Webhook payloads link to the audio, transcript, and summary under this address so your receiver can
+              download them. Leave empty to use <span className="font-mono">http://{c.bind.host}:{c.bind.port}</span>,
+              which only works for receivers on this machine. When a LAN access token is set, each link carries a
+              read-only ticket for that one recording that expires after 7 days — the token itself is never sent.
             </p>
           </div>
           {testResult && (

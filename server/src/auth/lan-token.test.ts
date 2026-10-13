@@ -11,6 +11,7 @@ import {
   resetAuthFailures,
   secretEquals,
 } from "./lan-token.js";
+import { issueTicket } from "./ticket.js";
 
 const baseConfig: AppConfig = {
   version: 1,
@@ -29,14 +30,22 @@ const baseConfig: AppConfig = {
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
+  publicBaseUrl: null,
   lanToken: null,
   importPlaudDeleted: false,
 };
 
-function makeReq(opts: { authorization?: string; token?: string; ip?: string } = {}): Request {
+function makeReq(
+  opts: { authorization?: string; token?: string; ticket?: string; ip?: string; path?: string; method?: string } = {},
+): Request {
   return {
     headers: opts.authorization ? { authorization: opts.authorization } : {},
-    query: opts.token ? { token: opts.token } : {},
+    query: {
+      ...(opts.token ? { token: opts.token } : {}),
+      ...(opts.ticket ? { ticket: opts.ticket } : {}),
+    },
+    method: opts.method ?? "GET",
+    path: opts.path ?? "/",
     ip: opts.ip ?? "10.0.0.1",
     socket: { remoteAddress: opts.ip ?? "10.0.0.1" },
   } as unknown as Request;
@@ -140,6 +149,50 @@ describe("requireLanToken", () => {
     const next = vi.fn();
     requireLanToken(makeReq({ authorization: "Bearer secret123", ip: "192.0.2.10" }), makeRes(), next);
     expect(next).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("signed tickets in the guards", () => {
+  const TOKEN = "a-long-enough-lan-token";
+  beforeEach(() => {
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue({ ...baseConfig, lanToken: TOKEN });
+    resetAuthFailures();
+  });
+  const pass = (guard: typeof requireLanToken, req: Request): boolean => {
+    const next = vi.fn();
+    guard(req, makeRes(), next);
+    return next.mock.calls.length === 1;
+  };
+  const browserTicket = (): string => issueTicket("/", 60_000)!.ticket;
+
+  it("lets an EventSource reach the sync and login-watch streams with a ticket", () => {
+    expect(pass(requireLanToken, makeReq({ path: "/sync/events", ticket: browserTicket() }))).toBe(true);
+    expect(pass(requireLanToken, makeReq({ path: "/auth/watch/w1/events", ticket: browserTicket() }))).toBe(true);
+  });
+
+  it("does not accept a ticket on any other /api route, or on a non-GET", () => {
+    expect(pass(requireLanToken, makeReq({ path: "/recordings", ticket: browserTicket() }))).toBe(false);
+    expect(pass(requireLanToken, makeReq({ path: "/auth/ticket", ticket: browserTicket() }))).toBe(false);
+    expect(pass(requireLanToken, makeReq({ path: "/sync/events", ticket: browserTicket(), method: "POST" }))).toBe(false);
+  });
+
+  it("serves media with a browser ticket", () => {
+    expect(pass(requireLanTokenMedia, makeReq({ path: "/rec-A/audio.ogg", ticket: browserTicket() }))).toBe(true);
+  });
+
+  it("confines a folder-scoped ticket to its folder, even through double-encoded ..", () => {
+    const t = issueTicket("/media/rec-A/", 60_000)!.ticket;
+    expect(pass(requireLanTokenMedia, makeReq({ path: "/rec-A/audio.ogg", ticket: t }))).toBe(true);
+    expect(pass(requireLanTokenMedia, makeReq({ path: "/rec-B/audio.ogg", ticket: t }))).toBe(false);
+    // Express decodes the route param once and resolveSafe decodes it again.
+    expect(pass(requireLanTokenMedia, makeReq({ path: "/rec-A/%252e%252e/rec-B/audio.ogg", ticket: t }))).toBe(false);
+    expect(pass(requireLanTokenMedia, makeReq({ path: "/rec-A/%2e%2e/rec-B/audio.ogg", ticket: t }))).toBe(false);
+  });
+
+  it("rejects an expired ticket", () => {
+    const t = issueTicket("/", 60_000, Date.now() - 120_000)!.ticket;
+    expect(pass(requireLanTokenMedia, makeReq({ path: "/rec-A/audio.ogg", ticket: t }))).toBe(false);
   });
 });
 

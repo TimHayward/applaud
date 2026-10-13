@@ -113,6 +113,65 @@ describe("configRouter", () => {
       const res = await post("", { webhook: { url: "https://example.com/hook" } });
       expect(res.status).toBe(200);
     });
+
+    it("answers 400 (not 500) for a string that isn't a URL at all", async () => {
+      const res = await post("", { webhook: { url: "not a url" } });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST / — webhook enabledAt (re-delivery cutoff)", () => {
+    const savedWebhook = (): { enabledAt?: number } | null =>
+      (updateConfig.mock.calls[0]?.[0] as Partial<AppConfig>).webhook ?? null;
+
+    it("stamps enabledAt when a webhook is first configured", async () => {
+      const before = Date.now();
+      await post("", { webhook: { url: "https://example.com/hook" } });
+      expect(savedWebhook()?.enabledAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it("keeps the original stamp when an active webhook is edited", async () => {
+      loadConfig.mockReturnValue({
+        ...baseConfig,
+        webhook: { url: "https://example.com/old", enabled: true, enabledAt: 1234 },
+      });
+      await post("", { webhook: { url: "https://example.com/new" } });
+      expect(savedWebhook()?.enabledAt).toBe(1234);
+    });
+
+    it("re-stamps when a disabled webhook is turned back on", async () => {
+      loadConfig.mockReturnValue({
+        ...baseConfig,
+        webhook: { url: "https://example.com/hook", enabled: false, enabledAt: 1234 },
+      });
+      await post("", { webhook: { url: "https://example.com/hook", enabled: true } });
+      expect(savedWebhook()?.enabledAt).toBeGreaterThan(1234);
+    });
+
+    it("does not stamp a disabled webhook", async () => {
+      await post("", { webhook: { url: "https://example.com/hook", enabled: false } });
+      expect(savedWebhook()?.enabledAt).toBeUndefined();
+    });
+  });
+
+  describe("POST / — publicBaseUrl", () => {
+    it("stores it without a trailing slash", async () => {
+      const res = await post("", { publicBaseUrl: "https://applaud.example.com/" });
+      expect(res.status).toBe(200);
+      expect(updateConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ publicBaseUrl: "https://applaud.example.com" }),
+      );
+    });
+
+    it("clears it with an empty string", async () => {
+      await post("", { publicBaseUrl: "" });
+      expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ publicBaseUrl: null }));
+    });
+
+    it("rejects a non-http(s) URL", async () => {
+      const res = await post("", { publicBaseUrl: "ftp://example.com" });
+      expect(res.status).toBe(400);
+    });
   });
 
   describe("POST /test-webhook", () => {

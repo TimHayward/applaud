@@ -1,5 +1,5 @@
 # --- Build stage ---
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
@@ -18,7 +18,7 @@ RUN pnpm build
 RUN pnpm prune --prod
 
 # --- Runtime stage ---
-FROM node:20-slim
+FROM node:22-slim
 
 RUN apt-get update && apt-get install -y tini && rm -rf /var/lib/apt/lists/*
 
@@ -34,7 +34,7 @@ COPY --from=build /app/server/package.json server/
 COPY --from=build /app/server/node_modules/ server/node_modules/
 COPY --from=build /app/web/dist/ web/dist/
 
-# node:20-slim ships a non-root `node` user (uid 1000) — run as that instead
+# node:22-slim ships a non-root `node` user (uid 1000) — run as that instead
 # of root. Volume mount points must be owned by it before Docker seeds a
 # fresh named volume from this layer.
 RUN mkdir -p /data/config /data/recordings \

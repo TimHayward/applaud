@@ -1,5 +1,4 @@
 import type { RecordingAttachment } from "@applaud/shared";
-import { mediaUrl } from "../api.js";
 
 // `.svg` is deliberately absent: the server serves SVG as an attachment (an
 // SVG is a script-capable document and recording folders are user-writable),
@@ -12,8 +11,17 @@ function isImageAttachment(filename: string): boolean {
   return IMAGE_EXTENSIONS.has(filename.slice(idx).toLowerCase());
 }
 
-/** Sidebar card: image attachments as a thumbnail grid, other files as download links. */
-export function AttachmentsCard({ attachments }: { attachments: RecordingAttachment[] }): JSX.Element | null {
+/**
+ * Sidebar card: image attachments as a thumbnail grid, other files as download
+ * links. `mediaUrl` (from `useMediaUrl`) makes each `/media` URL loadable.
+ */
+export function AttachmentsCard({
+  attachments,
+  mediaUrl,
+}: {
+  attachments: RecordingAttachment[];
+  mediaUrl: (path: string) => string;
+}): JSX.Element | null {
   if (attachments.length === 0) return null;
   const images = attachments.filter((a) => isImageAttachment(a.filename));
   const files = attachments.filter((a) => !isImageAttachment(a.filename));

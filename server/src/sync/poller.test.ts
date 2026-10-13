@@ -41,6 +41,7 @@ vi.mock("./events.js", () => ({ emit: vi.fn() }));
 import { poller } from "./poller.js";
 import { getRecordingById, upsertFromPlaud } from "./state.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
+import { POLLER_RUN_WATCHDOG_MS } from "../constants.js";
 
 const baseConfig: AppConfig = {
   version: 1,
@@ -59,6 +60,7 @@ const baseConfig: AppConfig = {
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
+  publicBaseUrl: null,
   lanToken: null,
   importPlaudDeleted: false,
 };
@@ -198,6 +200,161 @@ describe("poller asset overwrite behavior", () => {
     const fetchedUrls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(fetchedUrls).not.toContain(contentUrl);
     expect(fetchedUrls).not.toContain(extraUrl);
+  });
+
+  describe("webhook delivery and re-drive (Phase 2b)", () => {
+    const ID = "abcdef0123456789";
+    const webhookConfig = (enabledAt?: number): AppConfig => ({
+      ...baseConfig,
+      webhook: { url: "https://hook.example/x", enabled: true, ...(enabledAt != null ? { enabledAt } : {}) },
+    });
+    const backoff = (id: string) =>
+      db
+        .prepare<[string], { a: number; an: number | null; t: number; tn: number | null }>(
+          `SELECT webhook_audio_attempts AS a, webhook_audio_next_at AS an,
+                  webhook_transcript_attempts AS t, webhook_transcript_next_at AS tn
+           FROM recordings WHERE id = ?`,
+        )
+        .get(id);
+    /** A fully-downloaded row, so only Phase 2b (not the download path) can fire for it. */
+    const downloaded = (id: string, at: number): void => {
+      upsertFromPlaud(makePlaudItem({ id, filename: `Rec ${id}` }));
+      db.prepare(
+        "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ? WHERE id = ?",
+      ).run(at, at, id);
+    };
+
+    it("does not replay recordings downloaded before the webhook was enabled", async () => {
+      downloaded(ID, Date.now() - 60_000);
+      loadConfig.mockReturnValue(webhookConfig(Date.now()));
+      await poller.trigger();
+      expect(webhookMocks.fireWebhookForRecording).not.toHaveBeenCalled();
+    });
+
+    it("re-drives undelivered assets with a single attempt each", async () => {
+      downloaded(ID, Date.now() - 1000);
+      loadConfig.mockReturnValue(webhookConfig(Date.now() - 60_000));
+      await poller.trigger();
+      expect(webhookMocks.fireWebhookForRecording).toHaveBeenCalledTimes(2);
+      for (const call of webhookMocks.fireWebhookForRecording.mock.calls) {
+        expect(call[2]).toEqual({ maxAttempts: 1 });
+      }
+    });
+
+    it("stops the re-drive batch at the first failure and backs that delivery off", async () => {
+      downloaded("rec1000000000000", Date.now() - 1000);
+      downloaded("rec2000000000000", Date.now() - 2000);
+      loadConfig.mockReturnValue(webhookConfig(0));
+      webhookMocks.fireWebhookForRecording.mockResolvedValue(false);
+
+      await poller.trigger();
+
+      expect(webhookMocks.fireWebhookForRecording).toHaveBeenCalledTimes(1);
+      const [failedId, failedEvent] = [
+        (webhookMocks.fireWebhookForRecording.mock.calls[0]![1] as { id: string }).id,
+        webhookMocks.fireWebhookForRecording.mock.calls[0]![0] as string,
+      ];
+      const failed = backoff(failedId);
+      const [attempts, nextAt] = failedEvent === "audio_ready" ? [failed?.a, failed?.an] : [failed?.t, failed?.tn];
+      expect(attempts).toBe(1);
+      expect(nextAt).toBeGreaterThan(Date.now());
+      const other = backoff(failedId === "rec1000000000000" ? "rec2000000000000" : "rec1000000000000");
+      expect(other).toMatchObject({ a: 0, t: 0 });
+    });
+
+    it("does not re-fire a just-failed inline delivery in the same cycle", async () => {
+      upsertFromPlaud(makePlaudItem({ is_trans: true }));
+      plaudDetailMocks.getFileDetail.mockRejectedValue(new Error("no detail"));
+      loadConfig.mockReturnValue(webhookConfig(0));
+      webhookMocks.fireWebhookForRecording.mockResolvedValue(false);
+
+      await poller.trigger();
+
+      // One inline attempt per event (audio, then transcript) — nothing more from Phase 2b.
+      const events = webhookMocks.fireWebhookForRecording.mock.calls.map((c) => c[0]);
+      expect(events).toEqual(["audio_ready", "transcript_ready"]);
+      expect(backoff(ID)).toMatchObject({ a: 1, t: 1 });
+    });
+
+    it("leaves no back-off state when no webhook is configured", async () => {
+      upsertFromPlaud(makePlaudItem());
+      plaudDetailMocks.getFileDetail.mockRejectedValue(new Error("no detail"));
+      await poller.trigger();
+      expect(webhookMocks.fireWebhookForRecording).not.toHaveBeenCalled();
+      expect(backoff(ID)).toMatchObject({ a: 0, an: null, t: 0, tn: null });
+    });
+  });
+
+  describe("Plaud is_trans gating", () => {
+    const ID = "abcdef0123456789";
+    const audioDone = (): void => {
+      db.prepare("UPDATE recordings SET audio_downloaded_at = 1 WHERE id = ?").run(ID);
+    };
+
+    it("does not ask Plaud for a transcript it hasn't produced", async () => {
+      upsertFromPlaud(makePlaudItem({ is_trans: false }));
+      audioDone();
+      await poller.trigger();
+      expect(plaudTranscriptMocks.getTranscriptAndSummary).not.toHaveBeenCalled();
+      expect(plaudDetailMocks.getFileDetail).not.toHaveBeenCalled();
+    });
+
+    it("fetches the transcript once Plaud reports one", async () => {
+      upsertFromPlaud(makePlaudItem({ is_trans: true }));
+      audioDone();
+      await poller.trigger();
+      expect(plaudTranscriptMocks.getTranscriptAndSummary).toHaveBeenCalledWith(ID);
+      expect(getRecordingById(ID)?.transcriptDownloadedAt).not.toBeNull();
+    });
+
+    it("a manual resync still tries, as the escape hatch", async () => {
+      upsertFromPlaud(makePlaudItem({ is_trans: false }));
+      audioDone();
+      plaudDetailMocks.getFileDetail.mockRejectedValue(new Error("no detail"));
+      await poller.resyncRecording(ID);
+      expect(plaudTranscriptMocks.getTranscriptAndSummary).toHaveBeenCalledWith(ID);
+    });
+  });
+
+  describe("watchdog", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stops the abandoned cycle at its next checkpoint and doesn't start another alongside it", async () => {
+      vi.useFakeTimers();
+      let releasePage!: (v: unknown) => void;
+      plaudListMocks.listRecordings.mockImplementationOnce(
+        () => new Promise((resolve) => (releasePage = resolve)),
+      );
+
+      const first = poller.trigger();
+      await vi.advanceTimersByTimeAsync(POLLER_RUN_WATCHDOG_MS + 1);
+      await first;
+      expect(poller.status().lastError).toMatch(/watchdog/);
+      expect(poller.status().polling).toBe(false);
+
+      // The hung cycle is still out there: a new run must not start beside it.
+      await poller.trigger();
+      expect(plaudListMocks.listRecordings).toHaveBeenCalledTimes(1);
+
+      // Its page finally lands (a full page, so it would normally fetch page 2
+      // and upsert) — but it was aborted, so it stops right there.
+      releasePage({
+        status: 0,
+        msg: "ok",
+        data_file_total: 1,
+        data_file_list: [makePlaudItem()],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(plaudListMocks.listRecordings).toHaveBeenCalledTimes(1);
+      expect(getRecordingById("abcdef0123456789")).toBeNull();
+
+      // Once it has stopped, polling resumes normally.
+      await poller.trigger();
+      expect(plaudListMocks.listRecordings).toHaveBeenCalledTimes(2);
+      expect(poller.status().lastError).toBeNull();
+    });
   });
 
   it("resync overwrites existing content_list markdown and mapped extra assets", async () => {

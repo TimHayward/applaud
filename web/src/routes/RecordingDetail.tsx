@@ -2,7 +2,8 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, useMemo } from "react";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
-import { api, mediaUrl, ApiError } from "../api.js";
+import { api, ApiError } from "../api.js";
+import { useMediaUrl } from "../hooks/useMediaUrl.js";
 import { useToast } from "../components/Toast.js";
 import { useRecordingActions } from "../hooks/useRecordingActions.js";
 import { AudioPlayer } from "../components/AudioPlayer.js";
@@ -34,6 +35,8 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
   const [resyncError, setResyncError] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  // Null while the signed media ticket loads; media is rendered once it lands.
+  const mediaUrl = useMediaUrl();
   const q = useQuery({
     queryKey: ["recording", id],
     queryFn: () => api.recordingDetail(id),
@@ -271,7 +274,7 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
       {/* Layout */}
       <div className="grid gap-6 lg:grid-cols-10">
         <div className="lg:col-span-7 space-y-6">
-          {r.audioDownloadedAt && (
+          {r.audioDownloadedAt && mediaUrl && (
             <AudioPlayer
               src={mediaUrl(`${mediaBase}/${r.audioFilename}`)}
               recordingId={r.id}
@@ -293,7 +296,9 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
               <p className="text-sm text-on-surface-variant">
                 {r.isTrash
                   ? "This file is deleted in Plaud. Applaud always pulls audio; transcript and summary are checked periodically in the background when Plaud has them again (they do not count as pending sync work)."
-                  : "Transcript is still pending on Plaud's side. We'll pull it on the next sync cycle."}
+                  : r.plaudIsTrans
+                    ? "Plaud has a transcript for this recording. We'll pull it on the next sync cycle."
+                    : "This recording hasn't been transcribed in Plaud yet. Transcribe it in the Plaud app and it will download on the next sync — or use Resync to check now."}
               </p>
             </section>
           ) : null}
@@ -302,8 +307,8 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
         {/* Sidebar */}
         <aside className="lg:col-span-3 space-y-6">
           {summaryMarkdownDisplay && <SummaryPanel markdown={summaryMarkdownDisplay} />}
-          <AttachmentsCard attachments={r.attachments} />
-          {downloadFiles.length > 0 && (
+          {mediaUrl && <AttachmentsCard attachments={r.attachments} mediaUrl={mediaUrl} />}
+          {mediaUrl && downloadFiles.length > 0 && (
             <section className="card p-6">
               <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Files</h2>
               <ul className="space-y-1.5">

@@ -85,5 +85,5 @@ Webhook → Config → Drop Audio Only → Format Outputs → Get Files (HTTP) �
 
 Notes:
 
-- The workflow downloads each file over HTTP from the `http_urls` in the payload, so n8n must be able to reach your Applaud instance (adjust the **Rewrite URLs** node if n8n runs on a different host than Applaud — e.g. replace `127.0.0.1` with your LAN address). If you've set a LAN access token in Applaud, append `?token=<your token>` in the same node.
+- The workflow downloads each file over HTTP from the `http_urls` in the payload, so n8n must be able to reach your Applaud instance. Set **Settings → Webhook Outbound → Public URL** in Applaud to an address n8n can reach (e.g. `http://192.168.1.20:44471`) and the URLs arrive ready to use — the **Rewrite URLs** node then has nothing to rewrite. If you've set a LAN access token, each URL already carries a signed, read-only `?ticket=` for that recording, so there's no need to put the token in n8n. (Older setups that rewrite `127.0.0.1` and append `?token=<your token>` keep working; that form is deprecated.)
 - `audio_ready` events are filtered out (**Drop Audio Only**) so files are uploaded once, when the transcript is complete.

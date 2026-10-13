@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../../api.js";
+import { api, ticketedUrl } from "../../api.js";
 
 type DetectState =
   | { kind: "idle" }
@@ -29,13 +29,21 @@ type ManualState =
   | { kind: "validating" }
   | { kind: "error"; message: string };
 
+/**
+ * Plaud sign-in: browser session detection, login watch, and manual paste.
+ * `variant="reconnect"` reuses it from Settings after setup (no wizard step
+ * label; `onBack` acts as Cancel).
+ */
 export function AuthStep({
   onNext,
   onBack,
+  variant = "setup",
 }: {
   onNext: () => void;
   onBack: () => void;
+  variant?: "setup" | "reconnect";
 }): JSX.Element {
+  const reconnect = variant === "reconnect";
   const [detect, setDetect] = useState<DetectState>({ kind: "idle" });
   const [watch, setWatch] = useState<WatchState>({ kind: "inactive" });
   const [manual, setManual] = useState<ManualState>({ kind: "idle" });
@@ -103,7 +111,8 @@ export function AuthStep({
     try {
       const { watchId } = await api.authStartWatch();
       setWatch({ kind: "waiting", elapsedSec: 0 });
-      const es = new EventSource(`/api/auth/watch/${watchId}/events`);
+      // EventSource can't send the LAN-token header — use a signed ticket.
+      const es = new EventSource(await ticketedUrl(`/api/auth/watch/${encodeURIComponent(watchId)}/events`));
       const start = Date.now();
       const tick = setInterval(() => {
         setWatch({ kind: "waiting", elapsedSec: Math.floor((Date.now() - start) / 1000) });
@@ -204,14 +213,21 @@ export function AuthStep({
   );
 
   return (
-    <div className="space-y-8">
-      <div className="space-y-2">
-        <span className="font-label text-primary text-xs font-bold tracking-widest uppercase">Step 2</span>
-        <h1 className="text-3xl font-extrabold tracking-tight text-on-surface">Connect Your Plaud Account</h1>
-        <p className="text-on-surface-variant text-base max-w-md leading-relaxed">
-          Applaud authenticates by reading your existing Plaud session from Chrome.
+    <div className={reconnect ? "space-y-4" : "space-y-8"}>
+      {reconnect ? (
+        <p className="text-sm text-on-surface-variant max-w-prose">
+          Sign in again with the same Plaud account. Applaud keeps your library and resumes syncing as soon as the new
+          session is accepted.
         </p>
-      </div>
+      ) : (
+        <div className="space-y-2">
+          <span className="font-label text-primary text-xs font-bold tracking-widest uppercase">Step 2</span>
+          <h1 className="text-3xl font-extrabold tracking-tight text-on-surface">Connect Your Plaud Account</h1>
+          <p className="text-on-surface-variant text-base max-w-md leading-relaxed">
+            Applaud authenticates by reading your existing Plaud session from Chrome.
+          </p>
+        </div>
+      )}
 
       <div className="rounded-xl bg-surface-container-low p-6 space-y-4">
         {detect.kind === "detecting" && (
@@ -282,11 +298,17 @@ export function AuthStep({
         )}
       </div>
 
-      <div className="flex justify-between pt-4">
-        <button className="flex items-center gap-2 text-on-surface-variant font-semibold text-sm hover:text-on-surface transition-colors group" onClick={onBack}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="group-hover:-translate-x-1 transition-transform"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
-          Back
-        </button>
+      <div className={`flex justify-between ${reconnect ? "" : "pt-4"}`}>
+        {reconnect ? (
+          <button type="button" className="btn-ghost px-4 py-2 text-sm" onClick={onBack}>
+            Cancel
+          </button>
+        ) : (
+          <button className="flex items-center gap-2 text-on-surface-variant font-semibold text-sm hover:text-on-surface transition-colors group" onClick={onBack}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="group-hover:-translate-x-1 transition-transform"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
+            Back
+          </button>
+        )}
       </div>
     </div>
   );

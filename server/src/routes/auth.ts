@@ -10,9 +10,12 @@ import {
   getPlaudRegionForBase,
 } from "../plaud/client.js";
 import { bootstrapFirstPartySession } from "../plaud/first-party.js";
-import { updateConfig } from "../config.js";
+import { loadConfig, updateConfig } from "../config.js";
 import { logger } from "../logger.js";
-import type { AuthDetectResponse, AuthValidateResponse } from "@applaud/shared";
+import { poller } from "../sync/poller.js";
+import type { AppConfig, AuthDetectResponse, AuthValidateResponse, TicketResponse } from "@applaud/shared";
+import { issueTicket } from "../auth/ticket.js";
+import { BROWSER_TICKET_TTL_MS } from "../constants.js";
 
 export const authRouter = Router();
 
@@ -79,6 +82,18 @@ async function validateToken(token: string): Promise<AuthValidateResponse & { re
   return { ok: false, error: lastError };
 }
 
+/**
+ * A short-lived signed ticket for requests that can't send the bearer header:
+ * `<audio>`/`<img>`/download links and `EventSource` streams (see
+ * `auth/ticket.ts`). Behind the /api bearer guard like every other route.
+ * `ticket` is null when no LAN token is configured (nothing to gate).
+ */
+authRouter.get("/ticket", (_req, res) => {
+  const issued = issueTicket("/", BROWSER_TICKET_TTL_MS);
+  const body: TicketResponse = issued ?? { ticket: null, expiresAt: null };
+  res.json(body);
+});
+
 authRouter.post("/detect", async (_req, res) => {
   // On Windows we can't read the on-disk session (DPAPI / App-Bound encryption),
   // so skip the scan entirely and tell the client to go straight to manual paste.
@@ -135,6 +150,17 @@ const ValidateSchema = z.object({
 });
 
 /**
+ * Persist new Plaud credentials. After setup this is a reconnect (Settings →
+ * Plaud account), so sync right away instead of leaving "auth required" up
+ * until the next scheduled poll. During setup the poller hasn't started yet;
+ * `complete-setup` starts it.
+ */
+function saveCredentials(patch: Partial<AppConfig>): void {
+  updateConfig(patch);
+  if (loadConfig().setupComplete) void poller.trigger();
+}
+
+/**
  * First-party accept: bootstrap a session from a captured `pld_ut`/`pld_urt`
  * pair (list workspaces, mint a workspace token) and persist the full token
  * set so the poller can keep it fresh.
@@ -149,7 +175,7 @@ async function acceptFirstParty(
     res.status(400).json({ ok: false, error: result.error });
     return;
   }
-  updateConfig(result.patch);
+  saveCredentials(result.patch);
   res.json({ ok: true, email: result.email, exp: result.patch.tokenExp ?? undefined });
 }
 
@@ -192,7 +218,7 @@ authRouter.post("/accept", async (req, res) => {
   // Prefer client-provided email (comes from LevelDB scan in the detect flow);
   // fall back to anything the JWT itself carries.
   const email = parsed.data.email ?? jwtEmail ?? null;
-  updateConfig({
+  saveCredentials({
     authMode: "legacy",
     token: jwt,
     tokenExp: exp,
@@ -260,10 +286,10 @@ authRouter.get("/watch/:id/events", (req, res) => {
       try {
         if (s.kind === "legacy") {
           // Note: the JWT region claim may not match the user's actual region
-          // (Plaud can migrate accounts). The first sync/validate call will
-          // auto-correct via the -302 redirect handler.
+          // (Plaud can migrate accounts). The first sync call auto-corrects it:
+          // plaudJson follows Plaud's -302 region redirect and persists it.
           const { email, exp, region } = parseJwt(s.token);
-          updateConfig({
+          saveCredentials({
             authMode: "legacy",
             token: s.token,
             tokenExp: exp,
@@ -278,7 +304,7 @@ authRouter.get("/watch/:id/events", (req, res) => {
           send({ type: "error", message: result.error });
           return;
         }
-        updateConfig(result.patch);
+        saveCredentials(result.patch);
         send({ type: "found", authMode: "first_party", profile: s.profile, browser: s.browser, email: result.email ?? undefined });
       } catch (err) {
         send({ type: "error", message: err instanceof Error ? err.message : String(err) });

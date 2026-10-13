@@ -83,6 +83,32 @@ export const WEBHOOK_RETRY_BACKOFF_MS: readonly number[] = process.env.APPLAUD_W
       .filter((n) => Number.isFinite(n) && n > 0)
   : [5_000, 30_000, 120_000];
 
+/**
+ * Automatic webhook re-delivery (poller Phase 2b). Each failed delivery pushes
+ * that recording/event's next attempt out by BASE × 3^(attempts-1), capped at
+ * MAX_DELAY; after MAX_ATTEMPTS it is left for a manual Redeliver. At most
+ * MAX_PER_POLL deliveries are re-driven per cycle, so a dead receiver can't
+ * stall syncing.
+ */
+export const WEBHOOK_REDRIVE_BASE_DELAY_MS = envMs("APPLAUD_WEBHOOK_REDRIVE_BASE_MINUTES", 5 * 60_000, 60_000);
+export const WEBHOOK_REDRIVE_MAX_DELAY_MS = envMs("APPLAUD_WEBHOOK_REDRIVE_MAX_HOURS", DAY_MS, HOUR_MS);
+export const WEBHOOK_REDRIVE_MAX_ATTEMPTS = envInt("APPLAUD_WEBHOOK_REDRIVE_MAX_ATTEMPTS", 8);
+export const WEBHOOK_REDRIVE_MAX_PER_POLL = envInt("APPLAUD_WEBHOOK_REDRIVE_MAX_PER_POLL", 10);
+
+/**
+ * Lifetime of the signed ticket the web UI uses for media links and live
+ * updates (see `auth/ticket.ts`). The UI renews it after half this, so an
+ * open page always has at least half of it left.
+ */
+export const BROWSER_TICKET_TTL_MS = envMs("APPLAUD_BROWSER_TICKET_TTL_HOURS", DAY_MS, HOUR_MS);
+
+/**
+ * Lifetime of the signed media URLs in webhook payloads (`http_urls`) when a
+ * LAN token is set — long enough for a receiver to fetch files after retries
+ * and queueing, short enough that a stored payload doesn't grant access forever.
+ */
+export const WEBHOOK_MEDIA_URL_TTL_MS = envMs("APPLAUD_WEBHOOK_URL_TTL_HOURS", 7 * DAY_MS, HOUR_MS);
+
 /** Soft-deleted recordings are purged from disk and DB after this delay. */
 export const SOFT_DELETE_RETENTION_MS = envMs("APPLAUD_TRASH_RETENTION_DAYS", 7 * DAY_MS, DAY_MS);
 

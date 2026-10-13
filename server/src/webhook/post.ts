@@ -7,7 +7,8 @@ import { getDb } from "../db.js";
 import { logger } from "../logger.js";
 import { signPayload } from "./sign.js";
 import { assertWebhookTargetAllowed, redirectFailureMessage } from "../security/ssrf.js";
-import { WEBHOOK_RETRY_BACKOFF_MS, HTTP_FETCH_TIMEOUT_MS } from "../constants.js";
+import { WEBHOOK_RETRY_BACKOFF_MS, HTTP_FETCH_TIMEOUT_MS, WEBHOOK_MEDIA_URL_TTL_MS } from "../constants.js";
+import { issueTicket, withTicket } from "../auth/ticket.js";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".svg"]);
 
@@ -64,10 +65,28 @@ function discoverAssets(folderAbs: string): DiscoveredAsset[] {
   return assets;
 }
 
-function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
+/**
+ * Builds the `http_urls` for one recording folder: rooted at `publicBaseUrl`
+ * (falling back to the bind address, reachable only from this machine) and,
+ * when a LAN token is set, carrying a ticket that grants read access to just
+ * this folder for WEBHOOK_MEDIA_URL_TTL_MS — so receivers can fetch the files
+ * without ever being handed the LAN token itself.
+ */
+function mediaUrlBuilder(folder: string): (file: string) => string {
   const cfg = loadConfig();
   const host = cfg.bind.host === "0.0.0.0" ? "127.0.0.1" : cfg.bind.host;
-  const base = `http://${host}:${cfg.bind.port}/media/${encodeURI(row.folder)}`;
+  const origin = cfg.publicBaseUrl ?? `http://${host}:${cfg.bind.port}`;
+  const base = `${origin}/media/${encodeURI(folder)}`;
+  const issued = issueTicket(`/media/${folder}/`, WEBHOOK_MEDIA_URL_TTL_MS);
+  return (file) => {
+    const url = `${base}/${encodeURIComponent(file)}`;
+    return issued ? withTicket(url, issued.ticket) : url;
+  };
+}
+
+function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
+  const cfg = loadConfig();
+  const mediaUrl = mediaUrlBuilder(row.folder);
   const payload: WebhookPayload = {
     event,
     recording: {
@@ -86,9 +105,9 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
       summary: `${row.folder}/summary.md`,
     },
     http_urls: {
-      audio: `${base}/${encodeURIComponent(row.audioFilename)}`,
-      transcript: `${base}/transcript.json`,
-      summary: `${base}/summary.md`,
+      audio: mediaUrl(row.audioFilename),
+      transcript: mediaUrl("transcript.json"),
+      summary: mediaUrl("summary.md"),
     },
   };
 
@@ -115,11 +134,11 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
       payload.http_urls.assets = assets.map((asset) => ({
         name: asset.name,
         type: asset.type,
-        url: `${base}/${encodeURIComponent(asset.name)}`,
+        url: mediaUrl(asset.name),
       }));
       payload.content.assets = assets.map((asset) => {
         const relPath = `${row.folder}/${asset.name}`;
-        const url = `${base}/${encodeURIComponent(asset.name)}`;
+        const url = mediaUrl(asset.name);
         if (asset.type === "markdown") {
           return {
             name: asset.name,
@@ -159,14 +178,24 @@ function logAttempt(
     .run(recordingId, event, url, statusCode, snippet, Date.now(), durationMs, error);
 }
 
+export interface FireOptions {
+  /**
+   * Cap on delivery attempts for this call, clamped to the retry schedule's
+   * length. Automatic re-delivery passes 1: its back-off lives in the DB, so it
+   * must not also sit in the in-process retry loop.
+   */
+  maxAttempts?: number;
+}
+
 export async function fireWebhookForRecording(
   event: WebhookEvent,
   row: RecordingRow,
+  opts: FireOptions = {},
 ): Promise<boolean> {
   const cfg = loadConfig();
   if (!cfg.webhook || !cfg.webhook.enabled || !cfg.webhook.url) return false;
   const payload = buildPayload(event, row);
-  return fireRaw(cfg.webhook.url, payload, row.id, event, cfg.webhook.secret);
+  return fireRaw(cfg.webhook.url, payload, row.id, event, cfg.webhook.secret, opts);
 }
 
 export async function fireRaw(
@@ -175,6 +204,7 @@ export async function fireRaw(
   recordingId: string | null,
   event: WebhookEvent,
   secret?: string,
+  opts: FireOptions = {},
 ): Promise<boolean> {
   const body = JSON.stringify(payload);
   // Same timestamp/signature is reused across retries — they're the same
@@ -190,7 +220,11 @@ export async function fireRaw(
     logger.warn({ url, message }, "webhook target rejected");
     return false;
   }
-  for (let attempt = 0; attempt < WEBHOOK_RETRY_BACKOFF_MS.length; attempt++) {
+  const maxAttempts = Math.max(
+    1,
+    Math.min(opts.maxAttempts ?? WEBHOOK_RETRY_BACKOFF_MS.length, WEBHOOK_RETRY_BACKOFF_MS.length),
+  );
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const started = Date.now();
     try {
       const res = await fetch(url, {
@@ -220,7 +254,7 @@ export async function fireRaw(
         ok ? null : (redirected ?? `HTTP ${res.status}`),
       );
       if (ok) return true;
-      if (attempt < WEBHOOK_RETRY_BACKOFF_MS.length - 1) {
+      if (attempt < maxAttempts - 1) {
         await new Promise((r) => setTimeout(r, WEBHOOK_RETRY_BACKOFF_MS[attempt]));
         continue;
       }
@@ -235,7 +269,7 @@ export async function fireRaw(
         Date.now() - started,
         err instanceof Error ? err.message : String(err),
       );
-      if (attempt < WEBHOOK_RETRY_BACKOFF_MS.length - 1) {
+      if (attempt < maxAttempts - 1) {
         await new Promise((r) => setTimeout(r, WEBHOOK_RETRY_BACKOFF_MS[attempt]));
         continue;
       }
@@ -247,10 +281,10 @@ export async function fireRaw(
 }
 
 function buildTestPayload(): WebhookPayload & { test: true } {
-  const cfg = loadConfig();
-  const host = cfg.bind.host === "0.0.0.0" ? "127.0.0.1" : cfg.bind.host;
-  const folder = "2026/04/11/sample-recording";
-  const base = `http://${host}:${cfg.bind.port}/media/${encodeURI(folder)}`;
+  const folder = "2026-04-11_Sample_recording__sample00";
+  // Same URL shape as a real delivery (public base URL + signed ticket), so a
+  // receiver can be wired up against the test payload.
+  const mediaUrl = mediaUrlBuilder(folder);
   const now = Date.now();
   return {
     test: true,
@@ -277,14 +311,14 @@ function buildTestPayload(): WebhookPayload & { test: true } {
       ],
     },
     http_urls: {
-      audio: `${base}/audio.ogg`,
-      transcript: `${base}/transcript.json`,
-      summary: `${base}/summary.md`,
+      audio: mediaUrl("audio.ogg"),
+      transcript: mediaUrl("transcript.json"),
+      summary: mediaUrl("summary.md"),
       assets: [
-        { name: "summary.md", type: "markdown", url: `${base}/summary.md` },
-        { name: "Speech_Summary.md", type: "markdown", url: `${base}/Speech_Summary.md` },
-        { name: "Highlights.md", type: "markdown", url: `${base}/Highlights.md` },
-        { name: "thumbnail.png", type: "image", url: `${base}/thumbnail.png` },
+        { name: "summary.md", type: "markdown", url: mediaUrl("summary.md") },
+        { name: "Speech_Summary.md", type: "markdown", url: mediaUrl("Speech_Summary.md") },
+        { name: "Highlights.md", type: "markdown", url: mediaUrl("Highlights.md") },
+        { name: "thumbnail.png", type: "image", url: mediaUrl("thumbnail.png") },
       ],
     },
     content: {
@@ -295,28 +329,28 @@ function buildTestPayload(): WebhookPayload & { test: true } {
           name: "summary.md",
           type: "markdown",
           path: `${folder}/summary.md`,
-          url: `${base}/summary.md`,
+          url: mediaUrl("summary.md"),
           markdown_text: "# Sample Summary\\n\\nThis is a sample summary from an Applaud test webhook.",
         },
         {
           name: "Speech_Summary.md",
           type: "markdown",
           path: `${folder}/Speech_Summary.md`,
-          url: `${base}/Speech_Summary.md`,
+          url: mediaUrl("Speech_Summary.md"),
           markdown_text: "# Speech Summary\\n\\nConcise recap.",
         },
         {
           name: "Highlights.md",
           type: "markdown",
           path: `${folder}/Highlights.md`,
-          url: `${base}/Highlights.md`,
+          url: mediaUrl("Highlights.md"),
           markdown_text: "# Highlights\\n\\n- Insight 1",
         },
         {
           name: "thumbnail.png",
           type: "image",
           path: `${folder}/thumbnail.png`,
-          url: `${base}/thumbnail.png`,
+          url: mediaUrl("thumbnail.png"),
         },
       ],
     },

@@ -1,8 +1,37 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { createReadStream, existsSync, statSync, realpathSync } from "node:fs";
+import { pipeline } from "node:stream";
 import path from "node:path";
 import { loadConfig } from "../config.js";
+import { logger } from "../logger.js";
 import { MEDIA_CSP } from "../security/headers.js";
+
+/**
+ * Stream a file to the response without ever leaving a stream 'error' event
+ * unhandled (which crashes the process). A failure to open — the file was
+ * deleted or locked between the stat and here — becomes a clean 404/500, since
+ * nothing has been sent yet. A failure mid-stream is handled by `pipeline`
+ * (unlike `.pipe`, it forwards source errors), which aborts the response.
+ */
+function streamFile(res: Response, abs: string, range?: { start: number; end: number }): void {
+  const src = createReadStream(abs, range);
+  const onOpenError = (err: NodeJS.ErrnoException): void => {
+    logger.warn({ err, file: abs }, "media file could not be opened");
+    if (res.headersSent) return;
+    for (const h of ["Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"]) res.removeHeader(h);
+    res.status(err.code === "ENOENT" ? 404 : 500).type("text/plain").send(err.code === "ENOENT" ? "not found" : "could not read file");
+  };
+  src.once("error", onOpenError);
+  src.once("open", () => {
+    src.off("error", onOpenError);
+    pipeline(src, res, (err) => {
+      if (!err) return;
+      // The client hanging up mid-stream (seeking, closing the tab) is routine.
+      if ((err as NodeJS.ErrnoException).code === "ERR_STREAM_PREMATURE_CLOSE") return;
+      logger.warn({ err, file: abs }, "media stream failed mid-transfer");
+    });
+  });
+}
 
 export const mediaRouter = Router();
 
@@ -172,12 +201,12 @@ mediaRouter.get(/^\/(.*)$/, (req, res) => {
       res.setHeader("Content-Range", `bytes ${start}-${end}/${st.size}`);
       res.setHeader("Accept-Ranges", "bytes");
       res.setHeader("Content-Length", String(end - start + 1));
-      createReadStream(abs, { start, end }).pipe(res);
+      streamFile(res, abs, { start, end });
       return;
     }
   }
 
   res.setHeader("Content-Length", String(st.size));
   res.setHeader("Accept-Ranges", "bytes");
-  createReadStream(abs).pipe(res);
+  streamFile(res, abs);
 });

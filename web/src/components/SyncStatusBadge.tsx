@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api.js";
+import { api, ticketedUrl } from "../api.js";
 import { formatRelative } from "../lib/format.js";
 
 /** Warn once the Plaud token is within this many days of expiring. */
@@ -23,24 +24,37 @@ export function SyncStatusBadge(): JSX.Element {
 
   // Listen to sync events over SSE to update immediately. Reconnects on
   // error (e.g. a transient network blip) instead of going dark forever.
+  // EventSource can't send the LAN-token header, so each connection carries a
+  // fresh signed ticket instead (a no-op when no token is configured).
   useEffect(() => {
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
+    const retry = (): void => {
+      if (!closed) reconnectTimer = setTimeout(() => void connect(), 5_000);
+    };
 
-    const connect = (): void => {
+    const connect = async (): Promise<void> => {
       if (closed) return;
-      es = new EventSource("/api/sync/events");
+      let url: string;
+      try {
+        url = await ticketedUrl("/api/sync/events");
+      } catch {
+        retry();
+        return;
+      }
+      if (closed) return;
+      es = new EventSource(url);
       es.onmessage = () => {
         qc.invalidateQueries({ queryKey: ["sync-status"] });
         qc.invalidateQueries({ queryKey: ["recordings"] });
       };
       es.onerror = () => {
         es?.close();
-        if (!closed) reconnectTimer = setTimeout(connect, 5_000);
+        retry();
       };
     };
-    connect();
+    void connect();
 
     return () => {
       closed = true;
@@ -53,9 +67,13 @@ export function SyncStatusBadge(): JSX.Element {
   if (!s) return <span className="pill bg-surface-container text-on-surface-variant">loading</span>;
   if (s.authRequired) {
     return (
-      <span className="pill bg-error/15 text-error" title="Reconnect your Plaud account on the Settings page.">
-        auth required
-      </span>
+      <Link
+        to="/settings"
+        className="pill bg-error/15 text-error hover:bg-error/25 transition-colors"
+        title="Syncing is paused. Click to reconnect your Plaud account in Settings."
+      >
+        auth required — reconnect
+      </Link>
     );
   }
   if (s.lastError) {
@@ -82,12 +100,13 @@ export function SyncStatusBadge(): JSX.Element {
   }
   if (tokenExpiringSoon) {
     return (
-      <span
-        className="pill bg-tertiary/15 text-tertiary"
-        title="Reconnect your Plaud account on the Settings page before it expires."
+      <Link
+        to="/settings"
+        className="pill bg-tertiary/15 text-tertiary hover:bg-tertiary/25 transition-colors"
+        title="Click to reconnect your Plaud account in Settings before it expires."
       >
         token expires in {Math.max(0, daysUntilExpiry)}d
-      </span>
+      </Link>
     );
   }
   const nextInMs = s.nextPollAt ? s.nextPollAt - Date.now() : null;

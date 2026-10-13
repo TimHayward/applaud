@@ -3,6 +3,7 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { loadConfig } from "../config.js";
 import { RATE_LIMIT_AUTH_FAILURES, RATE_LIMIT_WINDOW_MS } from "../constants.js";
 import { clientKey, createRateLimiter } from "../security/rate-limit.js";
+import { verifyTicket } from "./ticket.js";
 
 /**
  * Constant-time string comparison. Both sides are hashed first so the compare
@@ -35,12 +36,18 @@ export function resetAuthFailures(): void {
  * no token is set (the default for a loopback install; container mode always
  * has one — see `index.ts`).
  *
- * Accepts `Authorization: Bearer <token>` everywhere. The `?token=` query form
- * is accepted only where it's actually needed — `/media`, for `<audio>`/`<a>`/
- * `<img>` elements that can't set headers — because query strings leak into
- * proxy logs, browser history, and `Referer`. `/api` is header-only.
+ * Accepts `Authorization: Bearer <token>` everywhere. Requests that can't send
+ * a header (`<audio>`/`<img>`/download links, `EventSource`) instead carry a
+ * short-lived, path-scoped `?ticket=` (see `auth/ticket.ts`), accepted only
+ * on read-only GETs where `ticketPath` says so. `?token=<lanToken>` on /media
+ * is still honored for existing automations but is deprecated — the raw token
+ * in a query string leaks into proxy logs, history, and `Referer`.
  */
-export function createLanTokenGuard(opts: { allowQueryToken: boolean }): RequestHandler {
+export function createLanTokenGuard(opts: {
+  allowQueryToken: boolean;
+  /** The decoded path a ticket must grant for this request, or null when tickets aren't accepted here. */
+  ticketPath?: (req: Request) => string | null;
+}): RequestHandler {
   return function requireToken(req: Request, res: Response, next: NextFunction): void {
     const token = loadConfig().lanToken;
     if (!token) {
@@ -56,6 +63,14 @@ export function createLanTokenGuard(opts: { allowQueryToken: boolean }): Request
       next();
       return;
     }
+    const ticket = typeof req.query.ticket === "string" ? req.query.ticket : undefined;
+    if (ticket && (req.method === "GET" || req.method === "HEAD") && opts.ticketPath) {
+      const scoped = opts.ticketPath(req);
+      if (scoped !== null && verifyTicket(ticket, scoped)) {
+        next();
+        return;
+      }
+    }
     if (!authFailures.consume(clientKey(req))) {
       res.setHeader("Retry-After", String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)));
       res.status(429).json({ error: "too many failed authentication attempts" });
@@ -65,8 +80,32 @@ export function createLanTokenGuard(opts: { allowQueryToken: boolean }): Request
   };
 }
 
-/** Header-only guard for `/api`. */
-export const requireLanToken = createLanTokenGuard({ allowQueryToken: false });
+/** `/api` routes an `EventSource` connects to — the only API reads that take a ticket. */
+const SSE_PATH = /^\/(sync\/events|auth\/watch\/[^/]+\/events)$/;
 
-/** Guard for `/media`, which additionally accepts `?token=`. */
-export const requireLanTokenMedia = createLanTokenGuard({ allowQueryToken: true });
+/**
+ * Guard for `/api` (mount there): bearer header, plus a ticket on the two
+ * server-sent-event streams.
+ */
+export const requireLanToken = createLanTokenGuard({
+  allowQueryToken: false,
+  ticketPath: (req) => (SSE_PATH.test(req.path) ? `/api${req.path}` : null),
+});
+
+/**
+ * Guard for `/media` (mount there): bearer header, a ticket, or the deprecated
+ * `?token=`. The ticket's scope is checked against the path the media route
+ * will actually resolve — Express decodes the route param once and
+ * `resolveSafe` decodes it again — so a double-encoded `..` (`%252e%252e`)
+ * can't carry a folder-scoped ticket into another folder.
+ */
+export const requireLanTokenMedia = createLanTokenGuard({
+  allowQueryToken: true,
+  ticketPath: (req) => {
+    try {
+      return `/media${decodeURIComponent(decodeURIComponent(req.path))}`;
+    } catch {
+      return null;
+    }
+  },
+});

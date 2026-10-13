@@ -7,6 +7,13 @@ export interface WebhookConfig {
   url: string;
   enabled: boolean;
   secret?: string;
+  /**
+   * When the webhook last went from off/unconfigured to active (epoch ms). Set
+   * server-side. Automatic re-delivery only covers assets downloaded at or
+   * after this point, so enabling a webhook doesn't replay the whole library.
+   * Unset on configs that predate it, which means "no cutoff".
+   */
+  enabledAt?: number;
 }
 
 /**
@@ -51,6 +58,13 @@ export interface AppConfig {
   webhook: WebhookConfig | null;
   pollIntervalMinutes: number;
   bind: BindConfig;
+  /**
+   * Base URL other machines use to reach this instance (e.g.
+   * `http://192.168.1.20:44471` or `https://applaud.example.com`), for the
+   * `http_urls` in webhook payloads. Null falls back to `http://<bind host>:<port>`,
+   * which is only reachable from this machine.
+   */
+  publicBaseUrl: string | null;
   lanToken: string | null;
   /**
    * When true, list/sync includes items in Plaud’s trash (`is_trash`) so they can be archived locally.
@@ -76,6 +90,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
+  publicBaseUrl: null,
   lanToken: null,
   importPlaudDeleted: false,
 };

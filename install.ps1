@@ -6,7 +6,7 @@
 # What it does:
 #   1. Ensures git is available.
 #   2. Installs pnpm (via the official installer) if not already present.
-#   3. Ensures Node.js >= 20 is available (installs via pnpm if missing).
+#   3. Ensures Node.js >= 22 is available (installs via pnpm if missing).
 #   4. Clones the applaud repo into .\applaud (or $env:APPLAUD_DIR).
 #   5. Runs `pnpm install` and `pnpm build`.
 #   6. Prints the commands to start applaud.
@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $RepoUrl    = if ($env:APPLAUD_REPO) { $env:APPLAUD_REPO } else { 'https://github.com/TimHayward/applaud.git' }
 $RepoRef    = if ($env:APPLAUD_REF)  { $env:APPLAUD_REF }  else { 'v0.5.11' }
 $InstallDir = if ($env:APPLAUD_DIR)  { $env:APPLAUD_DIR }  else { Join-Path $PWD 'applaud' }
-$MinNodeMajor = 20
+$MinNodeMajor = 22
 
 function Say($msg)  { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Warn($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }

@@ -6,7 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@9.12.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "concurrently -n web,srv -c cyan,magenta \"pnpm -C web dev\" \"pnpm -C server dev\"",

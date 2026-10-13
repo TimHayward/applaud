@@ -4,7 +4,27 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Changed
+- **Requires Node.js 22 or newer** (Node 20 reached end-of-life in April 2026). The Docker image now uses `node:22-slim`.
+- **The database is migrated on first start** (versioned migrations; one-way). File locations are no longer stored as absolute paths, so you can move your recordings folder or change the Docker mount path without breaking the library.
+- **API:** recording objects no longer include `audioPath`, `transcriptPath`, `summaryPath`, or `metadataPath`. Build file URLs from `mediaBase` + `audioFilename` (or the fixed names `transcript.json`, `transcript.txt`, `summary.md`, `metadata.json`). New `plaudIsTrans` field.
+- Media links and live updates use short-lived signed tickets (`GET /api/auth/ticket`) instead of putting your LAN access token in URLs. `?token=` on `/media` still works for existing automations but is deprecated.
+- Recordings Plaud hasn't transcribed yet are no longer re-requested from Plaud on every sync. Applaud waits until Plaud reports a transcript (**Resync** still checks on demand).
+
+### Fixed
+- Live sync updates now work when a LAN access token is set (always the case in Docker); previously the dashboard silently fell back to polling. The login watch in the setup wizard works there too.
+- A media file that disappears or is locked mid-request no longer crashes the server.
+- Old-style (legacy token) accounts that Plaud moves to another region now follow the redirect automatically instead of failing every sync.
+- First-party sessions recover on their own when the stored Plaud workspace changes, and **Resync** refreshes an expired workspace token first.
+- Plaud sign-in calls now time out instead of hanging a sync or the connect step.
+- A sync cycle stopped by the 30-minute safety timeout now actually stops, rather than continuing in the background alongside the next one.
+- Saving a webhook URL that isn't a URL returns a validation error instead of a server error.
+- Turning on a webhook no longer replays your whole library. Automatic re-delivery only covers recordings downloaded after the webhook was enabled.
+- A webhook receiver that is down no longer stalls syncing. Failed deliveries are retried with a growing back-off (5 min, then up to once a day, 8 tries; tunable via `APPLAUD_WEBHOOK_REDRIVE_*`), at most 10 per sync cycle. After that, use **Redeliver** in Settings.
+- You can now reconnect an expired or revoked Plaud session: Settings → Account Details → **Reconnect Plaud account**. The "auth required" badge links there, and syncing resumes as soon as the new session is accepted.
+
 ### Added
+- **Settings → Webhook Outbound → Public URL**: webhook `http_urls` use this address, and with a LAN access token each link carries a read-only ticket for that one recording (valid 7 days, `APPLAUD_WEBHOOK_URL_TTL_HOURS`), so receivers like n8n can download files without the token or URL rewriting.
 - LAN access token: optional bearer/`?token=` auth gating `/api` and `/media` for LAN-exposed instances (Settings → LAN Access).
 - `/api/health` liveness endpoint + Docker `HEALTHCHECK`; container now runs as the non-root `node` user.
 - Webhook replay protection: signatures now cover `${timestamp}.${body}` and every signed delivery carries `X-Applaud-Timestamp`.

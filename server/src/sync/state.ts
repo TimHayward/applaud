@@ -2,7 +2,7 @@ import { renameSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { RecordingRow, PlaudRawRecording, RecordingsSort } from "@applaud/shared";
 import { getDb, rowToRecording, type RecordingDbRow } from "../db.js";
-import { folderName, recordingPaths, audioFilenameForFiletype } from "./layout.js";
+import { folderName, audioFilenameForFiletype } from "./layout.js";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { emit } from "./events.js";
@@ -12,6 +12,9 @@ import {
   PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT,
   PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT,
   RECORDINGS_LIST_MAX_LIMIT,
+  WEBHOOK_REDRIVE_BASE_DELAY_MS,
+  WEBHOOK_REDRIVE_MAX_DELAY_MS,
+  WEBHOOK_REDRIVE_MAX_ATTEMPTS,
 } from "../constants.js";
 
 export {
@@ -33,11 +36,14 @@ function assetWorkWhereSql(): string {
   const cfg = loadConfig();
   const trashOk = cfg.importPlaudDeleted ? "" : " AND is_trash = 0";
   // Plaud-trashed files (is_trash=1): only sync audio when import is enabled — never transcript/summary.
+  // A transcript is only worth asking for once Plaud reports it exists
+  // (is_trans) — otherwise every never-transcribed recording would cost
+  // Plaud API calls on every poll.
   return `user_deleted_at IS NULL${trashOk}
        AND (
          audio_downloaded_at IS NULL
          OR (is_trash = 0 AND (
-              transcript_downloaded_at IS NULL
+              (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
               OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
             ))
        )`;
@@ -83,15 +89,17 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
     }
     const trashVal = item.is_trash ? 1 : 0;
     const summVal = item.is_summary ? 1 : 0;
+    const transVal = item.is_trans ? 1 : 0;
     if (
       existing.is_trash !== trashVal ||
       existing.plaud_is_summary !== summVal ||
+      existing.plaud_is_trans !== transVal ||
       (existing.is_starred ?? 0) !== starredVal ||
       (existing.plaud_tags ?? null) !== tagsJson
     ) {
       db.prepare(
-        "UPDATE recordings SET is_trash = ?, plaud_is_summary = ?, is_starred = ?, plaud_tags = ? WHERE id = ?",
-      ).run(trashVal, summVal, starredVal, tagsJson, item.id);
+        "UPDATE recordings SET is_trash = ?, plaud_is_summary = ?, plaud_is_trans = ?, is_starred = ?, plaud_tags = ? WHERE id = ?",
+      ).run(trashVal, summVal, transVal, starredVal, tagsJson, item.id);
     }
     return rowToRecording(
       db.prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?").get(item.id)!,
@@ -101,17 +109,12 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
   const cfg = loadConfig();
   if (!cfg.recordingsDir) throw new Error("recordingsDir not configured");
   const folder = folderName(item.start_time, item.filename, item.id);
-  const paths = recordingPaths(cfg.recordingsDir, folder, audioFilenameForFiletype(item.filetype));
 
   db.prepare(
     `INSERT INTO recordings (
       id, filename, start_time, end_time, duration_ms, filesize_bytes, serial_number,
-      folder, audio_path, transcript_path, summary_path, metadata_path,
-      audio_downloaded_at, transcript_downloaded_at, webhook_audio_fired_at,
-      webhook_transcript_fired_at, is_trash, last_error, metadata_json,
-      user_deleted_at, user_purge_at, plaud_is_summary, summary_downloaded_at,
-      is_starred, plaud_tags
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, NULL, ?, ?)`,
+      folder, audio_filename, is_trash, plaud_is_summary, plaud_is_trans, is_starred, plaud_tags
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     item.id,
     item.filename,
@@ -121,12 +124,10 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
     item.filesize,
     item.serial_number,
     folder,
-    paths.audioPath,
-    paths.transcriptJsonPath,
-    paths.summaryMdPath,
-    paths.metadataPath,
+    audioFilenameForFiletype(item.filetype),
     item.is_trash ? 1 : 0,
     item.is_summary ? 1 : 0,
+    item.is_trans ? 1 : 0,
     starredVal,
     tagsJson,
   );
@@ -171,25 +172,11 @@ function renameRecordingFolder(row: RecordingDbRow, newFilename: string): void {
     }
   }
 
-  // Preserve the recording's actual audio filename (e.g. audio.mp3) across the
-  // folder move — don't recompute it back to the default.
-  const audioFilename = row.audio_path ? path.basename(row.audio_path) : undefined;
-  const newPaths = recordingPaths(cfg.recordingsDir, newFolder, audioFilename);
+  // File paths are derived from `folder`, so moving the folder is the only
+  // DB change needed (the audio filename travels with it).
   getDb()
-    .prepare(
-      `UPDATE recordings
-         SET filename = ?, folder = ?, audio_path = ?, transcript_path = ?, summary_path = ?, metadata_path = ?
-       WHERE id = ?`,
-    )
-    .run(
-      newFilename,
-      newFolder,
-      newPaths.audioPath,
-      newPaths.transcriptJsonPath,
-      newPaths.summaryMdPath,
-      newPaths.metadataPath,
-      row.id,
-    );
+    .prepare("UPDATE recordings SET filename = ?, folder = ? WHERE id = ?")
+    .run(newFilename, newFolder, row.id);
   emit("recording_renamed", { recordingId: row.id });
 }
 
@@ -238,9 +225,46 @@ export function setRecordingDisplayName(id: string, displayName: string | null):
   return getRecordingById(id);
 }
 
-export function markWebhookFired(id: string, event: "audio_ready" | "transcript_ready"): void {
-  const col = event === "audio_ready" ? "webhook_audio_fired_at" : "webhook_transcript_fired_at";
-  getDb().prepare(`UPDATE recordings SET ${col} = ? WHERE id = ?`).run(Date.now(), id);
+type WebhookReadyEvent = "audio_ready" | "transcript_ready";
+
+/** Column prefix shared by `<p>_downloaded_at` and `webhook_<p>_*` for an event. */
+function webhookColumnPrefix(event: WebhookReadyEvent): "audio" | "transcript" {
+  return event === "audio_ready" ? "audio" : "transcript";
+}
+
+/** Marks a delivery confirmed and clears its re-delivery back-off. */
+export function markWebhookFired(id: string, event: WebhookReadyEvent): void {
+  const p = webhookColumnPrefix(event);
+  getDb()
+    .prepare(
+      `UPDATE recordings SET webhook_${p}_fired_at = ?, webhook_${p}_attempts = 0, webhook_${p}_next_at = NULL WHERE id = ?`,
+    )
+    .run(Date.now(), id);
+}
+
+/** Back-off before re-delivery attempt number `attempts + 1`: BASE × 3^(attempts-1), capped. */
+export function webhookRedriveDelayMs(attempts: number): number {
+  return Math.min(WEBHOOK_REDRIVE_BASE_DELAY_MS * 3 ** Math.max(0, attempts - 1), WEBHOOK_REDRIVE_MAX_DELAY_MS);
+}
+
+/**
+ * Records a failed delivery: bumps the attempt count and schedules the next
+ * automatic re-delivery. Once the count reaches WEBHOOK_REDRIVE_MAX_ATTEMPTS,
+ * Phase 2b stops picking the row up (manual Redeliver still works).
+ */
+export function recordWebhookFailure(id: string, event: WebhookReadyEvent, now = Date.now()): void {
+  const p = webhookColumnPrefix(event);
+  const db = getDb();
+  const row = db
+    .prepare<[string], { attempts: number }>(`SELECT webhook_${p}_attempts AS attempts FROM recordings WHERE id = ?`)
+    .get(id);
+  if (!row) return;
+  const attempts = row.attempts + 1;
+  db.prepare(`UPDATE recordings SET webhook_${p}_attempts = ?, webhook_${p}_next_at = ? WHERE id = ?`).run(
+    attempts,
+    now + webhookRedriveDelayMs(attempts),
+    id,
+  );
 }
 
 export function recordError(id: string, message: string): void {
@@ -425,7 +449,7 @@ export function countPendingTranscripts(): number {
   const row = getDb()
     .prepare<[], { c: number }>(
       `SELECT COUNT(*) AS c FROM recordings WHERE audio_downloaded_at IS NOT NULL AND transcript_downloaded_at IS NULL
-       AND user_deleted_at IS NULL AND is_trash = 0`,
+       AND plaud_is_trans = 1 AND user_deleted_at IS NULL AND is_trash = 0`,
     )
     .get();
   return row?.c ?? 0;
@@ -459,43 +483,66 @@ export function findRecordingsNeedingAssets(): RecordingRow[] {
   return rows.map(rowToRecording);
 }
 
+/** SQL predicate: this row's `p` webhook is due for automatic re-delivery. */
+function webhookDueSql(p: "audio" | "transcript"): string {
+  return `(${p}_downloaded_at IS NOT NULL AND ${p}_downloaded_at >= @cutoff
+           AND webhook_${p}_fired_at IS NULL
+           AND webhook_${p}_attempts < @maxAttempts
+           AND (webhook_${p}_next_at IS NULL OR webhook_${p}_next_at <= @now))`;
+}
+
+/** JS mirror of `webhookDueSql`, used to split a matched row into its due events. */
+function isWebhookDue(
+  row: RecordingDbRow,
+  p: "audio" | "transcript",
+  opts: { cutoff: number; now: number },
+): boolean {
+  const downloadedAt = p === "audio" ? row.audio_downloaded_at : row.transcript_downloaded_at;
+  const firedAt = p === "audio" ? row.webhook_audio_fired_at : row.webhook_transcript_fired_at;
+  const attempts = p === "audio" ? row.webhook_audio_attempts : row.webhook_transcript_attempts;
+  const nextAt = p === "audio" ? row.webhook_audio_next_at : row.webhook_transcript_next_at;
+  return (
+    downloadedAt != null &&
+    downloadedAt >= opts.cutoff &&
+    firedAt == null &&
+    attempts < WEBHOOK_REDRIVE_MAX_ATTEMPTS &&
+    (nextAt == null || nextAt <= opts.now)
+  );
+}
+
 /**
- * Rows with a downloaded asset whose webhook was never confirmed delivered
- * (`*_fired_at IS NULL`). Drives automatic re-delivery on each poll so a
- * delivery lost after the in-process backoff window recovers without a manual
- * Redeliver. Mirrors the fire semantics of the download path: audio_ready fires
- * for any downloaded audio; transcript_ready only for non-trash rows.
+ * Deliveries due for automatic re-delivery (poller Phase 2b): an asset that was
+ * downloaded at or after `cutoff` (when the webhook was enabled), has never
+ * been confirmed delivered, is under the attempt cap, and is past its back-off.
+ * Mirrors the download path's fire semantics: audio_ready for any downloaded
+ * audio, transcript_ready only for non-trash rows. At most `limit` events.
  */
-export function findRecordingsNeedingWebhook(): {
+export function findRecordingsNeedingWebhook(opts: {
+  cutoff: number;
+  now: number;
+  limit: number;
+}): {
   row: RecordingRow;
-  event: "audio_ready" | "transcript_ready";
+  event: WebhookReadyEvent;
 }[] {
   const rows = getDb()
-    .prepare<[], RecordingDbRow>(
+    .prepare<{ cutoff: number; now: number; maxAttempts: number; limit: number }, RecordingDbRow>(
       `SELECT * FROM recordings
        WHERE user_deleted_at IS NULL
-         AND (
-           (audio_downloaded_at IS NOT NULL AND webhook_audio_fired_at IS NULL)
-           OR (is_trash = 0 AND transcript_downloaded_at IS NOT NULL AND webhook_transcript_fired_at IS NULL)
-         )
-       ORDER BY start_time DESC`,
+         AND (${webhookDueSql("audio")} OR (is_trash = 0 AND ${webhookDueSql("transcript")}))
+       ORDER BY start_time DESC
+       LIMIT @limit`,
     )
-    .all();
-  const out: { row: RecordingRow; event: "audio_ready" | "transcript_ready" }[] = [];
+    .all({ cutoff: opts.cutoff, now: opts.now, maxAttempts: WEBHOOK_REDRIVE_MAX_ATTEMPTS, limit: opts.limit });
+  const out: { row: RecordingRow; event: WebhookReadyEvent }[] = [];
   for (const dbRow of rows) {
     const row = rowToRecording(dbRow);
-    if (dbRow.audio_downloaded_at != null && dbRow.webhook_audio_fired_at == null) {
-      out.push({ row, event: "audio_ready" });
-    }
-    if (
-      dbRow.is_trash === 0 &&
-      dbRow.transcript_downloaded_at != null &&
-      dbRow.webhook_transcript_fired_at == null
-    ) {
+    if (isWebhookDue(dbRow, "audio", opts)) out.push({ row, event: "audio_ready" });
+    if (dbRow.is_trash === 0 && isWebhookDue(dbRow, "transcript", opts)) {
       out.push({ row, event: "transcript_ready" });
     }
   }
-  return out;
+  return out.slice(0, opts.limit);
 }
 
 export function findPlaudTrashAssetProbeCandidates(probeOlderThan: number, limit: number): RecordingRow[] {
@@ -507,7 +554,7 @@ export function findPlaudTrashAssetProbeCandidates(probeOlderThan: number, limit
          AND is_trash = 1
          AND audio_downloaded_at IS NOT NULL
          AND (
-           transcript_downloaded_at IS NULL
+           (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
            OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
          )
          AND (trash_asset_probe_at IS NULL OR trash_asset_probe_at < ?)
@@ -531,7 +578,7 @@ export function resetPlaudTrashAssetProbeTimestamps(): number {
          AND is_trash = 1
          AND audio_downloaded_at IS NOT NULL
          AND (
-           transcript_downloaded_at IS NULL
+           (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
            OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
          )`,
     )

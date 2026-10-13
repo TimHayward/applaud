@@ -38,8 +38,11 @@ configRouter.get("/", (_req, res) => {
 const HttpUrl = z
   .string()
   .url()
-  .refine((v) => /^https?:$/.test(new URL(v).protocol), {
-    message: "webhook URL must use http or https",
+  // zod still runs refinements after `.url()` fails, so `new URL` must not be
+  // allowed to throw (it would escape safeParse as a 500 instead of a 400, and
+  // break the `.or(z.literal(""))` fallbacks below).
+  .refine((v) => URL.canParse(v) && /^https?:$/.test(new URL(v).protocol), {
+    message: "URL must use http or https",
   });
 
 /**
@@ -71,6 +74,8 @@ const PatchSchema = z.object({
     .optional(),
   importPlaudDeleted: z.boolean().optional(),
   lanToken: LanToken.optional(),
+  /** "" or null clears it (webhook URLs fall back to the bind address). */
+  publicBaseUrl: HttpUrl.or(z.literal("")).nullable().optional(),
 });
 
 configRouter.post("/", (req, res) => {
@@ -88,16 +93,33 @@ configRouter.post("/", (req, res) => {
   // Same redact/preserve/clear truth table as the webhook secret applies here.
   const mergedLanToken =
     patch.lanToken !== undefined ? mergeWebhookSecret(prev.lanToken ?? undefined, patch.lanToken) : undefined;
+  const webhookEnabled = patch.webhook
+    ? (patch.webhook.enabled ?? patch.webhook.url.length > 0)
+    : false;
+  // Stamp when the webhook goes from off/unconfigured to active, so automatic
+  // re-delivery doesn't replay every recording downloaded before it existed.
+  // Staying active (e.g. a URL or secret edit) keeps the original stamp.
+  const prevWebhookActive = Boolean(prev.webhook?.enabled && prev.webhook.url);
+  const webhookEnabledAt =
+    patch.webhook && webhookEnabled && patch.webhook.url.length > 0
+      ? prevWebhookActive
+        ? prev.webhook?.enabledAt
+        : Date.now()
+      : undefined;
   const normalized = {
     ...patch,
     webhook: patch.webhook
       ? {
           url: patch.webhook.url,
-          enabled: patch.webhook.enabled ?? patch.webhook.url.length > 0,
+          enabled: webhookEnabled,
           ...(mergedSecret ? { secret: mergedSecret } : {}),
+          ...(webhookEnabledAt !== undefined ? { enabledAt: webhookEnabledAt } : {}),
         }
       : patch.webhook,
     ...(patch.lanToken !== undefined ? { lanToken: mergedLanToken ?? null } : {}),
+    ...(patch.publicBaseUrl !== undefined
+      ? { publicBaseUrl: patch.publicBaseUrl ? patch.publicBaseUrl.replace(/\/+$/, "") : null }
+      : {}),
   };
   const next = updateConfig(normalized);
   if (patch.importPlaudDeleted === true && !prevImportPlaudDeleted) {
