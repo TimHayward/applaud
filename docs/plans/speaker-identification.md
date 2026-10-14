@@ -10,16 +10,16 @@ Recordings are consumed through several routes: Ask Plaud, Obsidian (via n8n), a
 
 ### Decisions
 
-| # | Decision | Basis |
-| --- | --- | --- |
-| D1 | No second transcription. Plaud's transcript and segmentation are trusted. | User decision |
-| D2 | Speaker identification uses **local voice embeddings**, never an LLM. LLMs cannot recognise voices. | Technical constraint |
-| D3 | Voiceprints are stored **locally only** (SQLite). Recordings are private conversations. | User constraint (privacy) |
-| D4 | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md`. | User accepted |
-| D5 | The `-Applaud` summary is generated via OpenRouter **only after speakers are labelled**, plus a manual **Regenerate** button. Transcript text only is sent; audio never leaves the machine. | User decision |
-| D6 | Only **confirmed** labels (or Plaud's own owner tag) enrol voiceprints. Auto-matches never feed the library. | Prevents compounding errors |
-| D7 | Write-back to Plaud is **designed for now, built last** (Phase 5), behind explicit opt-in. The Plaud MCP is read-only, so write-back goes through Applaud, which n8n can trigger. | User decision; MCP has no write tools |
-| D8 | Labels are keyed by Plaud `segment_uid` and Plaud speaker label, with provenance, so write-back needs no rework. | Enables D7 |
+| #   | Decision                                                                                                                                                                                    | Basis                                 |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| D1  | No second transcription. Plaud's transcript and segmentation are trusted.                                                                                                                   | User decision                         |
+| D2  | Speaker identification uses **local voice embeddings**, never an LLM. LLMs cannot recognise voices.                                                                                         | Technical constraint                  |
+| D3  | Voiceprints are stored **locally only** (SQLite). Recordings are private conversations.                                                                                                     | User constraint (privacy)             |
+| D4  | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md`.                                                                            | User accepted                         |
+| D5  | The `-Applaud` summary is generated via OpenRouter **only after speakers are labelled**, plus a manual **Regenerate** button. Transcript text only is sent; audio never leaves the machine. | User decision                         |
+| D6  | Only **confirmed** labels (or Plaud's own owner tag) enrol voiceprints. Auto-matches never feed the library.                                                                                | Prevents compounding errors           |
+| D7  | Write-back to Plaud is **designed for now, built last** (Phase 5), behind explicit opt-in. The Plaud MCP is read-only, so write-back goes through Applaud, which n8n can trigger.           | User decision; MCP has no write tools |
+| D8  | Labels are keyed by Plaud `segment_uid` and Plaud speaker label, with provenance, so write-back needs no rework.                                                                            | Enables D7                            |
 
 ### Target environment
 
@@ -50,14 +50,14 @@ audio.*  ── ffmpeg ──► 16 kHz mono PCM ──► per-label segment win
 
 ### Key components
 
-| Component | Choice | Notes |
-| --- | --- | --- |
-| Embedding runtime | `sherpa-onnx-node` (Apache-2.0) | Native Node bindings, keeps a single runtime. Confirm prebuilt binaries for linux-x64, darwin, win-x64 in Phase 0. |
-| Embedding model | WeSpeaker VoxCeleb ResNet34 (English), ~26 MB ONNX | Downloaded on first enable into the config dir, pinned by SHA-256. Licence follows VoxCeleb (verify in Phase 0). Alternative: NeMo TitaNet-small. |
-| Audio decode | `ffmpeg-static` (npm) | Same binary path for Docker and local installs; avoids an apt dependency and Windows PATH issues. |
-| Job execution | In-process queue, concurrency 1, separate from the poller | A slow embedding job must never delay sync. |
-| Summary | OpenRouter chat completions, model configurable | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0). |
-| Fallback (if Phase 0 fails) | Python sidecar container with SpeechBrain ECAPA | Only if sherpa-onnx cannot be made to work across platforms. |
+| Component                   | Choice                                                    | Notes                                                                                                                                             |
+| --------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Embedding runtime           | `sherpa-onnx-node` (Apache-2.0)                           | Native Node bindings, keeps a single runtime. Confirm prebuilt binaries for linux-x64, darwin, win-x64 in Phase 0.                                |
+| Embedding model             | WeSpeaker VoxCeleb ResNet34 (English), ~26 MB ONNX        | Downloaded on first enable into the config dir, pinned by SHA-256. Licence follows VoxCeleb (verify in Phase 0). Alternative: NeMo TitaNet-small. |
+| Audio decode                | `ffmpeg-static` (npm)                                     | Same binary path for Docker and local installs; avoids an apt dependency and Windows PATH issues.                                                 |
+| Job execution               | In-process queue, concurrency 1, separate from the poller | A slow embedding job must never delay sync.                                                                                                       |
+| Summary                     | OpenRouter chat completions, model configurable           | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0).                                   |
+| Fallback (if Phase 0 fails) | Python sidecar container with SpeechBrain ECAPA           | Only if sherpa-onnx cannot be made to work across platforms.                                                                                      |
 
 ## 3. Data model (one new migration)
 
@@ -189,23 +189,23 @@ Sizes are relative (S / M / L), professional judgement, not evidenced effort.
 
 ## 6. Risks
 
-| Risk | Likelihood | Impact | Mitigation |
-| --- | --- | --- | --- |
-| sherpa-onnx native binaries fail on one platform | Medium | High | Phase 0 go / no-go; Python sidecar fallback |
-| Plaud diarisation merges two people into one label | Medium | Medium | Outlier segments, per-segment reassign, D6 |
-| Cold start: only the owner is known | Certain | Medium | Fast labelling UI; expect 1 to 3 confirmations per new person |
-| Wrong auto-label propagates (and is written back to Plaud) | Low to medium | High | Margin rule, D6, higher write-back threshold, dry run, undo log |
-| Plaud changes the undocumented API (read or write) | Medium | Medium to high | Isolated client module, fixture tests, write-back off by default |
-| Voiceprints are biometric data | Certain | Medium | Local only, per-person deletion, never in webhooks or exports |
-| Embedding model changed later | Low | Medium | `model_id` on every vector; re-embed job |
-| Docker image size grows | Certain | Low | Model downloaded on enable rather than baked into the image |
+| Risk                                                       | Likelihood    | Impact         | Mitigation                                                       |
+| ---------------------------------------------------------- | ------------- | -------------- | ---------------------------------------------------------------- |
+| sherpa-onnx native binaries fail on one platform           | Medium        | High           | Phase 0 go / no-go; Python sidecar fallback                      |
+| Plaud diarisation merges two people into one label         | Medium        | Medium         | Outlier segments, per-segment reassign, D6                       |
+| Cold start: only the owner is known                        | Certain       | Medium         | Fast labelling UI; expect 1 to 3 confirmations per new person    |
+| Wrong auto-label propagates (and is written back to Plaud) | Low to medium | High           | Margin rule, D6, higher write-back threshold, dry run, undo log  |
+| Plaud changes the undocumented API (read or write)         | Medium        | Medium to high | Isolated client module, fixture tests, write-back off by default |
+| Voiceprints are biometric data                             | Certain       | Medium         | Local only, per-person deletion, never in webhooks or exports    |
+| Embedding model changed later                              | Low           | Medium         | `model_id` on every vector; re-embed job                         |
+| Docker image size grows                                    | Certain       | Low            | Model downloaded on enable rather than baked into the image      |
 
 ## 7. Open items
 
-| Item | Owner | Needed by |
-| --- | --- | --- |
-| Run the named-speaker scan over existing recordings (see conversation) | User | Phase 1 backfill |
-| Capture the Plaud speaker-rename request (HAR) | User | Phase 5 |
-| Confirm VoxCeleb model licence | Dev | Phase 0 |
-| Confirm OpenRouter ZDR / data-collection routing parameters | Dev | Phase 4 |
-| Decide whether the default summary model sits on a ZDR-capable provider | User | Phase 4 |
+| Item                                                                    | Owner | Needed by        |
+| ----------------------------------------------------------------------- | ----- | ---------------- |
+| Run the named-speaker scan over existing recordings (see conversation)  | User  | Phase 1 backfill |
+| Capture the Plaud speaker-rename request (HAR)                          | User  | Phase 5          |
+| Confirm VoxCeleb model licence                                          | Dev   | Phase 0          |
+| Confirm OpenRouter ZDR / data-collection routing parameters             | Dev   | Phase 4          |
+| Decide whether the default summary model sits on a ZDR-capable provider | User  | Phase 4          |
