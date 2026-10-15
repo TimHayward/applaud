@@ -10,36 +10,38 @@ Recordings are consumed through several routes: Ask Plaud, Obsidian (via n8n), a
 
 ### Decisions
 
-| #   | Decision                                                                                                                                                                                    | Basis                                 |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| D1  | No second transcription. Plaud's transcript and segmentation are trusted.                                                                                                                   | User decision                         |
-| D2  | Speaker identification uses **local voice embeddings**, never an LLM. LLMs cannot recognise voices.                                                                                         | Technical constraint                  |
-| D3  | Voiceprints are stored **locally only** (SQLite). Recordings are private conversations.                                                                                                     | User constraint (privacy)             |
-| D4  | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md`.                                                                            | User accepted                         |
-| D5  | The `-Applaud` summary is generated via OpenRouter **only after speakers are labelled**, plus a manual **Regenerate** button. Transcript text only is sent; audio never leaves the machine. | User decision                         |
-| D6  | Only **confirmed** labels (or Plaud's own owner tag) enrol voiceprints. Auto-matches never feed the library.                                                                                | Prevents compounding errors           |
-| D7  | Write-back to Plaud is **designed for now, built last** (Phase 5), behind explicit opt-in. The Plaud MCP is read-only, so write-back goes through Applaud, which n8n can trigger.           | User decision; MCP has no write tools |
-| D8  | Labels are keyed by Plaud `segment_uid` and Plaud speaker label, with provenance, so write-back needs no rework.                                                                            | Enables D7                            |
+| #   | Decision                                                                                                                                                                                    | Basis                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| D1  | No second transcription. Plaud's transcript and segmentation are trusted.                                                                                                                   | User decision                          |
+| D2  | Speaker identification uses **local voice embeddings**, never an LLM. LLMs cannot recognise voices.                                                                                         | Technical constraint                   |
+| D3  | Voiceprints are stored **locally only** (SQLite). Recordings are private conversations.                                                                                                     | User constraint (privacy)              |
+| D4  | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md`.                                                                            | User accepted                          |
+| D5  | The `-Applaud` summary is generated via OpenRouter **only after speakers are labelled**, plus a manual **Regenerate** button. Transcript text only is sent; audio never leaves the machine. | User decision                          |
+| D6  | Only **confirmed** labels (or Plaud's own owner tag) enrol voiceprints. Auto-matches never feed the library.                                                                                | Prevents compounding errors            |
+| D7  | Write-back to Plaud is **designed for now, built last** (Phase 5), behind explicit opt-in. The Plaud MCP is read-only, so write-back goes through Applaud, which n8n can trigger.           | User decision; MCP has no write tools  |
+| D8  | Labels are keyed by Plaud `segment_uid` and Plaud speaker label, with provenance, so write-back needs no rework.                                                                            | Enables D7                             |
+| D9  | Voice embedding runs in a **separate worker container on the Portainer host**, not on the NAS. The NAS has no AVX and is already under memory pressure (see Target environment).            | Evidenced: NAS measurements 2026-10-15 |
 
 ### Target environment
 
 **Corrected 2026-10-15:** Applaud runs in Docker on a **Synology DS920+** (Intel Celeron J4125, 4 cores, 4 GB RAM shared with DSM; officially upgradeable to 8 GB). A separate Portainer Docker host is available if work needs to move off the NAS. Local installs (macOS / Linux / Windows) must keep working.
 
-Constraints this adds:
+Measured on the NAS (2026-10-15):
 
-- **No AVX (assumption, verify with `grep -c avx /proc/cpuinfo` on the NAS).** The J4125 is a Gemini Lake Refresh part. The ONNX Runtime build inside `sherpa-onnx-node` must run on SSE4-only CPUs, or it will fail with "illegal instruction". This is the first Phase 0 test.
-- **Memory headroom.** Audio is never decoded whole: ffmpeg extracts only the segment windows needed (16 kHz mono int16), so peak memory stays well below a full-file decode (about 115 MB per hour of audio at int16). Target: speaker job adds under 400 MB peak RSS.
-- **CPU contention.** Speaker jobs run one at a time at low priority (`nice`) so DSM, file serving and sync are not starved. Throughput is not a concern for batch work; responsiveness of the NAS is.
+- **No AVX** (`grep -c avx /proc/cpuinfo` returned `0`). ML runtimes built for AVX fail with "illegal instruction"; ONNX Runtime behaviour on this CPU is unverified.
+- **Already under memory pressure.** 3.7 GB total, about 976 MB available, about 2 GB of swap in use. Containers account for only about 380 MB (Applaud 112 MB), so DSM and its packages hold most of it.
+
+Consequence (D9): Applaud stays on the NAS and remains light. All audio decoding and embedding move to a stateless worker on the Portainer host. The NAS takes on no new CPU or memory load beyond small HTTP calls and SQLite rows.
 
 ## 2. Architecture
 
 ```
 transcript.json (Plaud) ──┐
-audio.*  ── ffmpeg ──► 16 kHz mono PCM ──► per-label segment windows
+audio.* ── /media ticket ──► WORKER (Portainer host): ffmpeg ──► 16 kHz PCM windows
                                               │
-                                     sherpa-onnx speaker embedder (local)
+                     sherpa-onnx speaker embedder (worker; returns vectors only)
                                               │
-                         per-label centroid + outlier segments
+          APPLAUD (NAS): per-label centroid + outlier segments
                                               │
                 speaker library (SQLite) ──► matcher (cosine + one-to-one assignment)
                                               │
@@ -56,14 +58,14 @@ audio.*  ── ffmpeg ──► 16 kHz mono PCM ──► per-label segment win
 
 ### Key components
 
-| Component              | Choice                                                               | Notes                                                                                                                                                                                                                                                    |
-| ---------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Embedding runtime      | `sherpa-onnx-node` (Apache-2.0)                                      | Native Node bindings, keeps a single runtime. Confirm prebuilt binaries for linux-x64, darwin, win-x64 in Phase 0.                                                                                                                                       |
-| Embedding model        | WeSpeaker VoxCeleb ResNet34 (English), ~26 MB ONNX                   | Downloaded on first enable into the config dir, pinned by SHA-256. Licence follows VoxCeleb (verify in Phase 0). Alternative: NeMo TitaNet-small.                                                                                                        |
-| Audio decode           | `ffmpeg-static` (npm)                                                | Same binary path for Docker and local installs; avoids an apt dependency and Windows PATH issues.                                                                                                                                                        |
-| Job execution          | In-process queue, concurrency 1, separate from the poller            | A slow embedding job must never delay sync.                                                                                                                                                                                                              |
-| Summary                | OpenRouter chat completions, model configurable                      | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0).                                                                                                                                          |
-| Remote worker (option) | Same `Embedder` interface over HTTP, container on the Portainer host | Used if the NAS fails the Phase 0 gates (no AVX support, memory, contention). Worker receives PCM windows from Applaud, returns vectors; it stores nothing, so voiceprints stay in Applaud's SQLite. Could be sherpa-onnx or Python (SpeechBrain ECAPA). |
+| Component         | Choice                                                                                                                                 | Notes                                                                                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Embedding runtime | Worker container on the Portainer host running `sherpa-onnx-node` (Apache-2.0)                                                         | Same language and toolchain as Applaud (lives in the monorepo as `worker/`). A Python worker (SpeechBrain ECAPA) remains an alternative if accuracy needs it.     |
+| Embedding model   | WeSpeaker VoxCeleb ResNet34 (English), ~26 MB ONNX                                                                                     | Downloaded on first enable into the config dir, pinned by SHA-256. Licence follows VoxCeleb (verify in Phase 0). Alternative: NeMo TitaNet-small.                 |
+| Audio decode      | ffmpeg inside the worker                                                                                                               | The worker fetches audio from Applaud over the existing ticketed `/media` URL and cuts only the requested windows. No ffmpeg on the NAS.                          |
+| Job execution     | Queue in Applaud (SQLite-backed), concurrency 1, separate from the poller                                                              | If the worker is offline, jobs stay queued and retry with back-off (same pattern as webhook re-drive). The UI shows "speaker analysis pending".                   |
+| Summary           | OpenRouter chat completions, model configurable                                                                                        | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0).                                                   |
+| Worker API        | `POST /embed` with recording media URL plus a list of `{segment_uid, start_ms, end_ms}`; returns one vector per segment and `model_id` | Authenticated with a shared secret and HMAC (same scheme as webhook signing). Worker stores nothing; voiceprints stay in Applaud's SQLite. Bound to the LAN only. |
 
 ## 3. Data model (one new migration)
 
@@ -140,21 +142,19 @@ Sizes are relative (S / M / L), professional judgement, not evidenced effort.
 
 ### Phase 0: Spike and calibration (S)
 
-- **NAS gate first:** run a throwaway container on the DS920+ that loads the model and embeds windows from one real recording. Record: does it run without AVX, peak RSS, seconds per hour of audio, and DSM free memory during the run.
-- Install `sherpa-onnx-node` and `ffmpeg-static` under pnpm. Build the Docker image. Smoke-test on Linux, macOS and Windows (or CI runners).
-- Embed segments from 10 to 20 real recordings. Measure throughput and memory on the NAS.
+- Stand up a throwaway worker container on the Portainer host (confirm the host has AVX) that fetches one real recording from Applaud and embeds its segment windows. Record throughput and memory.
+- Install `sherpa-onnx-node` and `ffmpeg-static` under pnpm. Build the Docker image. Smoke-test the worker image on linux-x64.
+- Embed segments from 10 to 20 real recordings. Measure throughput and memory on the Portainer host.
 - Calibrate thresholds using the owner's Plaud-tagged segments as ground truth (same-person vs different-person score distributions).
 - Verify the VoxCeleb model licence and the OpenRouter zero-data-retention routing parameters.
-- **Go / no-go (decision rule):**
-  - Runs on the NAS, peak RSS under 400 MB, and DSM keeps at least 500 MB free → **in-process** on the NAS.
-  - Runs but memory is tight → upgrade the NAS to 8 GB (official maximum) or use the remote worker.
-  - Fails without AVX, or is unusably slow → **remote worker** on the Portainer host.
+- **Go / no-go:** sherpa-onnx worker in Node, or the Python worker alternative if Node bindings or accuracy disappoint.
 
 ### Phase 1: Foundation (M)
 
 - Migration (section 3), with tests in the existing migration test style.
 - Model manager: download on enable, SHA-256 check, `model_id` recorded.
-- Audio decode (ffmpeg-static) and the embedding service behind an `Embedder` interface, so tests use a fake.
+- `worker/` package and Docker image (ffmpeg, sherpa-onnx, model download with SHA-256 pin), plus a compose example for Portainer.
+- `Embedder` interface in Applaud with the HTTP worker client, and a fake for tests. Settings: worker URL and shared secret (redacted like other secrets), with a Test button.
 - Speaker job queue, triggered after `transcript_ready` and from a "Re-analyse speakers" action.
 - Owner enrolment from Plaud-tagged segments. Backfill job over existing recordings: owner, plus any non-`Speaker N` names found in older transcripts.
 - Settings: enable speaker identification (default off), thresholds.
@@ -199,16 +199,16 @@ Sizes are relative (S / M / L), professional judgement, not evidenced effort.
 
 ## 6. Risks
 
-| Risk                                                       | Likelihood    | Impact         | Mitigation                                                       |
-| ---------------------------------------------------------- | ------------- | -------------- | ---------------------------------------------------------------- |
-| sherpa-onnx native binaries fail on one platform           | Medium        | High           | Phase 0 go / no-go; Python sidecar fallback                      |
-| Plaud diarisation merges two people into one label         | Medium        | Medium         | Outlier segments, per-segment reassign, D6                       |
-| Cold start: only the owner is known                        | Certain       | Medium         | Fast labelling UI; expect 1 to 3 confirmations per new person    |
-| Wrong auto-label propagates (and is written back to Plaud) | Low to medium | High           | Margin rule, D6, higher write-back threshold, dry run, undo log  |
-| Plaud changes the undocumented API (read or write)         | Medium        | Medium to high | Isolated client module, fixture tests, write-back off by default |
-| Voiceprints are biometric data                             | Certain       | Medium         | Local only, per-person deletion, never in webhooks or exports    |
-| Embedding model changed later                              | Low           | Medium         | `model_id` on every vector; re-embed job                         |
-| Docker image size grows                                    | Certain       | Low            | Model downloaded on enable rather than baked into the image      |
+| Risk                                                       | Likelihood    | Impact         | Mitigation                                                                          |
+| ---------------------------------------------------------- | ------------- | -------------- | ----------------------------------------------------------------------------------- |
+| sherpa-onnx Node bindings unsuitable in the worker         | Medium        | High           | Phase 0 go / no-go; Python worker alternative                                       |
+| Plaud diarisation merges two people into one label         | Medium        | Medium         | Outlier segments, per-segment reassign, D6                                          |
+| Cold start: only the owner is known                        | Certain       | Medium         | Fast labelling UI; expect 1 to 3 confirmations per new person                       |
+| Wrong auto-label propagates (and is written back to Plaud) | Low to medium | High           | Margin rule, D6, higher write-back threshold, dry run, undo log                     |
+| Plaud changes the undocumented API (read or write)         | Medium        | Medium to high | Isolated client module, fixture tests, write-back off by default                    |
+| Voiceprints are biometric data                             | Certain       | Medium         | Local only, per-person deletion, never in webhooks or exports                       |
+| Embedding model changed later                              | Low           | Medium         | `model_id` on every vector; re-embed job                                            |
+| Worker offline (Portainer host down)                       | Medium        | Low            | Jobs stay queued with back-off; Plaud transcript and UI unaffected; "pending" shown |
 
 ## 7. Open items
 
