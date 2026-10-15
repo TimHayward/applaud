@@ -173,3 +173,83 @@ Sizes are relative (S / M / L), professional judgement, not evidenced effort.
   - Resources: one model loaded is about 300 MB; ERes2Net embeds about 8 s per hour of audio on 2 threads.
 
 - **Phase 0 outcome: GO** for automatic labelling with ERes2Net, the margin rule and user confirmation for the suggested band (D10, D11).
+
+**Original Phase 0 tasks:**
+
+- Stand up a throwaway worker container on the Portainer host (confirm the host has AVX) that fetches one real recording from Applaud and embeds its segment windows. Record throughput and memory.
+- Install `sherpa-onnx-node` and `ffmpeg-static` under pnpm. Build the Docker image. Smoke-test the worker image on linux-x64.
+- Embed segments from 10 to 20 real recordings. Measure throughput and memory on the Portainer host.
+- Calibrate thresholds using the owner's Plaud-tagged segments as ground truth (same-person vs different-person score distributions).
+- Verify the model licence and the OpenRouter zero-data-retention routing parameters.
+- **Go / no-go:** sherpa-onnx worker in Node, or the Python worker alternative if Node bindings or accuracy disappoint.
+
+### Phase 1: Foundation (M)
+
+- Migration (section 3), with tests in the existing migration test style.
+- Model manager: ERes2Net baked into the worker image, SHA-256 pinned, `model_id` recorded with every vector.
+- `worker/` package and Docker image (ffmpeg, sherpa-onnx, model download with SHA-256 pin), plus a compose example for Portainer.
+- `Embedder` interface in Applaud with the HTTP worker client, and a fake for tests. Settings: worker URL and shared secret (redacted like other secrets), with a Test button.
+- Speaker job queue, triggered after `transcript_ready` and from a "Re-analyse speakers" action.
+- Owner enrolment from Plaud-tagged segments. Backfill job over existing recordings: owner, plus any non-`Speaker N` names found in older transcripts.
+- Settings: enable speaker identification (default off), thresholds.
+
+### Phase 2: Matching and `-Applaud` transcript (M)
+
+- Matcher (section 4), with unit tests for scoring, banding, one-to-one assignment and the short-speech guard.
+- `transcript-Applaud.json`: the Plaud segments plus `segment_uid`, `plaud_speaker`, `speaker`, `speaker_id`, `label_status`, `confidence`.
+- `transcript-Applaud.txt`: same line format as `transcript.txt`, so existing parsers and n8n code work unchanged.
+- Regenerated atomically (`writeFileAtomic`) whenever labels change.
+- API: `GET /api/recordings/:id/speakers`, `PUT /api/recordings/:id/speakers/:label`, `PUT /api/recordings/:id/segments/:uid/speaker`, `POST /api/recordings/:id/speakers/reanalyse`.
+
+### Phase 3: Labelling UI and people management (L)
+
+- **Speakers panel** on the recording detail page, one card per Plaud label:
+  - status chip (auto / suggested / unknown / confirmed) with confidence
+  - two or three representative clips, played through the existing audio element with a stop-at-end range
+  - a name picker (existing people, or create new), with Confirm, Not sure and Ignore
+  - "Merge with…" for split speakers
+- **Transcript view toggle**: Plaud or Applaud labels. Per-segment "Assign to…" for corrections, with outlier segments highlighted.
+- **People page** (under Settings): list, rename, merge two people, delete a person together with their voiceprints, and show the number of voiceprints and recordings for each.
+- Dashboard indicator for recordings with unknown or suggested speakers ("needs labelling").
+
+### Phase 4: Summary and integration (M)
+
+- Settings: OpenRouter API key (redacted like the other secrets), model, prompt template, enable summary (default off), auto-generate when all speakers are resolved (default off).
+- **Generate / Regenerate summary** button, enabled only when no unknown or suggested labels remain. Writes `summary-Applaud.md`.
+- New webhook events `applaud_transcript_ready` and `applaud_summary_ready`, with the same payload shape plus the new files. Existing `(id, event)` idempotency applies.
+- Update the n8n file-organisation template to write `<Title> - Transcript-Applaud.md` and `<Title> - Summary-Applaud.md`.
+
+### Phase 5: Plaud write-back (M, depends on capture)
+
+- **Prerequisite:** capture the web app's speaker-rename request (DevTools > Network, rename one speaker, save as HAR).
+- `server/src/plaud/speakers.ts`: the single mutating call, isolated and tested against the captured fixture.
+- `POST /api/recordings/:id/speakers/push`, also callable from n8n:
+  - only confirmed labels, plus auto labels above a separate, higher write-back threshold
+  - a dry-run mode that returns the planned changes
+  - every write logged (previous and new value) so it can be undone
+  - off by default, with per-recording and bulk modes
+- Re-sync reconciliation: once Plaud returns names that Applaud wrote, treat them as confirmed rather than re-matching.
+- Find out whether a rename triggers Plaud to regenerate its own summary (unknown).
+
+## 6. Risks
+
+| Risk                                                       | Likelihood    | Impact         | Mitigation                                                                          |
+| ---------------------------------------------------------- | ------------- | -------------- | ----------------------------------------------------------------------------------- |
+| sherpa-onnx Node bindings unsuitable in the worker         | Medium        | High           | Phase 0 go / no-go; Python worker alternative                                       |
+| Plaud diarisation merges two people into one label         | Medium        | Medium         | Outlier segments, per-segment reassign, D6                                          |
+| Cold start: only the owner is known                        | Certain       | Medium         | Fast labelling UI; expect 1 to 3 confirmations per new person                       |
+| Wrong auto-label propagates (and is written back to Plaud) | Low to medium | High           | Margin rule, D6, higher write-back threshold, dry run, undo log                     |
+| Plaud changes the undocumented API (read or write)         | Medium        | Medium to high | Isolated client module, fixture tests, write-back off by default                    |
+| Voiceprints are biometric data                             | Certain       | Medium         | Local only, per-person deletion, never in webhooks or exports                       |
+| Embedding model changed later                              | Low           | Medium         | `model_id` on every vector; re-embed job                                            |
+| Worker offline (Portainer host down)                       | Medium        | Low            | Jobs stay queued with back-off; Plaud transcript and UI unaffected; "pending" shown |
+
+## 7. Open items
+
+| Item                                                                    | Owner | Needed by        |
+| ----------------------------------------------------------------------- | ----- | ---------------- |
+| Run the named-speaker scan over existing recordings (see conversation)  | User  | Phase 1 backfill |
+| Capture the Plaud speaker-rename request (HAR)                          | User  | Phase 5          |
+| Confirm ERes2Net model card licence terms                               | Dev   | Phase 1          |
+| Confirm OpenRouter ZDR / data-collection routing parameters             | Dev   | Phase 4          |
+| Decide whether the default summary model sits on a ZDR-capable provider | User  | Phase 4          |
