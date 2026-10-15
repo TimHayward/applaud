@@ -23,7 +23,13 @@ Recordings are consumed through several routes: Ask Plaud, Obsidian (via n8n), a
 
 ### Target environment
 
-Docker on Intel x64, 8 GB RAM available, no GPU. Local installs (macOS / Linux / Windows) must keep working.
+**Corrected 2026-10-15:** Applaud runs in Docker on a **Synology DS920+** (Intel Celeron J4125, 4 cores, 4 GB RAM shared with DSM; officially upgradeable to 8 GB). A separate Portainer Docker host is available if work needs to move off the NAS. Local installs (macOS / Linux / Windows) must keep working.
+
+Constraints this adds:
+
+- **No AVX (assumption, verify with `grep -c avx /proc/cpuinfo` on the NAS).** The J4125 is a Gemini Lake Refresh part. The ONNX Runtime build inside `sherpa-onnx-node` must run on SSE4-only CPUs, or it will fail with "illegal instruction". This is the first Phase 0 test.
+- **Memory headroom.** Audio is never decoded whole: ffmpeg extracts only the segment windows needed (16 kHz mono int16), so peak memory stays well below a full-file decode (about 115 MB per hour of audio at int16). Target: speaker job adds under 400 MB peak RSS.
+- **CPU contention.** Speaker jobs run one at a time at low priority (`nice`) so DSM, file serving and sync are not starved. Throughput is not a concern for batch work; responsiveness of the NAS is.
 
 ## 2. Architecture
 
@@ -50,14 +56,14 @@ audio.*  ── ffmpeg ──► 16 kHz mono PCM ──► per-label segment win
 
 ### Key components
 
-| Component                   | Choice                                                    | Notes                                                                                                                                             |
-| --------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Embedding runtime           | `sherpa-onnx-node` (Apache-2.0)                           | Native Node bindings, keeps a single runtime. Confirm prebuilt binaries for linux-x64, darwin, win-x64 in Phase 0.                                |
-| Embedding model             | WeSpeaker VoxCeleb ResNet34 (English), ~26 MB ONNX        | Downloaded on first enable into the config dir, pinned by SHA-256. Licence follows VoxCeleb (verify in Phase 0). Alternative: NeMo TitaNet-small. |
-| Audio decode                | `ffmpeg-static` (npm)                                     | Same binary path for Docker and local installs; avoids an apt dependency and Windows PATH issues.                                                 |
-| Job execution               | In-process queue, concurrency 1, separate from the poller | A slow embedding job must never delay sync.                                                                                                       |
-| Summary                     | OpenRouter chat completions, model configurable           | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0).                                   |
-| Fallback (if Phase 0 fails) | Python sidecar container with SpeechBrain ECAPA           | Only if sherpa-onnx cannot be made to work across platforms.                                                                                      |
+| Component              | Choice                                                               | Notes                                                                                                                                                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Embedding runtime      | `sherpa-onnx-node` (Apache-2.0)                                      | Native Node bindings, keeps a single runtime. Confirm prebuilt binaries for linux-x64, darwin, win-x64 in Phase 0.                                                                                                                                       |
+| Embedding model        | WeSpeaker VoxCeleb ResNet34 (English), ~26 MB ONNX                   | Downloaded on first enable into the config dir, pinned by SHA-256. Licence follows VoxCeleb (verify in Phase 0). Alternative: NeMo TitaNet-small.                                                                                                        |
+| Audio decode           | `ffmpeg-static` (npm)                                                | Same binary path for Docker and local installs; avoids an apt dependency and Windows PATH issues.                                                                                                                                                        |
+| Job execution          | In-process queue, concurrency 1, separate from the poller            | A slow embedding job must never delay sync.                                                                                                                                                                                                              |
+| Summary                | OpenRouter chat completions, model configurable                      | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0).                                                                                                                                          |
+| Remote worker (option) | Same `Embedder` interface over HTTP, container on the Portainer host | Used if the NAS fails the Phase 0 gates (no AVX support, memory, contention). Worker receives PCM windows from Applaud, returns vectors; it stores nothing, so voiceprints stay in Applaud's SQLite. Could be sherpa-onnx or Python (SpeechBrain ECAPA). |
 
 ## 3. Data model (one new migration)
 
@@ -134,11 +140,15 @@ Sizes are relative (S / M / L), professional judgement, not evidenced effort.
 
 ### Phase 0: Spike and calibration (S)
 
+- **NAS gate first:** run a throwaway container on the DS920+ that loads the model and embeds windows from one real recording. Record: does it run without AVX, peak RSS, seconds per hour of audio, and DSM free memory during the run.
 - Install `sherpa-onnx-node` and `ffmpeg-static` under pnpm. Build the Docker image. Smoke-test on Linux, macOS and Windows (or CI runners).
-- Embed segments from 10 to 20 real recordings. Measure throughput and memory on the target host.
+- Embed segments from 10 to 20 real recordings. Measure throughput and memory on the NAS.
 - Calibrate thresholds using the owner's Plaud-tagged segments as ground truth (same-person vs different-person score distributions).
 - Verify the VoxCeleb model licence and the OpenRouter zero-data-retention routing parameters.
-- **Go / no-go:** sherpa-onnx in-process, or the Python sidecar fallback.
+- **Go / no-go (decision rule):**
+  - Runs on the NAS, peak RSS under 400 MB, and DSM keeps at least 500 MB free → **in-process** on the NAS.
+  - Runs but memory is tight → upgrade the NAS to 8 GB (official maximum) or use the remote worker.
+  - Fails without AVX, or is unusably slow → **remote worker** on the Portainer host.
 
 ### Phase 1: Foundation (M)
 
