@@ -10,17 +10,19 @@ Recordings are consumed through several routes: Ask Plaud, Obsidian (via n8n), a
 
 ### Decisions
 
-| #   | Decision                                                                                                                                                                                    | Basis                                  |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| D1  | No second transcription. Plaud's transcript and segmentation are trusted.                                                                                                                   | User decision                          |
-| D2  | Speaker identification uses **local voice embeddings**, never an LLM. LLMs cannot recognise voices.                                                                                         | Technical constraint                   |
-| D3  | Voiceprints are stored **locally only** (SQLite). Recordings are private conversations.                                                                                                     | User constraint (privacy)              |
-| D4  | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md`.                                                                            | User accepted                          |
-| D5  | The `-Applaud` summary is generated via OpenRouter **only after speakers are labelled**, plus a manual **Regenerate** button. Transcript text only is sent; audio never leaves the machine. | User decision                          |
-| D6  | Only **confirmed** labels (or Plaud's own owner tag) enrol voiceprints. Auto-matches never feed the library.                                                                                | Prevents compounding errors            |
-| D7  | Write-back to Plaud is **designed for now, built last** (Phase 5), behind explicit opt-in. The Plaud MCP is read-only, so write-back goes through Applaud, which n8n can trigger.           | User decision; MCP has no write tools  |
-| D8  | Labels are keyed by Plaud `segment_uid` and Plaud speaker label, with provenance, so write-back needs no rework.                                                                            | Enables D7                             |
-| D9  | Voice embedding runs in a **separate worker container on the Portainer host**, not on the NAS. The NAS has no AVX and is already under memory pressure (see Target environment).            | Evidenced: NAS measurements 2026-10-15 |
+| #   | Decision                                                                                                                                                                                    | Basis                                                                           |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| D1  | No second transcription. Plaud's transcript and segmentation are trusted.                                                                                                                   | User decision                                                                   |
+| D2  | Speaker identification uses **local voice embeddings**, never an LLM. LLMs cannot recognise voices.                                                                                         | Technical constraint                                                            |
+| D3  | Voiceprints are stored **locally only** (SQLite). Recordings are private conversations.                                                                                                     | User constraint (privacy)                                                       |
+| D4  | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md`.                                                                            | User accepted                                                                   |
+| D5  | The `-Applaud` summary is generated via OpenRouter **only after speakers are labelled**, plus a manual **Regenerate** button. Transcript text only is sent; audio never leaves the machine. | User decision                                                                   |
+| D6  | Only **confirmed** labels (or Plaud's own owner tag) enrol voiceprints. Auto-matches never feed the library.                                                                                | Prevents compounding errors                                                     |
+| D7  | Write-back to Plaud is **designed for now, built last** (Phase 5), behind explicit opt-in. The Plaud MCP is read-only, so write-back goes through Applaud, which n8n can trigger.           | User decision; MCP has no write tools                                           |
+| D8  | Labels are keyed by Plaud `segment_uid` and Plaud speaker label, with provenance, so write-back needs no rework.                                                                            | Enables D7                                                                      |
+| D9  | Voice embedding runs in a **separate worker container on the Portainer host**, not on the NAS. The NAS has no AVX and is already under memory pressure (see Target environment).            | Evidenced: NAS measurements 2026-10-15                                          |
+| D10 | Embedding model: **3D-Speaker ERes2Net (English, VoxCeleb)**, 192-dim. TitaNet-large is the fallback.                                                                                       | Evidenced: Phase 0 run 2 (best library-profile and single-recording separation) |
+| D11 | Each person keeps **several voiceprints** (at least one per Plaud scene type) and matching uses the best, not one averaged centroid.                                                        | Evidenced: owner scores drop across scene types                                 |
 
 ### Target environment
 
@@ -60,14 +62,14 @@ audio.* ── /media ticket ──► WORKER (Portainer host): ffmpeg ──►
 
 ### Key components
 
-| Component         | Choice                                                                                                                                 | Notes                                                                                                                                                             |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Embedding runtime | Worker container on the Portainer host running `sherpa-onnx-node` (Apache-2.0)                                                         | Same language and toolchain as Applaud (lives in the monorepo as `worker/`). A Python worker (SpeechBrain ECAPA) remains an alternative if accuracy needs it.     |
-| Embedding model   | WeSpeaker VoxCeleb ResNet34 (English), ~26 MB ONNX                                                                                     | Downloaded on first enable into the config dir, pinned by SHA-256. Licence follows VoxCeleb (verify in Phase 0). Alternative: NeMo TitaNet-small.                 |
-| Audio decode      | ffmpeg inside the worker                                                                                                               | The worker fetches audio from Applaud over the existing ticketed `/media` URL and cuts only the requested windows. No ffmpeg on the NAS.                          |
-| Job execution     | Queue in Applaud (SQLite-backed), concurrency 1, separate from the poller                                                              | If the worker is offline, jobs stay queued and retry with back-off (same pattern as webhook re-drive). The UI shows "speaker analysis pending".                   |
-| Summary           | OpenRouter chat completions, model configurable                                                                                        | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0).                                                   |
-| Worker API        | `POST /embed` with recording media URL plus a list of `{segment_uid, start_ms, end_ms}`; returns one vector per segment and `model_id` | Authenticated with a shared secret and HMAC (same scheme as webhook signing). Worker stores nothing; voiceprints stay in Applaud's SQLite. Bound to the LAN only. |
+| Component         | Choice                                                                                                                                                                          | Notes                                                                                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Embedding runtime | Worker container on the Portainer host running `sherpa-onnx-node` (Apache-2.0)                                                                                                  | Same language and toolchain as Applaud (lives in the monorepo as `worker/`). A Python worker (SpeechBrain ECAPA) remains an alternative if accuracy needs it.              |
+| Embedding model   | 3D-Speaker ERes2Net, English VoxCeleb (`3dspeaker_speech_eres2net_sv_en_voxceleb_16k`), ~26 MB ONNX, SHA-256 `c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5` | Baked into the worker image. Selected in Phase 0 (D10). Licence: 3D-Speaker code is Apache-2.0; confirm the model card terms before release. Fallback: NeMo TitaNet-large. |
+| Audio decode      | ffmpeg inside the worker                                                                                                                                                        | The worker fetches audio from Applaud over the existing ticketed `/media` URL and cuts only the requested windows. No ffmpeg on the NAS.                                   |
+| Job execution     | Queue in Applaud (SQLite-backed), concurrency 1, separate from the poller                                                                                                       | If the worker is offline, jobs stay queued and retry with back-off (same pattern as webhook re-drive). The UI shows "speaker analysis pending".                            |
+| Summary           | OpenRouter chat completions, model configurable                                                                                                                                 | Provider routing restricted to zero-data-retention / no data collection (exact parameters verified in Phase 0).                                                            |
+| Worker API        | `POST /embed` with recording media URL plus a list of `{segment_uid, start_ms, end_ms}`; returns one vector per segment and `model_id`                                          | Authenticated with a shared secret and HMAC (same scheme as webhook signing). Worker stores nothing; voiceprints stay in Applaud's SQLite. Bound to the LAN only.          |
 
 ## 3. Data model (one new migration)
 
@@ -130,11 +132,11 @@ Labels live in SQLite, not in `transcript.json`, so a Plaud re-fetch or manual r
 2. Centroid = mean of embeddings after removing outliers (cosine to provisional centroid below a cut-off). Outlier segments are surfaced in the UI as "may be someone else".
 3. Score each label against each known person (centroid of their stored voiceprints, plus best single voiceprint).
 4. One-to-one assignment within a recording: two labels cannot both be auto-assigned to the same person (that indicates a split speaker and is surfaced as a merge suggestion).
-5. Bands, calibrated in Phase 0 against real recordings:
-   - **auto**: score ≥ `autoThreshold` and margin over second-best ≥ `minMargin`
-   - **suggested**: score ≥ `suggestThreshold`
+5. Bands, calibrated in Phase 0 (ERes2Net, raw cosine; defaults, editable in Settings):
+   - **auto**: score ≥ 0.75, margin over the next-best person ≥ 0.10, and at least 20 s of usable speech
+   - **suggested**: score ≥ 0.55
    - **unknown**: otherwise
-   - Labels with under ~5 s of usable speech are never auto-assigned.
+   - Basis: owner vs own library profile min 0.806 / p05 0.839; other people p95 0.645 / max 0.823; single-recording enrolment same-speaker p05 0.705. New people therefore start as "suggested" and move to "auto" as confirmed voiceprints accumulate.
 6. Plaud's owner tag is accepted as `confirmed` with `source = 'plaud_owner'`, overridable by the user.
 7. Thresholds are settings with calibrated defaults, not hard-coded.
 
@@ -142,7 +144,7 @@ Labels live in SQLite, not in `transcript.json`, so a Plaud re-fetch or manual r
 
 Sizes are relative (S / M / L), professional judgement, not evidenced effort.
 
-### Phase 0: Spike and calibration (S)
+### Phase 0: Spike and calibration (S) — complete
 
 **Progress (2026-10-15):**
 
@@ -154,4 +156,20 @@ Sizes are relative (S / M / L), professional judgement, not evidenced effort.
   - Separation is **not good enough for automatic labelling**: owner-vs-owner median 0.922 vs owner-vs-others median 0.815, but heavy overlap (others p95 0.949, max 0.977); EER 0.31 to 0.34 at every speech amount.
   - More speech did not help (EER 0.316 at 5 s, 0.341 at 60 s). That is the opposite of normal behaviour and points to noisy labels (Plaud attributing the owner's speech to `Speaker N`, or the reverse) and/or recording-condition effects, rather than the model alone. Inference, not yet evidenced.
   - 83 of 103 inspected recordings lacked both the owner and another speaker with 10 s or more.
-- **Run 2 (pending):** five models on the same audio; library-profile scoring (voiceprint from many recordings, as the feature will work); AS-norm; within- vs cross-recording scores; device and scene effects; Plaud label-quality indicators.
+- **Run 2 (2026-10-15, five models, 30 recordings, 15.2 h, 60 other-speaker labels):** library-profile EER (owner voiceprint from the other 29 recordings):
+
+  | Model                 | EER       | EER 10 s | EER 30 s | EER AS-norm | Single-recording EER | Embed time | Owner segs like others |
+  | --------------------- | --------- | -------- | -------- | ----------- | -------------------- | ---------- | ---------------------- |
+  | **ERes2Net**          | **0.017** | 0.067    | 0.019    | 0.017       | **0.022**            | 124 s      | 1 / 295                |
+  | TitaNet-large         | 0.033     | 0.067    | 0.019    | 0.017       | 0.035                | 116 s      | 3 / 295                |
+  | TitaNet-small         | 0.033     | 0.067    | 0.019    | 0.033       | 0.051                | 42 s       | 5 / 295                |
+  | CAM++                 | 0.067     | 0.200    | 0.103    | 0.050       | 0.182                | 42 s       | 25 / 295               |
+  | WeSpeaker ResNet34-LM | 0.200     | 0.200    | 0.207    | 0.200       | 0.322                | 97 s       | 54 / 295               |
+  - **Run 1's poor result was the model, not the data.** With ERes2Net and TitaNet, 0 of 60 `Speaker N` labels score like the owner, so Plaud's labels are clean enough to train from.
+  - More speech helps (10 s → 30 s: EER 0.067 → 0.019), so auto-labelling requires at least 20 s.
+  - Scene matters: owner same-scene median 0.836 vs cross-scene 0.773 (ERes2Net). Scene codes seen: `1` (7) and `102` (23); meaning not yet confirmed.
+  - Plaud `serial_number` is **not a stable device id** (25 values across 30 recordings), so the device analysis is not meaningful.
+  - Limits: 30 owner trials and 60 impostor labels, so 0.017 is one error; only the owner was tested as a target.
+  - Resources: one model loaded is about 300 MB; ERes2Net embeds about 8 s per hour of audio on 2 threads.
+
+- **Phase 0 outcome: GO** for automatic labelling with ERes2Net, the margin rule and user confirmation for the suggested band (D10, D11).
