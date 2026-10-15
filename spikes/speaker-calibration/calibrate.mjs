@@ -28,9 +28,29 @@ const NUM_THREADS = Number(process.env.NUM_THREADS ?? 2);
 let OWNER = process.env.OWNER ?? "";
 
 process.on("uncaughtException", (err) => {
-  console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+  // Node's fetch hides the real network error (ECONNREFUSED, ENOTFOUND...) in `cause`.
+  const cause = err?.cause
+    ? ` (${err.cause.code ?? ""} ${err.cause.message ?? ""})`.replace("( ", "(")
+    : "";
+  console.error(`Error: ${err instanceof Error ? err.message : String(err)}${cause}`);
   process.exit(1);
 });
+
+const NETWORK_HINTS = {
+  ECONNREFUSED:
+    "Nothing is listening at that address and port. Is Applaud running there, and is it bound to 0.0.0.0 rather than 127.0.0.1 (a non-Docker install binds 127.0.0.1 by default)?",
+  ENOTFOUND: "The hostname did not resolve inside the container. Use the NAS IP address instead.",
+  EAI_AGAIN: "The hostname did not resolve inside the container. Use the NAS IP address instead.",
+  ETIMEDOUT:
+    "No response. Check the IP, the NAS firewall, and that the Docker network can route to the NAS subnet.",
+  UND_ERR_CONNECT_TIMEOUT:
+    "No response. Check the IP, the NAS firewall, and that the Docker network can route to the NAS subnet.",
+  EHOSTUNREACH:
+    "No route to the NAS from inside the container. A Docker network subnet may overlap your LAN.",
+  ENETUNREACH:
+    "No route to the NAS from inside the container. A Docker network subnet may overlap your LAN.",
+  ECONNRESET: "The connection was reset. If APPLAUD_URL starts with https://, try http:// instead.",
+};
 
 const SAMPLE_RATE = 16000;
 const MIN_SEGMENT_S = 1.5;
@@ -52,6 +72,11 @@ const mediaUrl = (folder, name) =>
 
 async function getJson(url) {
   const res = await fetch(url, { headers });
+  if (res.status === 401) {
+    throw new Error(
+      `401 Unauthorized for ${url}. Applaud has a LAN token set; pass it as APPLAUD_TOKEN.`,
+    );
+  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
   return res.json();
 }
@@ -191,6 +216,24 @@ function eer(same, diff) {
 // ---- main ----
 
 const t0 = Date.now();
+// Preflight: /api/health needs no auth, so this isolates network problems from token problems.
+console.log(`Checking ${APPLAUD_URL}/api/health ...`);
+try {
+  const res = await fetch(`${APPLAUD_URL}/api/health`, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+} catch (err) {
+  const code = err?.cause?.code ?? (err?.name === "TimeoutError" ? "ETIMEDOUT" : undefined);
+  console.error(`Cannot reach Applaud at ${APPLAUD_URL}: ${code ?? err?.message ?? err}`);
+  if (NETWORK_HINTS[code]) console.error(NETWORK_HINTS[code]);
+  else if (String(code).startsWith("ERR_SSL"))
+    console.error("Applaud serves plain HTTP. Use http:// in APPLAUD_URL.");
+  else if (String(err?.message).startsWith("HTTP"))
+    console.error(
+      "Something answered, but not Applaud's health endpoint. Check the port and that the URL has no path.",
+    );
+  process.exit(1);
+}
+
 const list = await getJson(`${APPLAUD_URL}/api/recordings?limit=200&sort=date_desc`);
 const candidates = list.items.filter(
   (r) => r.transcriptDownloadedAt && r.audioDownloadedAt && !r.isTrash,
