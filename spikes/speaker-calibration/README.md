@@ -43,24 +43,25 @@ Optional environment variables:
 
 | Variable         | Default       | Purpose                                                          |
 | ---------------- | ------------- | ---------------------------------------------------------------- |
-| `MAX_RECORDINGS` | `20`          | Usable recordings to process (newest first)                      |
+| `MAX_RECORDINGS` | `30`          | Usable recordings to process (newest first)                      |
 | `OWNER`          | auto-detected | The owner's name as Plaud tags it, if auto-detection picks wrong |
 | `NUM_THREADS`    | `2`           | ONNX Runtime threads                                             |
 
 A recording is used only if it has the owner and at least one `Speaker N` label, each with at least 10 s of usable speech.
 
-## Reading the output
+## Reading the output (version 2)
 
-All scores are cosine similarity (higher means more alike).
+Version 2 embeds the same audio with five models and reports each separately under `models`. All scores are cosine similarity (higher means more alike) except `eerAsNorm`, which is on a normalised scale. EER is the equal error rate: lower is better, and `0.05 at 0.62` means about 5 % errors either way using a threshold of 0.62.
 
-| Field                                     | Meaning                                                                                      |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `A_ownerVsOwner_sameSpeaker`              | Owner's voice in one recording vs another. Should be high.                                   |
-| `B_ownerVsOthers_differentSpeaker`        | Owner vs other people. Should be low.                                                        |
-| `C_othersVsOthers_mixed`                  | Other people across recordings. A cluster of high values suggests recurring speakers.        |
-| `centroidEER`                             | Equal error rate and the threshold that achieves it, using about 60 s per label.             |
-| `speechNeededPerLabel`                    | The same comparison using only the first 5 / 10 / 20 / 30 / 60 s of speech per label.        |
-| `singleSegment`                           | Individual segments vs the owner's voiceprint. Shows whether per-segment outlier flags work. |
-| `peakRssMB`, `embedSeconds`, `audioHours` | Resource use, for sizing the worker.                                                         |
+| Field                                     | Meaning                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `libraryProfile`                          | **The main result.** Your voiceprint built from every other recording, scored against each recording's labels, as the feature will work in practice. `eer10s` / `eer30s` use only the first 10 or 30 s of speech per label. `eerAsNorm` applies cohort score normalisation, which corrects for recording conditions. |
+| `pairwise`                                | One recording against another. `differentWithinRecording` vs `differentCrossRecording` shows how much sharing a room and microphone inflates scores.                                                                                                                                                                 |
+| `ownerSameSpeakerByCondition`             | Your voice across recordings on the same device or scene vs different ones. A large gap means conditions, not voices, are driving scores.                                                                                                                                                                            |
+| `plaudLabelQuality`                       | `Speaker N` labels that score like you, and segments under your name that score like other people. High counts mean Plaud attributed speech to the wrong label, which contaminates ground truth.                                                                                                                     |
+| `recordingsByDevice`, `recordingsByScene` | Anonymised device ids and Plaud scene codes in the sample.                                                                                                                                                                                                                                                           |
+| `peakRssMB`, `embedSeconds`, `audioHours` | Resource use, for sizing the worker.                                                                                                                                                                                                                                                                                 |
 
-Paste the JSON back into the planning conversation. Thresholds for auto / suggested / unknown will be set from the A and B distributions.
+`MODELS=titanet_large,campplus` limits the run to models whose file name contains those strings. `MAX_RECORDINGS` defaults to 30.
+
+Paste the JSON back into the planning conversation.

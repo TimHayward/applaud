@@ -12,6 +12,7 @@ import {
   createWriteStream,
   mkdtempSync,
   openSync,
+  readdirSync,
   readSync,
   rmSync,
   statSync,
@@ -24,8 +25,13 @@ import sherpa from "sherpa-onnx-node";
 
 const APPLAUD_URL = (process.env.APPLAUD_URL ?? "").replace(/\/+$/, "");
 const APPLAUD_TOKEN = process.env.APPLAUD_TOKEN ?? "";
-const MODEL = process.env.MODEL ?? "/app/model.onnx";
-const MAX_RECORDINGS = Number(process.env.MAX_RECORDINGS ?? 20);
+// Every .onnx in MODELS_DIR is compared on the same audio; MODELS narrows it (comma-separated names).
+const MODELS_DIR = process.env.MODELS_DIR ?? "/app/models";
+const MODEL_FILTER = (process.env.MODELS ?? "")
+  .split(",")
+  .map((m) => m.trim())
+  .filter(Boolean);
+const MAX_RECORDINGS = Number(process.env.MAX_RECORDINGS ?? 30);
 const NUM_THREADS = Number(process.env.NUM_THREADS ?? 2);
 let OWNER = process.env.OWNER ?? "";
 
@@ -172,13 +178,28 @@ function pickWindows(segs) {
   return picked;
 }
 
-const extractor = new sherpa.SpeakerEmbeddingExtractor({
-  model: MODEL,
-  numThreads: NUM_THREADS,
-  debug: false,
-});
+const modelFiles = readdirSync(MODELS_DIR)
+  .filter((f) => f.endsWith(".onnx"))
+  .filter((f) => !MODEL_FILTER.length || MODEL_FILTER.some((m) => f.includes(m)))
+  .sort();
+if (!modelFiles.length) {
+  console.error(
+    `No .onnx models found in ${MODELS_DIR}${MODEL_FILTER.length ? ` matching ${MODEL_FILTER}` : ""}.`,
+  );
+  process.exit(2);
+}
+const models = modelFiles.map((f) => ({
+  name: f.replace(/\.onnx$/, ""),
+  extractor: new sherpa.SpeakerEmbeddingExtractor({
+    model: path.join(MODELS_DIR, f),
+    numThreads: NUM_THREADS,
+    debug: false,
+  }),
+  embedMs: 0,
+}));
+console.log(`Models: ${models.map((m) => m.name).join(", ")}`);
 
-function embed(samples) {
+function embed(extractor, samples) {
   const stream = extractor.createStream();
   stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples });
   stream.inputFinished();
@@ -233,16 +254,45 @@ function stats(a) {
   return `n=${s.length} min=${q(0)} p05=${q(0.05)} median=${q(0.5)} p95=${q(0.95)} max=${q(1)}`;
 }
 
-/** Threshold with the lowest equal error rate between same-speaker and different-speaker scores. */
+/** Equal error rate between same-speaker and different-speaker scores, and the threshold that gives it. */
 function eer(same, diff) {
+  if (!same.length || !diff.length) return "n/a";
+  // Accept when score > t. Testing every observed score as t finds the best split exactly.
   let best = { threshold: null, eer: 1 };
-  for (let t = 0; t <= 1; t += 0.005) {
-    const frr = same.filter((x) => x < t).length / same.length;
-    const far = diff.filter((x) => x >= t).length / diff.length;
+  for (const t of [...same, ...diff].sort((x, y) => x - y)) {
+    const frr = same.filter((x) => x <= t).length / same.length;
+    const far = diff.filter((x) => x > t).length / diff.length;
     const e = Math.max(frr, far);
-    if (e < best.eer) best = { threshold: +t.toFixed(3), eer: +e.toFixed(3) };
+    if (e < best.eer) best = { threshold: t, eer: e };
   }
-  return best;
+  // Also allow a threshold below every score (accept all).
+  const allFar = diff.length ? 1 : 0;
+  if (allFar < best.eer) best = { threshold: Math.min(...same, ...diff) - 1e-6, eer: allFar };
+  return `${best.eer.toFixed(3)} at ${best.threshold.toFixed(3)}`;
+}
+
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+// Floor the spread so a near-constant cohort can't blow normalised scores up.
+const sd = (a) => Math.max(Math.sqrt(mean(a.map((x) => (x - mean(a)) ** 2))), 0.02);
+const quantile = (a, p) => {
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))];
+};
+
+/**
+ * Adaptive symmetric score normalisation (AS-norm): rescales a raw score by how the probe and
+ * the reference each score against a cohort of other people. Reduces channel and recording
+ * effects that shift all scores up or down together.
+ */
+function asNorm(score, probe, ref, cohort, topK = 50) {
+  const top = (v) =>
+    cohort
+      .map((c) => cos(v, c))
+      .sort((x, y) => y - x)
+      .slice(0, topK);
+  const p = top(probe);
+  const r = top(ref);
+  return ((score - mean(p)) / sd(p) + (score - mean(r)) / sd(r)) / 2;
 }
 
 // ---- main ----
@@ -277,11 +327,11 @@ console.log(
 const tmp = mkdtempSync(path.join(tmpdir(), "applaud-cal-"));
 const recs = [];
 let audioSeconds = 0;
-let embedMs = 0;
 let peakRss = 0;
 let skipped = 0;
 let failed = 0;
 let consecutiveFailures = 0;
+const deviceIds = new Map();
 
 try {
   for (const r of candidates) {
@@ -323,32 +373,42 @@ try {
       audioSeconds += totalSamples / SAMPLE_RATE;
       const fd = openSync(pcmPath, "r");
 
-      const rec = { owner: null, ownerItems: [], others: [] };
+      // Device and recording scene, for checking whether conditions drive the scores.
+      let scene = "?";
       try {
-        for (const l of [labels.find((x) => x.label === OWNER), ...others]) {
-          const items = [];
-          for (const w of l.windows) {
-            const samples = readWindow(fd, totalSamples, w.start, w.end);
-            if (!samples) continue;
-            const t = Date.now();
-            items.push({ v: embed(samples), dur: w.end - w.start });
-            embedMs += Date.now() - t;
+        const meta = await getJson(mediaUrl(r.folder, "metadata.json"));
+        scene = String(meta?.scene ?? meta?.data?.scene ?? "?");
+      } catch {
+        // metadata is optional for the analysis
+      }
+      if (!deviceIds.has(r.serialNumber))
+        deviceIds.set(r.serialNumber, `device${deviceIds.size + 1}`);
+      const rec = { device: deviceIds.get(r.serialNumber), scene, byModel: {} };
+      try {
+        const ownerLabel = labels.find((x) => x.label === OWNER);
+        for (const m of models) {
+          const perLabel = [];
+          for (const l of [ownerLabel, ...others]) {
+            const items = [];
+            for (const w of l.windows) {
+              const samples = readWindow(fd, totalSamples, w.start, w.end);
+              if (!samples) continue;
+              const t = Date.now();
+              items.push({ v: embed(m.extractor, samples), dur: w.end - w.start });
+              m.embedMs += Date.now() - t;
+            }
+            perLabel.push(items.length ? { c: centroid(items.map((i) => i.v)), items } : null);
           }
-          if (!items.length) continue;
-          const c = centroid(items.map((i) => i.v));
-          if (l.label === OWNER) {
-            rec.owner = c;
-            rec.ownerItems = items;
-          } else {
-            rec.others.push({ c, items });
-          }
+          const [owner, ...rest] = perLabel;
+          rec.byModel[m.name] = { owner, others: rest.filter(Boolean) };
         }
       } finally {
         closeSync(fd);
         rmSync(pcmPath);
       }
       peakRss = Math.max(peakRss, process.memoryUsage().rss);
-      if (rec.owner && rec.others.length) {
+      const first = rec.byModel[models[0].name];
+      if (first.owner && first.others.length) {
         recs.push(rec);
         process.stdout.write(`  embedded recording ${recs.length}/${MAX_RECORDINGS}\r`);
       }
@@ -374,76 +434,115 @@ if (recs.length < 3) {
   process.exit(1);
 }
 
-// A: owner vs owner across recordings (same speaker).
-// B: owner vs non-owner labels, all recordings (different speaker).
-// C: non-owner vs non-owner across recordings (mixed: recurring people and strangers).
-const A = [];
-const B = [];
-const C = [];
-for (let i = 0; i < recs.length; i++) {
-  for (const o of recs[i].others) B.push(cos(recs[i].owner, o.c));
-  for (let j = i + 1; j < recs.length; j++) {
-    A.push(cos(recs[i].owner, recs[j].owner));
-    for (const o of recs[j].others) B.push(cos(recs[i].owner, o.c));
-    for (const o of recs[i].others) B.push(cos(recs[j].owner, o.c));
-    for (const a of recs[i].others) for (const b of recs[j].others) C.push(cos(a.c, b.c));
-  }
-}
+const countBy = (xs) => xs.reduce((o, x) => ({ ...o, [x]: (o[x] ?? 0) + 1 }), {});
 
-// D: how much speech the probe needs. Probe = first N seconds of owner (or other) speech in
-// recording i, reference = owner centroid in every other recording.
-const amounts = [5, 10, 20, 30, 60];
-const byAmount = {};
-for (const secs of amounts) {
+function analyse(name) {
+  const R = recs.map((r) => ({ ...r.byModel[name], device: r.device, scene: r.scene }));
+
+  // Pairwise: one recording's centroid against another's.
   const same = [];
-  const diff = [];
-  for (let i = 0; i < recs.length; i++) {
-    const probeOwner = centroidUpTo(recs[i].ownerItems, secs);
-    const probeOthers = recs[i].others.map((o) => centroidUpTo(o.items, secs)).filter(Boolean);
-    for (let j = 0; j < recs.length; j++) {
-      if (i === j) continue;
-      if (probeOwner) same.push(cos(probeOwner, recs[j].owner));
-      for (const p of probeOthers) diff.push(cos(p, recs[j].owner));
+  const sameByCondition = { sameDevice: [], diffDevice: [], sameScene: [], diffScene: [] };
+  const diffCross = [];
+  const diffWithin = [];
+  for (let i = 0; i < R.length; i++) {
+    for (const o of R[i].others) diffWithin.push(cos(R[i].owner.c, o.c));
+    for (let j = i + 1; j < R.length; j++) {
+      const s = cos(R[i].owner.c, R[j].owner.c);
+      same.push(s);
+      sameByCondition[R[i].device === R[j].device ? "sameDevice" : "diffDevice"].push(s);
+      sameByCondition[R[i].scene === R[j].scene ? "sameScene" : "diffScene"].push(s);
+      for (const o of R[j].others) diffCross.push(cos(R[i].owner.c, o.c));
+      for (const o of R[i].others) diffCross.push(cos(R[j].owner.c, o.c));
     }
   }
-  const e = same.length && diff.length ? eer(same, diff) : null;
-  byAmount[`${secs}s`] = {
-    same: stats(same),
-    different: stats(diff),
-    eer: e && `${e.eer} at ${e.threshold}`,
+
+  // Library profile (how the feature will work): the owner's voiceprint built from every
+  // other recording, scored against this recording's labels. Leave-one-out.
+  const lib = { same: [], diff: [], same10: [], diff10: [], same30: [], diff30: [] };
+  const norm = { same: [], diff: [] };
+  const ownerSegScores = [];
+  const otherSegScores = [];
+  let othersLikeOwner = 0;
+  let othersTotal = 0;
+  const libDiffByRec = [];
+  for (let i = 0; i < R.length; i++) {
+    const ref = centroid(R.filter((_, j) => j !== i).map((r) => r.owner.c));
+    const cohort = R.filter((_, j) => j !== i).flatMap((r) => r.others.map((o) => o.c));
+    const s = cos(R[i].owner.c, ref);
+    lib.same.push(s);
+    norm.same.push(asNorm(s, R[i].owner.c, ref, cohort));
+    const diffs = [];
+    for (const o of R[i].others) {
+      const d = cos(o.c, ref);
+      lib.diff.push(d);
+      diffs.push(d);
+      norm.diff.push(asNorm(d, o.c, ref, cohort));
+    }
+    libDiffByRec.push(diffs);
+    for (const [secs, sk, dk] of [
+      [10, "same10", "diff10"],
+      [30, "same30", "diff30"],
+    ]) {
+      const po = centroidUpTo(R[i].owner.items, secs);
+      if (po) lib[sk].push(cos(po, ref));
+      for (const o of R[i].others) {
+        const p = centroidUpTo(o.items, secs);
+        if (p) lib[dk].push(cos(p, ref));
+      }
+    }
+    for (const it of R[i].owner.items) ownerSegScores.push(cos(it.v, ref));
+    for (const o of R[i].others) for (const it of o.items) otherSegScores.push(cos(it.v, ref));
+  }
+  // Plaud label quality: "other" labels that score like the owner, and owner segments that
+  // score like other people, suggest Plaud attributed speech to the wrong label.
+  const ownerLikeCut = quantile(lib.same, 0.1);
+  for (const diffs of libDiffByRec) {
+    othersTotal += diffs.length;
+    othersLikeOwner += diffs.filter((d) => d >= ownerLikeCut).length;
+  }
+  const otherSegMedian = quantile(otherSegScores, 0.5);
+  const ownerSegsLikeOthers = ownerSegScores.filter((x) => x <= otherSegMedian).length;
+
+  const m = models.find((x) => x.name === name);
+  return {
+    dim: m.extractor.dim,
+    embedSeconds: +(m.embedMs / 1000).toFixed(1),
+    libraryProfile: {
+      same: stats(lib.same),
+      different: stats(lib.diff),
+      eer: eer(lib.same, lib.diff),
+      eer10s: eer(lib.same10, lib.diff10),
+      eer30s: eer(lib.same30, lib.diff30),
+      eerAsNorm: eer(norm.same, norm.diff),
+    },
+    pairwise: {
+      same: stats(same),
+      differentCrossRecording: stats(diffCross),
+      differentWithinRecording: stats(diffWithin),
+      eerCrossRecording: eer(same, diffCross),
+    },
+    ownerSameSpeakerByCondition: Object.fromEntries(
+      Object.entries(sameByCondition).map(([k, v]) => [k, stats(v)]),
+    ),
+    plaudLabelQuality: {
+      otherLabelsScoringLikeOwner: `${othersLikeOwner} of ${othersTotal}`,
+      ownerSegmentsScoringLikeOthers: `${ownerSegsLikeOthers} of ${ownerSegScores.length}`,
+    },
   };
 }
 
-// E: single segments vs the owner centroid of other recordings (outlier-detection viability).
-const segSame = [];
-const segDiff = [];
-for (let i = 0; i < recs.length; i++) {
-  const ref = recs[(i + 1) % recs.length].owner;
-  for (const it of recs[i].ownerItems) segSame.push(cos(it.v, ref));
-  for (const o of recs[i].others) for (const it of o.items) segDiff.push(cos(it.v, ref));
-}
-
 const result = {
-  model: path.basename(MODEL),
-  dim: extractor.dim,
-  numThreads: NUM_THREADS,
   recordingsUsed: recs.length,
   recordingsSkipped: skipped,
   recordingsFailed: failed,
+  devices: deviceIds.size,
+  recordingsByDevice: countBy(recs.map((r) => r.device)),
+  recordingsByScene: countBy(recs.map((r) => r.scene)),
   audioHours: +(audioSeconds / 3600).toFixed(2),
-  embedSeconds: +(embedMs / 1000).toFixed(1),
   totalSeconds: +((Date.now() - t0) / 1000).toFixed(1),
   peakRssMB: Math.round(peakRss / 1e6),
-  A_ownerVsOwner_sameSpeaker: stats(A),
-  B_ownerVsOthers_differentSpeaker: stats(B),
-  C_othersVsOthers_mixed: stats(C),
-  centroidEER: (({ eer: e, threshold }) => `${e} at ${threshold}`)(eer(A, B)),
-  speechNeededPerLabel: byAmount,
-  singleSegment: {
-    same: stats(segSame),
-    different: stats(segDiff),
-    eer: (({ eer: e, threshold }) => `${e} at ${threshold}`)(eer(segSame, segDiff)),
-  },
+  numThreads: NUM_THREADS,
+  models: Object.fromEntries(models.map((m) => [m.name, analyse(m.name)])),
 };
 
 console.log(JSON.stringify(result, null, 2));
