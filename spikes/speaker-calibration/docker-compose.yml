@@ -1,0 +1,16 @@
+# Portainer stack for the Phase 0 calibration spike. Runs once and exits;
+# read the result from the container's logs. Set APPLAUD_URL in the stack's
+# environment variables (APPLAUD_TOKEN only if Applaud has a LAN token).
+services:
+  speaker-calibration:
+    build: .
+    image: applaud-speaker-calibration:spike
+    container_name: applaud-speaker-calibration
+    restart: "no"
+    mem_limit: 1g
+    environment:
+      APPLAUD_URL: ${APPLAUD_URL:?set APPLAUD_URL, e.g. http://192.168.0.10:44471}
+      APPLAUD_TOKEN: ${APPLAUD_TOKEN:-}
+      MAX_RECORDINGS: ${MAX_RECORDINGS:-20}
+      NUM_THREADS: ${NUM_THREADS:-2}
+      OWNER: ${OWNER:-}

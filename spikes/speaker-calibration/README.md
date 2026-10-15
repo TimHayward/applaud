@@ -13,18 +13,31 @@ It prints **numbers only**: no transcript text, no audio and no names other than
 
 ## Run it on the Portainer host (not the NAS)
 
+### Option A: Portainer stack from Git (recommended)
+
+1. **Stacks → Add stack**. Name: `speaker-calibration`.
+2. Build method: **Repository**.
+   - Repository URL: `https://github.com/TimHayward/applaud`
+   - Repository reference: `refs/heads/claude/nice-noether-fmry57`
+   - Compose path: `spikes/speaker-calibration/docker-compose.yml`
+   - Authentication: off (the repository is public). GitOps updates: off.
+3. **Environment variables**: add `APPLAUD_URL` = `http://<nas-ip>:44471`. Use the NAS IP, not a hostname. Add `APPLAUD_TOKEN` only if Applaud has a LAN token; leave it out otherwise.
+4. **Deploy the stack**. The first deploy builds the image (ffmpeg, the speaker library and a 26 MB model), which takes a few minutes.
+5. Open **Containers → applaud-speaker-calibration → Logs**. The container runs once, prints a JSON block, then stops (status "exited" is expected). Typical run time is a few minutes for 20 recordings.
+6. Copy the JSON from the logs and paste it back. Then delete the stack (and the `applaud-speaker-calibration:spike` image under **Images**).
+
+To re-run with different settings, edit the stack's environment variables and select **Update the stack**, or start the stopped container again.
+
+### Option B: command line on the host
+
 ```bash
 git clone -b claude/nice-noether-fmry57 https://github.com/TimHayward/applaud.git
 cd applaud/spikes/speaker-calibration
 docker build -t applaud-speaker-calibration .
-
-docker run --rm \
-  -e APPLAUD_URL=http://<nas-ip>:44471 \
-  -e APPLAUD_TOKEN=<lan-token> \
-  applaud-speaker-calibration
+docker run --rm -e APPLAUD_URL=http://<nas-ip>:44471 applaud-speaker-calibration
 ```
 
-The LAN token is the one Applaud printed to its container log on first start (Settings → LAN Access).
+Add `-e APPLAUD_TOKEN=<lan-token>` if Applaud has a LAN token (Settings → LAN Access).
 
 Optional environment variables:
 
