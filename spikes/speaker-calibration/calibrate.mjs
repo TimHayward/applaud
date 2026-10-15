@@ -9,13 +9,15 @@
 import { execFileSync } from "node:child_process";
 import {
   closeSync,
+  createWriteStream,
   mkdtempSync,
   openSync,
   readSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sherpa from "sherpa-onnx-node";
@@ -70,22 +72,52 @@ const headers = APPLAUD_TOKEN ? { Authorization: `Bearer ${APPLAUD_TOKEN}` } : {
 const mediaUrl = (folder, name) =>
   `${APPLAUD_URL}/media/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`;
 
-async function getJson(url) {
-  const res = await fetch(url, { headers });
-  if (res.status === 401) {
-    throw new Error(
-      `401 Unauthorized for ${url}. Applaud has a LAN token set; pass it as APPLAUD_TOKEN.`,
-    );
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Error text without the URL, which contains the recording title.
+const errText = (err) =>
+  (err?.cause?.code ?? err?.message ?? String(err)).toString().replace(/ for https?:\/\/\S+/, "");
+
+/**
+ * Run `fn` with retries on network errors and 5xx. Applaud closes idle keep-alive
+ * connections after 5 s and embedding takes longer, so an occasional reused-socket
+ * failure ("other side closed") is expected and harmless on retry.
+ */
+async function withRetry(fn, attempts = 4) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err?.noRetry || i >= attempts) throw err;
+      await sleep(1000 * 2 ** (i - 1));
+    }
   }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
-  return res.json();
 }
 
-async function download(url, dest) {
+async function fetchOk(url) {
   const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
-  writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+  if (res.status === 401) {
+    const err = new Error(
+      `401 Unauthorized for ${url}. Applaud has a LAN token set; pass it as APPLAUD_TOKEN.`,
+    );
+    err.noRetry = true;
+    throw err;
+  }
+  if (!res.ok) {
+    const err = new Error(`${res.status} ${res.statusText} for ${url}`);
+    err.noRetry = res.status < 500;
+    throw err;
+  }
+  return res;
 }
+
+const getJson = (url) => withRetry(async () => (await fetchOk(url)).json());
+
+/** Stream a file to disk rather than buffering it, so long recordings don't spike memory. */
+const download = (url, dest) =>
+  withRetry(async () => {
+    const res = await fetchOk(url);
+    await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
+  });
 
 /** Decode any audio file to raw 16 kHz mono float32 on disk; returns the path. */
 function decodeToPcm(src, dest) {
@@ -248,72 +280,86 @@ let audioSeconds = 0;
 let embedMs = 0;
 let peakRss = 0;
 let skipped = 0;
+let failed = 0;
+let consecutiveFailures = 0;
 
 try {
   for (const r of candidates) {
     if (recs.length >= MAX_RECORDINGS) break;
-    const segs = segmentsOf(await getJson(mediaUrl(r.folder, "transcript.json")));
-    const byLabel = new Map();
-    for (const s of segs) {
-      const label = s.speaker || s.original_speaker;
-      if (!label) continue;
-      if (!byLabel.has(label)) byLabel.set(label, []);
-      byLabel.get(label).push(s);
-    }
-    if (!OWNER) {
-      const named = [...byLabel.keys()].filter((l) => !GENERIC_LABEL.test(l));
-      if (named.length === 1) {
-        OWNER = named[0];
-        console.log(`Owner detected from Plaud tags: "${OWNER}" (override with OWNER=...)`);
-      }
-    }
-    const labels = [...byLabel.entries()]
-      .map(([label, s]) => ({ label, windows: pickWindows(s) }))
-      .filter((l) => l.windows.reduce((a, w) => a + w.end - w.start, 0) >= MIN_SPEECH_PER_LABEL_S);
-    const hasOwner = labels.some((l) => l.label === OWNER);
-    const others = labels.filter((l) => l.label !== OWNER && GENERIC_LABEL.test(l.label));
-    if (!OWNER || !hasOwner || others.length === 0) {
-      skipped++;
-      continue;
-    }
-
-    const audioPath = path.join(tmp, "audio");
-    const pcmPath = path.join(tmp, "audio.f32");
-    await download(mediaUrl(r.folder, r.audioFilename), audioPath);
-    decodeToPcm(audioPath, pcmPath);
-    rmSync(audioPath);
-    const totalSamples = statSync(pcmPath).size / 4;
-    audioSeconds += totalSamples / SAMPLE_RATE;
-    const fd = openSync(pcmPath, "r");
-
-    const rec = { owner: null, ownerItems: [], others: [] };
     try {
-      for (const l of [labels.find((x) => x.label === OWNER), ...others]) {
-        const items = [];
-        for (const w of l.windows) {
-          const samples = readWindow(fd, totalSamples, w.start, w.end);
-          if (!samples) continue;
-          const t = Date.now();
-          items.push({ v: embed(samples), dur: w.end - w.start });
-          embedMs += Date.now() - t;
-        }
-        if (!items.length) continue;
-        const c = centroid(items.map((i) => i.v));
-        if (l.label === OWNER) {
-          rec.owner = c;
-          rec.ownerItems = items;
-        } else {
-          rec.others.push({ c, items });
+      const segs = segmentsOf(await getJson(mediaUrl(r.folder, "transcript.json")));
+      const byLabel = new Map();
+      for (const s of segs) {
+        const label = s.speaker || s.original_speaker;
+        if (!label) continue;
+        if (!byLabel.has(label)) byLabel.set(label, []);
+        byLabel.get(label).push(s);
+      }
+      if (!OWNER) {
+        const named = [...byLabel.keys()].filter((l) => !GENERIC_LABEL.test(l));
+        if (named.length === 1) {
+          OWNER = named[0];
+          console.log(`Owner detected from Plaud tags: "${OWNER}" (override with OWNER=...)`);
         }
       }
-    } finally {
-      closeSync(fd);
-      rmSync(pcmPath);
-    }
-    peakRss = Math.max(peakRss, process.memoryUsage().rss);
-    if (rec.owner && rec.others.length) {
-      recs.push(rec);
-      process.stdout.write(`  embedded recording ${recs.length}/${MAX_RECORDINGS}\r`);
+      const labels = [...byLabel.entries()]
+        .map(([label, s]) => ({ label, windows: pickWindows(s) }))
+        .filter(
+          (l) => l.windows.reduce((a, w) => a + w.end - w.start, 0) >= MIN_SPEECH_PER_LABEL_S,
+        );
+      const hasOwner = labels.some((l) => l.label === OWNER);
+      const others = labels.filter((l) => l.label !== OWNER && GENERIC_LABEL.test(l.label));
+      if (!OWNER || !hasOwner || others.length === 0) {
+        skipped++;
+        continue;
+      }
+
+      const audioPath = path.join(tmp, "audio");
+      const pcmPath = path.join(tmp, "audio.f32");
+      await download(mediaUrl(r.folder, r.audioFilename), audioPath);
+      decodeToPcm(audioPath, pcmPath);
+      rmSync(audioPath);
+      const totalSamples = statSync(pcmPath).size / 4;
+      audioSeconds += totalSamples / SAMPLE_RATE;
+      const fd = openSync(pcmPath, "r");
+
+      const rec = { owner: null, ownerItems: [], others: [] };
+      try {
+        for (const l of [labels.find((x) => x.label === OWNER), ...others]) {
+          const items = [];
+          for (const w of l.windows) {
+            const samples = readWindow(fd, totalSamples, w.start, w.end);
+            if (!samples) continue;
+            const t = Date.now();
+            items.push({ v: embed(samples), dur: w.end - w.start });
+            embedMs += Date.now() - t;
+          }
+          if (!items.length) continue;
+          const c = centroid(items.map((i) => i.v));
+          if (l.label === OWNER) {
+            rec.owner = c;
+            rec.ownerItems = items;
+          } else {
+            rec.others.push({ c, items });
+          }
+        }
+      } finally {
+        closeSync(fd);
+        rmSync(pcmPath);
+      }
+      peakRss = Math.max(peakRss, process.memoryUsage().rss);
+      if (rec.owner && rec.others.length) {
+        recs.push(rec);
+        process.stdout.write(`  embedded recording ${recs.length}/${MAX_RECORDINGS}\r`);
+      }
+      consecutiveFailures = 0;
+    } catch (err) {
+      if (err?.noRetry && String(err.message).startsWith("401")) throw err;
+      failed++;
+      consecutiveFailures++;
+      console.log(`\n  recording skipped after repeated errors: ${errText(err)}`);
+      if (consecutiveFailures >= 5)
+        throw new Error("5 recordings in a row failed; stopping.", { cause: err.cause });
     }
   }
 } finally {
@@ -383,6 +429,7 @@ const result = {
   numThreads: NUM_THREADS,
   recordingsUsed: recs.length,
   recordingsSkipped: skipped,
+  recordingsFailed: failed,
   audioHours: +(audioSeconds / 3600).toFixed(2),
   embedSeconds: +(embedMs / 1000).toFixed(1),
   totalSeconds: +((Date.now() - t0) / 1000).toFixed(1),
