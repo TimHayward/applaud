@@ -25,6 +25,12 @@ export default tseslint.config(
     },
   },
   {
+    files: ["spikes/**/*.mjs"],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     files: ["web/src/**/*.{ts,tsx}"],
     plugins: { react, "react-hooks": reactHooks },
     languageOptions: {

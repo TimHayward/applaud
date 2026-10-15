@@ -33,6 +33,8 @@ Measured on the NAS (2026-10-15):
 
 Consequence (D9): Applaud stays on the NAS and remains light. All audio decoding and embedding move to a stateless worker on the Portainer host. The NAS takes on no new CPU or memory load beyond small HTTP calls and SQLite rows.
 
+Portainer host `bluedckr01` (measured 2026-10-15): AVX present, 6 cores, 16 GB RAM with about 6 GB available, swap essentially unused, always on, reaches the NAS on port 44471.
+
 ## 2. Architecture
 
 ```
@@ -141,6 +143,12 @@ Labels live in SQLite, not in `transcript.json`, so a Plaud re-fetch or manual r
 Sizes are relative (S / M / L), professional judgement, not evidenced effort.
 
 ### Phase 0: Spike and calibration (S)
+
+**Progress (2026-10-15):**
+
+- `sherpa-onnx-node@1.12.28` installs from npm with a prebuilt linux-x64 binary (32 MB). WeSpeaker ResNet34 and ResNet34-LM models download and load (256-dim). On a sandbox CPU: about 0.04× real time single-threaded, about 200 MB RSS, opus round-trip decode fine.
+- On public test clips (2 to 8 s, mostly Mandarin), **single-clip scores overlap**: different speakers up to 0.88, same speaker down to 0.80. Short-clip identification is unreliable; per-label centroids over more speech, and thresholds calibrated on the user's own English recordings, are required. Not yet evidenced on real data.
+- Calibration tool: [`spikes/speaker-calibration/`](../../spikes/speaker-calibration/README.md). Runs on the Portainer host against Applaud, using the owner's Plaud tag as ground truth. Verified end to end against a mock Applaud; the Docker image itself has not been built in the sandbox (no daemon).
 
 - Stand up a throwaway worker container on the Portainer host (confirm the host has AVX) that fetches one real recording from Applaud and embeds its segment windows. Record throughput and memory.
 - Install `sherpa-onnx-node` and `ffmpeg-static` under pnpm. Build the Docker image. Smoke-test the worker image on linux-x64.

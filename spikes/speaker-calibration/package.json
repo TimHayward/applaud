@@ -1,0 +1,13 @@
+{
+  "name": "applaud-speaker-calibration",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Phase 0 spike: calibrate speaker-embedding thresholds against a running Applaud",
+  "type": "module",
+  "scripts": {
+    "start": "node calibrate.mjs"
+  },
+  "dependencies": {
+    "sherpa-onnx-node": "1.12.28"
+  }
+}
