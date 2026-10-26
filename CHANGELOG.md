@@ -26,6 +26,8 @@ Plaud 4.0 moved accounts to a new web platform, and the browser-session sign-in 
 ### Known gaps
 - Images attached to summaries and any documents attached to recordings are not downloaded: the official API does not expose them.
 - Plaud documents its MCP authorisation server for AI assistants. If Plaud restricts it to those, sign-in will stop working until Plaud offers app registration.
+- Plaud's access token lasts 24 hours and its refresh token 7 days; each renewal issues a fresh 7-day refresh token (measured 2026-10-26). Applaud stays signed in as long as it runs at least once a week.
+- Plaud's authorisation server has no revocation endpoint, so **Disconnect** clears the session in Applaud only.
 
 ## [0.5.12] - 2026-10-13
 

@@ -293,10 +293,10 @@ export function Settings(): JSX.Element {
             <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Sign-in Renewal</label>
             <div className="bg-surface-container-highest/50 border border-outline-variant/20 rounded-lg p-4 flex items-center justify-between">
               <span className="text-sm text-on-surface">
-                {expiresInDays === null
-                  ? "Renews automatically"
+                {expiresInDays === null || expiresInDays > 2
+                  ? "Renews automatically while Applaud runs at least weekly"
                   : expiresInDays > 0
-                    ? `Sign in again within ${expiresInDays} days`
+                    ? `Not renewed recently: sign in again within ${expiresInDays} days`
                     : "Expired: sign in again"}
               </span>
             </div>

@@ -29,7 +29,7 @@ Applaud signs in to Plaud with OAuth (authorisation code + PKCE) against Plaud's
 | POST | `/api/auth/plaud/start` | Begin sign-in. Registers this install for the redirect URI the browser is using (once per URI) and returns `{ authorizeUrl, redirectUri }`; open `authorizeUrl` in the browser. |
 | GET | `/api/auth/plaud/callback` | Where Plaud sends the browser back (`?code&state`). Completes the sign-in and shows a short page. **Not behind the LAN token**: a top-level navigation can't carry it, so the single-use, 15-minute `state` from `/plaud/start` authorises the request instead. |
 | POST | `/api/auth/plaud/complete` | Fallback when the browser can't reach the redirect URI. Body: `{ callbackUrl }`, the full address the Plaud tab ended on. Returns `{ ok, email? }` or `{ ok: false, error }`. |
-| POST | `/api/auth/disconnect` | Revoke the session at Plaud (best effort) and clear it locally. |
+| POST | `/api/auth/disconnect` | Clear the session locally. Revocation at Plaud is attempted but Plaud's authorisation server currently offers none. |
 | GET | `/api/auth/ticket` | `{ ticket, expiresAt }`: a signed ticket for media links and SSE, valid for `APPLAUD_BROWSER_TICKET_TTL_HOURS` (default 24). Both null when no LAN token is set. |
 
 After setup, a completed sign-in starts a sync immediately.
