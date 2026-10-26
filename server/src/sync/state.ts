@@ -1,51 +1,38 @@
 import { renameSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
-import type { RecordingRow, PlaudRawRecording, RecordingsSort } from "@applaud/shared";
+import type { RecordingRow, RecordingsSort } from "@applaud/shared";
 import { getDb, rowToRecording, type RecordingDbRow } from "../db.js";
-import { folderName, audioFilenameForFiletype } from "./layout.js";
+import { folderName } from "./layout.js";
+import { historyWindowStart } from "./window.js";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { emit } from "./events.js";
 import {
   SOFT_DELETE_RETENTION_MS,
-  PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS,
-  PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT,
-  PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT,
   RECORDINGS_LIST_MAX_LIMIT,
   WEBHOOK_REDRIVE_BASE_DELAY_MS,
   WEBHOOK_REDRIVE_MAX_DELAY_MS,
   WEBHOOK_REDRIVE_MAX_ATTEMPTS,
 } from "../constants.js";
 
-export {
-  SOFT_DELETE_RETENTION_MS,
-  PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS,
-  PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT,
-  PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT,
-};
+export { SOFT_DELETE_RETENTION_MS };
 
 function mainListWhereSql(): string {
-  if (loadConfig().importPlaudDeleted) {
-    return "user_deleted_at IS NULL";
-  }
-  return "user_deleted_at IS NULL AND is_trash = 0";
+  return "user_deleted_at IS NULL";
 }
 
-/** Rows that still need cloud asset work (used by the poller). */
+/**
+ * Rows that still need asset work (used by the poller): inside the history
+ * window or explicitly requested, and missing audio, or missing a transcript
+ * or summary Plaud may still produce (`plaud_is_trans` / `plaud_is_summary`).
+ */
 function assetWorkWhereSql(): string {
-  const cfg = loadConfig();
-  const trashOk = cfg.importPlaudDeleted ? "" : " AND is_trash = 0";
-  // Plaud-trashed files (is_trash=1): only sync audio when import is enabled — never transcript/summary.
-  // A transcript is only worth asking for once Plaud reports it exists
-  // (is_trans) — otherwise every never-transcribed recording would cost
-  // Plaud API calls on every poll.
-  return `user_deleted_at IS NULL${trashOk}
+  return `user_deleted_at IS NULL
+       AND (start_time >= @windowStart OR download_requested_at IS NOT NULL)
        AND (
          audio_downloaded_at IS NULL
-         OR (is_trash = 0 AND (
-              (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
-              OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
-            ))
+         OR (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
+         OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
        )`;
 }
 
@@ -75,31 +62,29 @@ export function listSyncIgnoreRows(): SyncBlocklistRow[] {
   return rows.map((r) => ({ id: r.id, ignoredAt: r.ignored_at }));
 }
 
-export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
+/** A recording as listed by Plaud, normalised for storage. */
+export interface PlaudRecordingMeta {
+  id: string;
+  filename: string;
+  startTime: number;
+  durationMs: number;
+  serialNumber: string;
+}
+
+/**
+ * Insert a newly listed recording, or apply a rename to a known one. New rows
+ * assume Plaud will produce a transcript and summary (the list carries no such
+ * flags); the poller corrects that once it has seen the full record.
+ */
+export function upsertFromPlaud(item: PlaudRecordingMeta): RecordingRow {
   const db = getDb();
   const existing = db
     .prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?")
     .get(item.id);
-  const starredVal = item.is_markmemo ? 1 : 0;
-  const tagsJson = item.filetag_id_list && item.filetag_id_list.length > 0 ? JSON.stringify(item.filetag_id_list) : null;
 
   if (existing) {
     if (existing.filename !== item.filename) {
       renameRecordingFolder(existing, item.filename);
-    }
-    const trashVal = item.is_trash ? 1 : 0;
-    const summVal = item.is_summary ? 1 : 0;
-    const transVal = item.is_trans ? 1 : 0;
-    if (
-      existing.is_trash !== trashVal ||
-      existing.plaud_is_summary !== summVal ||
-      existing.plaud_is_trans !== transVal ||
-      (existing.is_starred ?? 0) !== starredVal ||
-      (existing.plaud_tags ?? null) !== tagsJson
-    ) {
-      db.prepare(
-        "UPDATE recordings SET is_trash = ?, plaud_is_summary = ?, plaud_is_trans = ?, is_starred = ?, plaud_tags = ? WHERE id = ?",
-      ).run(trashVal, summVal, transVal, starredVal, tagsJson, item.id);
     }
     return rowToRecording(
       db.prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?").get(item.id)!,
@@ -108,28 +93,21 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
 
   const cfg = loadConfig();
   if (!cfg.recordingsDir) throw new Error("recordingsDir not configured");
-  const folder = folderName(item.start_time, item.filename, item.id);
+  const folder = folderName(item.startTime, item.filename, item.id);
 
   db.prepare(
     `INSERT INTO recordings (
       id, filename, start_time, end_time, duration_ms, filesize_bytes, serial_number,
-      folder, audio_filename, is_trash, plaud_is_summary, plaud_is_trans, is_starred, plaud_tags
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      folder, audio_filename, is_trash, plaud_is_summary, plaud_is_trans
+    ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, NULL, 0, 1, 1)`,
   ).run(
     item.id,
     item.filename,
-    item.start_time,
-    item.end_time,
-    item.duration,
-    item.filesize,
-    item.serial_number,
+    item.startTime,
+    item.startTime + item.durationMs,
+    item.durationMs,
+    item.serialNumber,
     folder,
-    audioFilenameForFiletype(item.filetype),
-    item.is_trash ? 1 : 0,
-    item.is_summary ? 1 : 0,
-    item.is_trans ? 1 : 0,
-    starredVal,
-    tagsJson,
   );
 
   return rowToRecording(
@@ -137,6 +115,44 @@ export function upsertFromPlaud(item: PlaudRawRecording): RecordingRow {
       .prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?")
       .get(item.id)!,
   );
+}
+
+/** Whether Plaud may still produce a transcript / summary worth polling for. */
+export function setPlaudAvailability(id: string, transcript: boolean, summary: boolean): void {
+  getDb()
+    .prepare("UPDATE recordings SET plaud_is_trans = ?, plaud_is_summary = ? WHERE id = ?")
+    .run(transcript ? 1 : 0, summary ? 1 : 0, id);
+}
+
+/** Record the audio basename once its real extension is known from the download URL. */
+export function setAudioFilename(id: string, audioFilename: string): void {
+  getDb().prepare("UPDATE recordings SET audio_filename = ? WHERE id = ?").run(audioFilename, id);
+}
+
+/**
+ * Ask for a recording outside the history window to be downloaded in full on
+ * the next sync. Also re-arms the transcript/summary checks. Returns the
+ * updated row, or null when it doesn't exist.
+ */
+export function requestDownload(id: string): RecordingRow | null {
+  const r = getDb()
+    .prepare(
+      `UPDATE recordings SET download_requested_at = COALESCE(download_requested_at, ?),
+         plaud_is_trans = 1, plaud_is_summary = 1, last_error = NULL
+       WHERE id = ? AND user_deleted_at IS NULL`,
+    )
+    .run(Date.now(), id);
+  return r.changes > 0 ? getRecordingById(id) : null;
+}
+
+/** Ids already in the library (including soft-deleted rows), for the discovery walk's stop rule. */
+export function knownRecordingIds(ids: string[]): Set<string> {
+  if (ids.length === 0) return new Set();
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare<string[], { id: string }>(`SELECT id FROM recordings WHERE id IN (${placeholders})`)
+    .all(...ids);
+  return new Set(rows.map((r) => r.id));
 }
 
 function renameRecordingFolder(row: RecordingDbRow, newFilename: string): void {
@@ -449,7 +465,7 @@ export function countPendingTranscripts(): number {
   const row = getDb()
     .prepare<[], { c: number }>(
       `SELECT COUNT(*) AS c FROM recordings WHERE audio_downloaded_at IS NOT NULL AND transcript_downloaded_at IS NULL
-       AND plaud_is_trans = 1 AND user_deleted_at IS NULL AND is_trash = 0`,
+       AND plaud_is_trans = 1 AND user_deleted_at IS NULL`,
     )
     .get();
   return row?.c ?? 0;
@@ -459,7 +475,7 @@ export function countPendingSummaries(): number {
   const row = getDb()
     .prepare<[], { c: number }>(
       `SELECT COUNT(*) AS c FROM recordings WHERE audio_downloaded_at IS NOT NULL AND transcript_downloaded_at IS NOT NULL
-       AND summary_downloaded_at IS NULL AND plaud_is_summary = 1 AND user_deleted_at IS NULL AND is_trash = 0`,
+       AND summary_downloaded_at IS NULL AND plaud_is_summary = 1 AND user_deleted_at IS NULL`,
     )
     .get();
   return row?.c ?? 0;
@@ -478,8 +494,8 @@ export function countErrorsLast24h(): number {
 export function findRecordingsNeedingAssets(): RecordingRow[] {
   const w = assetWorkWhereSql();
   const rows = getDb()
-    .prepare<[], RecordingDbRow>(`SELECT * FROM recordings WHERE ${w} ORDER BY start_time DESC`)
-    .all();
+    .prepare<{ windowStart: number }, RecordingDbRow>(`SELECT * FROM recordings WHERE ${w} ORDER BY start_time DESC`)
+    .all({ windowStart: historyWindowStart(loadConfig()) });
   return rows.map(rowToRecording);
 }
 
@@ -515,7 +531,7 @@ function isWebhookDue(
  * downloaded at or after `cutoff` (when the webhook was enabled), has never
  * been confirmed delivered, is under the attempt cap, and is past its back-off.
  * Mirrors the download path's fire semantics: audio_ready for any downloaded
- * audio, transcript_ready only for non-trash rows. At most `limit` events.
+ * audio, transcript_ready for any downloaded transcript. At most `limit` events.
  */
 export function findRecordingsNeedingWebhook(opts: {
   cutoff: number;
@@ -529,7 +545,7 @@ export function findRecordingsNeedingWebhook(opts: {
     .prepare<{ cutoff: number; now: number; maxAttempts: number; limit: number }, RecordingDbRow>(
       `SELECT * FROM recordings
        WHERE user_deleted_at IS NULL
-         AND (${webhookDueSql("audio")} OR (is_trash = 0 AND ${webhookDueSql("transcript")}))
+         AND (${webhookDueSql("audio")} OR ${webhookDueSql("transcript")})
        ORDER BY start_time DESC
        LIMIT @limit`,
     )
@@ -538,50 +554,9 @@ export function findRecordingsNeedingWebhook(opts: {
   for (const dbRow of rows) {
     const row = rowToRecording(dbRow);
     if (isWebhookDue(dbRow, "audio", opts)) out.push({ row, event: "audio_ready" });
-    if (dbRow.is_trash === 0 && isWebhookDue(dbRow, "transcript", opts)) {
+    if (isWebhookDue(dbRow, "transcript", opts)) {
       out.push({ row, event: "transcript_ready" });
     }
   }
   return out.slice(0, opts.limit);
-}
-
-export function findPlaudTrashAssetProbeCandidates(probeOlderThan: number, limit: number): RecordingRow[] {
-  if (!loadConfig().importPlaudDeleted) return [];
-  const rows = getDb()
-    .prepare<[number, number], RecordingDbRow>(
-      `SELECT * FROM recordings
-       WHERE user_deleted_at IS NULL
-         AND is_trash = 1
-         AND audio_downloaded_at IS NOT NULL
-         AND (
-           (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
-           OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
-         )
-         AND (trash_asset_probe_at IS NULL OR trash_asset_probe_at < ?)
-       ORDER BY trash_asset_probe_at ASC, start_time DESC
-       LIMIT ?`,
-    )
-    .all(probeOlderThan, limit);
-  return rows.map(rowToRecording);
-}
-
-export function markTrashAssetProbed(id: string): void {
-  getDb().prepare("UPDATE recordings SET trash_asset_probe_at = ? WHERE id = ?").run(Date.now(), id);
-}
-
-/** Clears probe timers so the next Phase-3 pass can consider all eligible Plaud-trash rows (e.g. after Sync Now). */
-export function resetPlaudTrashAssetProbeTimestamps(): number {
-  const r = getDb()
-    .prepare(
-      `UPDATE recordings SET trash_asset_probe_at = NULL
-       WHERE user_deleted_at IS NULL
-         AND is_trash = 1
-         AND audio_downloaded_at IS NOT NULL
-         AND (
-           (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
-           OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
-         )`,
-    )
-    .run();
-  return r.changes;
 }

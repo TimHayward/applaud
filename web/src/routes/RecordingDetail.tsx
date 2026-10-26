@@ -113,6 +113,21 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
     }
   };
 
+  const download = async (): Promise<void> => {
+    setResyncError(null);
+    setIsResyncing(true);
+    try {
+      await api.downloadRecording(r.id);
+      await qc.invalidateQueries({ queryKey: ["recording", id] });
+      await qc.invalidateQueries({ queryKey: ["recordings"] });
+      toast.success("Download started. It appears here once it has finished.");
+    } catch (err) {
+      setResyncError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsResyncing(false);
+    }
+  };
+
   const startEditingTitle = (): void => {
     setTitleDraft(r.displayName ?? r.filename);
     setEditingTitle(true);
@@ -142,7 +157,7 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
     }
   };
 
-  const isComplete = !!r.audioDownloadedAt && (!!r.transcriptDownloadedAt || r.isTrash);
+  const isComplete = !!r.audioDownloadedAt && !!r.transcriptDownloadedAt;
 
   const downloadFiles: { label: string; file: string }[] = [
     ...(r.transcriptDownloadedAt
@@ -242,12 +257,26 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
               </div>
               <div className="flex items-center gap-1.5">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-                <span>{formatBytes(r.filesizeBytes)}</span>
+                <span>{r.filesizeBytes > 0 ? formatBytes(r.filesizeBytes) : "—"}</span>
               </div>
             </div>
           </div>
           {!r.userDeletedAt ? (
             <div className="flex flex-wrap gap-3">
+              {r.status === "metadata_only" ? (
+                <button
+                  className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary text-sm font-semibold rounded-lg hover:bg-primary/90 transition-all active:scale-95 whitespace-nowrap disabled:opacity-50 disabled:pointer-events-none"
+                  onClick={() => void download()}
+                  disabled={isResyncing}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 3v12" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <path d="M5 21h14" />
+                  </svg>
+                  {isResyncing ? "Starting..." : "Download Recording"}
+                </button>
+              ) : (
               <button
                 className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary text-sm font-semibold rounded-lg hover:bg-primary/90 transition-all active:scale-95 whitespace-nowrap disabled:opacity-50 disabled:pointer-events-none"
                 onClick={() => void resync()}
@@ -261,6 +290,7 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
                 </svg>
                 {isResyncing ? "Resyncing..." : "Resync Recording"}
               </button>
+              )}
               <button className="flex items-center gap-2 px-4 py-2 border border-error/20 hover:border-error/50 text-error text-sm font-semibold rounded-lg transition-all active:scale-95 whitespace-nowrap" onClick={() => void del()}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
                 Move to Trash
@@ -290,15 +320,21 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
               currentTime={currentTime}
               onSeek={(sec) => { if (audioRef.current) { audioRef.current.currentTime = sec; void audioRef.current.play(); } }}
             />
+          ) : r.status === "metadata_only" ? (
+            <section className="card p-6">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Details only</h2>
+              <p className="text-sm text-on-surface-variant">
+                This recording is older than your history window, so only its details are stored. Choose Download
+                Recording to fetch its audio, transcript and notes.
+              </p>
+            </section>
           ) : r.audioDownloadedAt ? (
             <section className="card p-6">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Transcript</h2>
               <p className="text-sm text-on-surface-variant">
-                {r.isTrash
-                  ? "This file is deleted in Plaud. Applaud always pulls audio; transcript and summary are checked periodically in the background when Plaud has them again (they do not count as pending sync work)."
-                  : r.plaudIsTrans
-                    ? "Plaud has a transcript for this recording. We'll pull it on the next sync cycle."
-                    : "This recording hasn't been transcribed in Plaud yet. Transcribe it in the Plaud app and it will download on the next sync — or use Resync to check now."}
+                {r.plaudIsTrans
+                  ? "No transcript yet. Applaud checks Plaud on each sync while the recording is new."
+                  : "Plaud has no transcript for this recording. Transcribe it in the Plaud app, then use Resync to fetch it."}
               </p>
             </section>
           ) : null}

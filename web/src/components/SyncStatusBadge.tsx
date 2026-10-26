@@ -4,8 +4,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ticketedUrl } from "../api.js";
 import { formatRelative } from "../lib/format.js";
 
-/** Warn once the Plaud token is within this many days of expiring. */
-const TOKEN_EXPIRY_WARNING_DAYS = 14;
+/**
+ * Warn once the Plaud refresh token is within this many days of expiring.
+ * Plaud's refresh token lasts 7 days and every daily renewal starts a fresh 7,
+ * so this only trips when renewal has stalled (Applaud not running, or Plaud
+ * refusing it) — not in normal operation.
+ */
+const TOKEN_EXPIRY_WARNING_DAYS = 2;
 
 export function SyncStatusBadge(): JSX.Element {
   const qc = useQueryClient();
@@ -86,7 +91,8 @@ export function SyncStatusBadge(): JSX.Element {
     );
   }
 
-  const tokenExp = cfg.data?.config.tokenExp;
+  // The access token renews itself; only the refresh token's expiry needs a new sign-in.
+  const tokenExp = cfg.data?.config.refreshTokenExp;
   const daysUntilExpiry = tokenExp ? Math.ceil((tokenExp * 1000 - Date.now()) / 86_400_000) : null;
   const tokenExpiringSoon = daysUntilExpiry !== null && daysUntilExpiry <= TOKEN_EXPIRY_WARNING_DAYS;
 
@@ -103,7 +109,7 @@ export function SyncStatusBadge(): JSX.Element {
       <Link
         to="/settings"
         className="pill bg-tertiary/15 text-tertiary hover:bg-tertiary/25 transition-colors"
-        title="Click to reconnect your Plaud account in Settings before it expires."
+        title="Applaud has not renewed its Plaud sign-in recently. Open Settings to sign in again before it expires."
       >
         token expires in {Math.max(0, daysUntilExpiry)}d
       </Link>

@@ -6,7 +6,7 @@ const ENV_KEYS = [
   "APPLAUD_WEBHOOK_BACKOFF_MS",
   "APPLAUD_TRASH_RETENTION_DAYS",
   "APPLAUD_RECORDINGS_MAX_LIMIT",
-  "APPLAUD_PLAUD_USER_AGENT",
+  "APPLAUD_PLAUD_CONTENT_HOSTS",
 ] as const;
 
 describe("constants", () => {
@@ -71,9 +71,11 @@ describe("constants", () => {
     expect(SOFT_DELETE_RETENTION_MS).toBe(3 * 24 * 60 * 60 * 1000);
   });
 
-  it("respects a custom user-agent override", async () => {
-    process.env.APPLAUD_PLAUD_USER_AGENT = "custom-agent/1.0";
-    const { PLAUD_USER_AGENT } = await import("./constants.js");
-    expect(PLAUD_USER_AGENT).toBe("custom-agent/1.0");
+  it("extends the Plaud content host allowlist from APPLAUD_PLAUD_CONTENT_HOSTS", async () => {
+    process.env.APPLAUD_PLAUD_CONTENT_HOSTS = "cdn.example.net, storage.example.org";
+    const { PLAUD_CONTENT_HOST_SUFFIXES } = await import("./constants.js");
+    expect(PLAUD_CONTENT_HOST_SUFFIXES).toEqual(
+      expect.arrayContaining(["amazonaws.com", "plaud.ai", "cdn.example.net", "storage.example.org"]),
+    );
   });
 });

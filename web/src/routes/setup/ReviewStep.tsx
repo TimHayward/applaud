@@ -11,11 +11,11 @@ export function ReviewStep({
 }): JSX.Element {
   const qc = useQueryClient();
   const cfg = useQuery({ queryKey: ["config"], queryFn: api.config });
-  const [importPlaudDeleted, setImportPlaudDeleted] = useState(false);
+  const [historyDays, setHistoryDays] = useState(30);
 
   useEffect(() => {
     if (!cfg.data?.config) return;
-    setImportPlaudDeleted(cfg.data.config.importPlaudDeleted ?? false);
+    setHistoryDays(cfg.data.config.historyDays);
   }, [cfg.data]);
 
   if (cfg.isLoading) return <p className="text-on-surface-variant">loading…</p>;
@@ -23,7 +23,7 @@ export function ReviewStep({
   if (!c) return <p>failed to load</p>;
 
   const launch = async (): Promise<void> => {
-    await api.updateConfig({ importPlaudDeleted });
+    await api.updateConfig({ historyDays });
     await qc.invalidateQueries({ queryKey: ["config"] });
     await qc.invalidateQueries({ queryKey: ["recordings"] });
     await qc.invalidateQueries({ queryKey: ["sync-status"] });
@@ -60,23 +60,26 @@ export function ReviewStep({
             {c.bind.host}:{c.bind.port}
           </code>
         </Row>
-        <Row label="Plaud deleted imports">{importPlaudDeleted ? "Enabled" : "Disabled"}</Row>
+        <Row label="History">last {historyDays} days in full</Row>
       </dl>
 
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low/50 p-5 space-y-3">
-        <h3 className="text-sm font-bold text-on-surface">Plaud cloud trash</h3>
+        <h3 className="text-sm font-bold text-on-surface">How much history to download</h3>
         <p className="text-xs text-on-surface-variant leading-relaxed">
-          When enabled, Applaud will sync files you deleted in Plaud as well as active ones. They appear on the main list
-          with the trash badge. You can change this later under Settings.
+          Applaud downloads recordings from the last few days in full, plus everything you record from now on. Older
+          recordings are listed with their details only, so you can download individual ones when you need them. You can
+          change this later under Settings.
         </p>
-        <label className="flex items-start gap-3 cursor-pointer select-none">
+        <label className="flex items-center gap-3">
           <input
-            type="checkbox"
-            className="mt-0.5 h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary shrink-0"
-            checked={importPlaudDeleted}
-            onChange={(e) => setImportPlaudDeleted(e.target.checked)}
+            type="number"
+            min={0}
+            max={3650}
+            className="w-24 bg-surface-container-highest/50 border-0 rounded-lg p-2 text-sm text-on-surface focus:ring-2 focus:ring-primary/40 focus:outline-none"
+            value={historyDays}
+            onChange={(e) => setHistoryDays(Math.max(0, Math.min(3650, Math.floor(Number(e.target.value) || 0))))}
           />
-          <span className="text-sm text-on-surface">Import recordings deleted in Plaud</span>
+          <span className="text-sm text-on-surface">days of history</span>
         </label>
       </div>
 

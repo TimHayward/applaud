@@ -1,6 +1,7 @@
 import type {
-  AuthDetectResponse,
-  AuthValidateResponse,
+  AuthCompleteResponse,
+  AuthStartResponse,
+  AuthStatusResponse,
   ConfigResponse,
   RecordingsListResponse,
   RecordingDetail,
@@ -90,32 +91,16 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   setupStatus: () => jsonFetch<SetupStatusResponse>("/api/setup/status"),
-  authDetect: () =>
-    jsonFetch<AuthDetectResponse>("/api/auth/detect", { method: "POST", body: "{}" }),
-  authAccept: (token: string, email?: string) =>
-    jsonFetch<{ ok: boolean; email?: string; exp?: number; error?: string }>(
-      "/api/auth/accept",
-      {
-        method: "POST",
-        body: JSON.stringify({ token, ...(email ? { email } : {}) }),
-      },
-    ),
-  /** First-party: submit a captured `pld_ut` / `pld_urt` cookie pair. */
-  authAcceptCookies: (ut: string, urt: string) =>
-    jsonFetch<{ ok: boolean; email?: string; exp?: number; error?: string }>(
-      "/api/auth/accept",
-      {
-        method: "POST",
-        body: JSON.stringify({ ut, urt }),
-      },
-    ),
-  authValidate: (token: string) =>
-    jsonFetch<AuthValidateResponse>("/api/auth/validate", {
+  authStatus: () => jsonFetch<AuthStatusResponse>("/api/auth/status"),
+  /** Begin Plaud sign-in: returns the Plaud authorisation URL to open. */
+  authStart: () => jsonFetch<AuthStartResponse>("/api/auth/plaud/start", { method: "POST", body: "{}" }),
+  /** Finish sign-in from a pasted callback address (fallback when the redirect can't reach Applaud). */
+  authComplete: (callbackUrl: string) =>
+    jsonFetch<AuthCompleteResponse>("/api/auth/plaud/complete", {
       method: "POST",
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ callbackUrl }),
     }),
-  authStartWatch: () =>
-    jsonFetch<{ watchId: string }>("/api/auth/watch", { method: "POST", body: "{}" }),
+  authDisconnect: () => jsonFetch<{ ok: boolean }>("/api/auth/disconnect", { method: "POST", body: "{}" }),
   mediaTicket: () => jsonFetch<TicketResponse>("/api/auth/ticket"),
   config: () => jsonFetch<ConfigResponse>("/api/config"),
   updateConfig: (patch: Partial<AppConfig>) =>
@@ -171,6 +156,9 @@ export const api = {
     jsonFetch<{ recording: RecordingDetail; mediaBase: string }>(`/api/recordings/${id}`),
   deleteRecording: (id: string) =>
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}`, { method: "DELETE" }),
+  /** Download a recording outside the history window (metadata only until now). */
+  downloadRecording: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/download`, { method: "POST", body: "{}" }),
   resyncRecording: (id: string) =>
     jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/resync`, { method: "POST", body: "{}" }),
   renameRecording: (id: string, displayName: string | null) =>

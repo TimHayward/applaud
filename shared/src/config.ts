@@ -16,44 +16,26 @@ export interface WebhookConfig {
   enabledAt?: number;
 }
 
-/**
- * How the stored Plaud credential was obtained, which decides how the token
- * is kept fresh:
- *   - `"legacy"`   — a single long-lived bearer JWT lifted from Local Storage
- *                    (`tokenstr`). No refresh capability; when it expires the
- *                    user must reconnect. This is the original Applaud model
- *                    and remains the default for existing installs where
- *                    `authMode` is unset.
- *   - `"first_party"` — Plaud's newer cookie model. We hold a user token (UT,
- *                    `pld_ut`, ~1 day) and a user refresh token (URT,
- *                    `pld_urt`, ~30 days) and mint a short-lived workspace
- *                    token (WT) on demand, refreshing the UT off the URT as it
- *                    ages. `token`/`tokenExp` cache the current WT.
- */
-export type PlaudAuthMode = "legacy" | "first_party";
-
 export interface AppConfig {
   version: number;
   setupComplete: boolean;
   /**
-   * When unset (`null`), the credential predates the first-party model and is
-   * treated as `"legacy"` — the stored `token` is used directly as the bearer.
+   * Plaud OAuth session, obtained through Plaud's hosted authorisation server
+   * (`mcp.plaud.ai`) with dynamic client registration and PKCE. `token` is
+   * the short-lived access token sent to Plaud's developer API; it is renewed
+   * from `refreshToken` before it expires. All expiries are seconds since epoch.
    */
-  authMode: PlaudAuthMode | null;
-  /** Bearer token used for Plaud API calls. Legacy: the long-lived JWT.
-   *  First-party: the cached workspace token (WT), re-minted as it expires. */
   token: string | null;
   tokenExp: number | null;
   tokenEmail: string | null;
-  /** First-party only: user token (`pld_ut`) — mints workspace tokens. */
-  ut: string | null;
-  utExp: number | null;
-  /** First-party only: user refresh token (`pld_urt`) — refreshes the UT. */
-  urt: string | null;
-  urtExp: number | null;
-  /** First-party only: the workspace the WT is minted for. */
-  plaudWorkspaceId: string | null;
-  plaudRegion: string | null;
+  refreshToken: string | null;
+  refreshTokenExp: number | null;
+  /** Client id issued to this install by dynamic client registration. */
+  plaudClientId: string | null;
+  /** The redirect URI `plaudClientId` was registered with. */
+  plaudRedirectUri: string | null;
+  /** When the current Plaud session was established by sign-in (epoch ms). */
+  plaudConnectedAt: number | null;
   recordingsDir: string | null;
   webhook: WebhookConfig | null;
   pollIntervalMinutes: number;
@@ -67,30 +49,39 @@ export interface AppConfig {
   publicBaseUrl: string | null;
   lanToken: string | null;
   /**
-   * When true, list/sync includes items in Plaud’s trash (`is_trash`) so they can be archived locally.
-   * When false, only non-trashed Plaud files are synced and the main list hides Plaud-trashed rows.
+   * How many days of history before `installedAt` are downloaded in full.
+   * Older recordings are indexed as metadata only and can be downloaded one
+   * at a time on request. Recordings made after install always download.
    */
-  importPlaudDeleted: boolean;
+  historyDays: number;
+  /** When sync was first set up (epoch ms); the anchor for `historyDays`. */
+  installedAt: number | null;
+  /**
+   * When the discovery walk last reached the end of the Plaud list (epoch ms).
+   * Until set, every poll walks the whole list; after, routine polls stop at
+   * the first page with nothing new.
+   */
+  libraryIndexedAt: number | null;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
-  version: 1,
+  version: 2,
   setupComplete: false,
-  authMode: null,
   token: null,
   tokenExp: null,
   tokenEmail: null,
-  ut: null,
-  utExp: null,
-  urt: null,
-  urtExp: null,
-  plaudWorkspaceId: null,
-  plaudRegion: null,
+  refreshToken: null,
+  refreshTokenExp: null,
+  plaudClientId: null,
+  plaudRedirectUri: null,
+  plaudConnectedAt: null,
   recordingsDir: null,
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
   publicBaseUrl: null,
   lanToken: null,
-  importPlaudDeleted: false,
+  historyDays: 30,
+  installedAt: null,
+  libraryIndexedAt: null,
 };

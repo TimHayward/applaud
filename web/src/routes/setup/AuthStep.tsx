@@ -1,38 +1,34 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ticketedUrl } from "../../api.js";
+import { api } from "../../api.js";
 
-type DetectState =
+type SignInState =
   | { kind: "idle" }
-  | { kind: "detecting" }
-  | {
-      kind: "found";
-      authMode: "legacy" | "first_party";
-      email?: string;
-      browser?: string;
-      profile?: string;
-      token?: string;
-      ut?: string;
-      urt?: string;
-    }
-  | { kind: "notfound" }
-  // Windows: auto-detection isn't supported, so we skip straight to manual paste.
-  | { kind: "unsupported" }
+  | { kind: "starting" }
+  | { kind: "waiting"; redirectUri: string }
+  | { kind: "connected"; email: string | null }
   | { kind: "error"; message: string };
 
-type WatchState =
-  | { kind: "inactive" }
-  | { kind: "waiting"; elapsedSec: number }
-  | { kind: "error"; message: string };
+/** How often to check whether the sign-in tab has finished. */
+const STATUS_POLL_MS = 2000;
+/** Give up waiting after this long (Plaud's own sign-in state lasts 30 minutes). */
+const WAIT_LIMIT_MS = 15 * 60 * 1000;
 
-type ManualState =
-  | { kind: "idle" }
-  | { kind: "validating" }
-  | { kind: "error"; message: string };
+function errorText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  try {
+    const parsed = JSON.parse(raw) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Not a JSON error body.
+  }
+  return raw;
+}
 
 /**
- * Plaud sign-in: browser session detection, login watch, and manual paste.
- * `variant="reconnect"` reuses it from Settings after setup (no wizard step
- * label; `onBack` acts as Cancel).
+ * Plaud sign-in through Plaud's own OAuth page. Applaud never sees the Plaud
+ * password: the browser signs in on Plaud's site and is sent back to Applaud,
+ * which receives a renewable session. `variant="reconnect"` reuses it from
+ * Settings after setup (no wizard step label; `onBack` acts as Cancel).
  */
 export function AuthStep({
   onNext,
@@ -44,173 +40,90 @@ export function AuthStep({
   variant?: "setup" | "reconnect";
 }): JSX.Element {
   const reconnect = variant === "reconnect";
-  const [detect, setDetect] = useState<DetectState>({ kind: "idle" });
-  const [watch, setWatch] = useState<WatchState>({ kind: "inactive" });
-  const [manual, setManual] = useState<ManualState>({ kind: "idle" });
-  const [manualText, setManualText] = useState("");
-  const [manualUt, setManualUt] = useState("");
-  const [manualUrt, setManualUrt] = useState("");
-  const [accepted, setAccepted] = useState(false);
-  const watchRef = useRef<{ es: EventSource; tick: ReturnType<typeof setInterval> } | null>(null);
+  const [state, setState] = useState<SignInState>({ kind: "idle" });
+  const [pasted, setPasted] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Close the watch EventSource/interval if the wizard unmounts mid-watch
-  // (e.g. the user navigates back) instead of leaking them.
-  useEffect(() => {
-    return () => {
-      if (watchRef.current) {
-        clearInterval(watchRef.current.tick);
-        watchRef.current.es.close();
-        watchRef.current = null;
-      }
-    };
-  }, []);
+  const stopPolling = (): void => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  useEffect(() => stopPolling, []);
+
+  // The session in place when this step opened; a sign-in has finished once a
+  // different one shows up (a reconnect starts from an existing session).
+  // `undefined` until the first status check returns.
+  const initialConnectedAt = useRef<number | null | undefined>(undefined);
 
   useEffect(() => {
-    setDetect({ kind: "detecting" });
     api
-      .authDetect()
-      .then((r) => {
-        if (r.autoDetectSupported === false) {
-          // Windows: no on-disk detection — go straight to manual paste.
-          setDetect({ kind: "unsupported" });
-        } else if (r.found && r.authMode === "first_party" && r.ut && r.urt) {
-          setDetect({ kind: "found", authMode: "first_party", browser: r.browser, profile: r.profile, ut: r.ut, urt: r.urt });
-        } else if (r.found && r.token) {
-          setDetect({ kind: "found", authMode: "legacy", email: r.email, browser: r.browser, profile: r.profile, token: r.token });
-        } else if (r.error) {
-          setDetect({ kind: "error", message: r.error });
-        } else {
-          setDetect({ kind: "notfound" });
-        }
+      .authStatus()
+      .then((s) => {
+        initialConnectedAt.current = s.connected ? s.connectedAt : null;
+        // On first setup, show an existing connection rather than asking again.
+        if (!reconnect && s.connected) setState({ kind: "connected", email: s.email });
       })
-      .catch((err: Error) => setDetect({ kind: "error", message: err.message }));
-  }, []);
+      .catch(() => undefined);
+  }, [reconnect]);
 
-  const acceptResult = (r: { ok: boolean; error?: string }): void => {
-    if (r.ok) { setAccepted(true); onNext(); }
-    else { setDetect({ kind: "error", message: r.error ?? "token validation failed" }); }
+  const finish = (email: string | null): void => {
+    stopPolling();
+    setState({ kind: "connected", email });
+    if (reconnect) onNext();
   };
 
-  const accept = async (token: string, email?: string): Promise<void> => {
+  const signIn = async (): Promise<void> => {
+    // Open the tab synchronously, inside the click, so popup blockers allow it;
+    // it is pointed at Plaud once the authorisation URL is known.
+    const tab = window.open("about:blank", "_blank");
+    setState({ kind: "starting" });
     try {
-      acceptResult(await api.authAccept(token, email));
+      const { authorizeUrl, redirectUri } = await api.authStart();
+      if (tab) {
+        // Don't hand Plaud's page a handle back to Applaud.
+        tab.opener = null;
+        tab.location.href = authorizeUrl;
+      }
+      else window.location.assign(authorizeUrl);
+      setState({ kind: "waiting", redirectUri });
+      const startedAt = Date.now();
+      stopPolling();
+      pollRef.current = setInterval(() => {
+        if (Date.now() - startedAt > WAIT_LIMIT_MS) {
+          stopPolling();
+          setState({ kind: "error", message: "Timed out waiting for Plaud sign-in. Start again." });
+          return;
+        }
+        api
+          .authStatus()
+          .then((s) => {
+            const baseline = initialConnectedAt.current;
+            if (baseline !== undefined && s.connected && s.connectedAt !== baseline) finish(s.email);
+          })
+          .catch(() => undefined);
+      }, STATUS_POLL_MS);
     } catch (err) {
-      setDetect({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+      tab?.close();
+      setState({ kind: "error", message: errorText(err) });
     }
   };
 
-  const acceptCookies = async (ut: string, urt: string): Promise<void> => {
+  const submitPasted = async (): Promise<void> => {
+    setPasteBusy(true);
     try {
-      acceptResult(await api.authAcceptCookies(ut, urt));
+      const r = await api.authComplete(pasted.trim());
+      if (r.ok) finish(r.email ?? null);
+      else setState({ kind: "error", message: r.error ?? "Sign-in could not be completed." });
     } catch (err) {
-      setDetect({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+      setState({ kind: "error", message: errorText(err) });
+    } finally {
+      setPasteBusy(false);
     }
   };
-
-  const startWatch = async (): Promise<void> => {
-    try {
-      const { watchId } = await api.authStartWatch();
-      setWatch({ kind: "waiting", elapsedSec: 0 });
-      // EventSource can't send the LAN-token header — use a signed ticket.
-      const es = new EventSource(await ticketedUrl(`/api/auth/watch/${encodeURIComponent(watchId)}/events`));
-      const start = Date.now();
-      const tick = setInterval(() => {
-        setWatch({ kind: "waiting", elapsedSec: Math.floor((Date.now() - start) / 1000) });
-      }, 1000);
-      watchRef.current = { es, tick };
-      const stop = (): void => {
-        clearInterval(tick);
-        es.close();
-        watchRef.current = null;
-      };
-      es.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data);
-          if (data.type === "found") { stop(); setAccepted(true); onNext(); }
-          else if (data.type === "timeout") { stop(); setWatch({ kind: "error", message: "timed out waiting for login (5 min)" }); }
-          else if (data.type === "error") { stop(); setWatch({ kind: "error", message: data.message }); }
-        } catch { /* ignore */ }
-      };
-      es.onerror = () => { stop(); setWatch({ kind: "error", message: "connection lost" }); };
-    } catch (err) {
-      setWatch({ kind: "error", message: err instanceof Error ? err.message : String(err) });
-    }
-  };
-
-  const onManualResult = (r: { ok: boolean; error?: string }): void => {
-    if (r.ok) { setAccepted(true); onNext(); }
-    else { setManual({ kind: "error", message: r.error ?? "validation failed" }); }
-  };
-
-  const submitManual = async (): Promise<void> => {
-    setManual({ kind: "validating" });
-    try {
-      onManualResult(await api.authAccept(manualText));
-    } catch (err) {
-      setManual({ kind: "error", message: err instanceof Error ? err.message : String(err) });
-    }
-  };
-
-  const submitManualCookies = async (): Promise<void> => {
-    setManual({ kind: "validating" });
-    try {
-      onManualResult(await api.authAcceptCookies(manualUt.trim(), manualUrt.trim()));
-    } catch (err) {
-      setManual({ kind: "error", message: err instanceof Error ? err.message : String(err) });
-    }
-  };
-
-  // The manual-paste form body, reused by the "no session found" flow (tucked
-  // inside a <details>) and the Windows flow (shown directly, since auto-detect
-  // isn't available there).
-  const manualPasteBody = (): JSX.Element => (
-    <>
-      <div className="mt-4 space-y-3">
-        <ol className="text-xs text-on-surface-variant list-decimal list-inside space-y-1.5">
-          <li>Sign in at <a href="https://web.plaud.ai" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">web.plaud.ai</a>.</li>
-          <li>Open <a href="https://api.plaud.ai/auth/refresh-user-token" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">api.plaud.ai/auth/refresh-user-token</a> in the same browser. You'll see an error page. That's expected; it refreshes your session.</li>
-          <li>Open your browser cookies for <code>api.plaud.ai</code>, then copy <code>pld_urt</code> into the first box and <code>pld_ut</code> into the second.</li>
-        </ol>
-        <label className="font-label text-xs text-on-surface-variant uppercase tracking-wider block">pld_urt (refresh token)</label>
-        <textarea
-          className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-3 font-mono text-xs text-on-surface h-16 focus:ring-2 focus:ring-primary/40 focus:outline-none"
-          placeholder="eyJhbGciOiJIUzI1NiIs..."
-          value={manualUrt}
-          onChange={(e) => setManualUrt(e.target.value)}
-        />
-        <label className="font-label text-xs text-on-surface-variant uppercase tracking-wider block">pld_ut (user token)</label>
-        <textarea
-          className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-3 font-mono text-xs text-on-surface h-16 focus:ring-2 focus:ring-primary/40 focus:outline-none"
-          placeholder="eyJhbGciOiJIUzI1NiIs..."
-          value={manualUt}
-          onChange={(e) => setManualUt(e.target.value)}
-        />
-        <div className="flex items-center gap-2">
-          <button className="btn-primary" onClick={() => void submitManualCookies()} disabled={manual.kind === "validating" || manualUt.trim().length < 20 || manualUrt.trim().length < 20}>
-            {manual.kind === "validating" ? "Connecting…" : "Connect with cookies"}
-          </button>
-        </div>
-      </div>
-      <div className="mt-5 border-t border-outline-variant/30 pt-4 space-y-3">
-        <p className="text-xs text-on-surface-variant">
-          Don't see those cookies? You may be on Plaud's legacy platform. Open DevTools → Application → Local Storage and paste the old <code>tokenstr</code> value (starts with <code>bearer eyJ…</code>) or the raw JWT.
-        </p>
-        <label className="font-label text-xs text-on-surface-variant uppercase tracking-wider block">tokenstr (legacy)</label>
-        <textarea
-          className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-4 font-mono text-xs text-on-surface h-24 focus:ring-2 focus:ring-primary/40 focus:outline-none"
-          placeholder="bearer eyJhbGciOiJIUzI1NiIs..."
-          value={manualText}
-          onChange={(e) => setManualText(e.target.value)}
-        />
-        <div className="flex items-center gap-2">
-          <button className="btn-secondary" onClick={() => void submitManual()} disabled={manual.kind === "validating" || manualText.length < 20}>
-            {manual.kind === "validating" ? "Validating…" : "Use this token"}
-          </button>
-        </div>
-      </div>
-      {manual.kind === "error" && <p className="mt-3 text-sm text-error">{manual.message}</p>}
-    </>
-  );
 
   return (
     <div className={reconnect ? "space-y-4" : "space-y-8"}>
@@ -224,77 +137,60 @@ export function AuthStep({
           <span className="font-label text-primary text-xs font-bold tracking-widest uppercase">Step 2</span>
           <h1 className="text-3xl font-extrabold tracking-tight text-on-surface">Connect Your Plaud Account</h1>
           <p className="text-on-surface-variant text-base max-w-md leading-relaxed">
-            Applaud authenticates by reading your existing Plaud session from Chrome.
+            You sign in on Plaud&apos;s own page and approve access. Applaud never sees your Plaud password.
           </p>
         </div>
       )}
 
       <div className="rounded-xl bg-surface-container-low p-6 space-y-4">
-        {detect.kind === "detecting" && (
-          <p className="text-sm text-on-surface-variant">Scanning browsers on this machine…</p>
-        )}
-        {detect.kind === "found" && (
-          <div>
-            <p className="text-sm text-on-surface">
-              ✓ Found a Plaud session in{" "}
-              <span className="font-medium">{detect.browser} / {detect.profile}</span>
-              {detect.email && <>{" "}for <span className="font-medium">{detect.email}</span></>}
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button
-                className="btn-primary"
-                onClick={() =>
-                  detect.authMode === "first_party" && detect.ut && detect.urt
-                    ? void acceptCookies(detect.ut, detect.urt)
-                    : detect.token
-                      ? void accept(detect.token, detect.email)
-                      : undefined
-                }
-                disabled={accepted}
-              >
-                Use this session
-              </button>
-              <button className="btn-secondary" onClick={() => setDetect({ kind: "notfound" })}>
-                Use a different account
-              </button>
-            </div>
-          </div>
-        )}
-        {detect.kind === "notfound" && (
-          <div className="space-y-4">
-            <p className="text-sm text-on-surface-variant">
-              No existing Plaud session found. Open the Plaud web app in your browser, log in, and we'll pick up the session automatically.
-            </p>
-            {watch.kind === "inactive" && (
-              <button className="btn-primary" onClick={() => void startWatch()}>
-                Open web.plaud.ai and watch for login
-              </button>
+        {state.kind === "connected" ? (
+          <p className="text-sm text-on-surface">
+            ✓ Connected to Plaud{state.email && <> as <span className="font-medium">{state.email}</span></>}.
+          </p>
+        ) : (
+          <>
+            <button
+              className="btn-primary"
+              onClick={() => void signIn()}
+              disabled={state.kind === "starting"}
+            >
+              {state.kind === "waiting" ? "Open Plaud sign-in again" : "Sign in with Plaud"}
+            </button>
+            {state.kind === "starting" && <p className="text-sm text-on-surface-variant">Contacting Plaud…</p>}
+            {state.kind === "waiting" && (
+              <div className="space-y-3">
+                <p className="text-sm text-on-surface-variant">
+                  Finish signing in on the Plaud tab. This page continues on its own once Plaud sends you back.
+                </p>
+                <details className="rounded-xl bg-surface-container p-4 text-sm">
+                  <summary className="cursor-pointer font-medium text-on-surface">
+                    The Plaud tab ended on a page that would not load?
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    <p className="text-xs text-on-surface-variant">
+                      Plaud sends you back to <code className="break-all">{state.redirectUri}</code>. If this browser
+                      can&apos;t reach that address, copy the full address from that tab&apos;s address bar and paste it
+                      here.
+                    </p>
+                    <input
+                      className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-3 font-mono text-xs text-on-surface focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                      placeholder={`${state.redirectUri}?code=…&state=…`}
+                      value={pasted}
+                      onChange={(e) => setPasted(e.target.value)}
+                    />
+                    <button
+                      className="btn-secondary"
+                      onClick={() => void submitPasted()}
+                      disabled={pasteBusy || !pasted.includes("code=")}
+                    >
+                      {pasteBusy ? "Connecting…" : "Finish sign-in"}
+                    </button>
+                  </div>
+                </details>
+              </div>
             )}
-            {watch.kind === "waiting" && (
-              <p className="text-sm text-on-surface-variant">Waiting for you to log in… ({watch.elapsedSec}s)</p>
-            )}
-            {watch.kind === "error" && <p className="text-sm text-error">{watch.message}</p>}
-            <details className="rounded-xl bg-surface-container p-4 text-sm">
-              <summary className="cursor-pointer font-medium text-on-surface">Paste cookies manually</summary>
-              {manualPasteBody()}
-            </details>
-          </div>
-        )}
-        {detect.kind === "unsupported" && (
-          <div className="space-y-4">
-            <p className="text-sm text-on-surface-variant">
-              Automatic session detection isn't available on Windows yet, so connect by pasting your Plaud session cookies below.
-            </p>
-            <div className="rounded-xl bg-surface-container p-4 text-sm">
-              {manualPasteBody()}
-            </div>
-          </div>
-        )}
-        {detect.kind === "error" && (
-          <div>
-            <p className="text-sm text-error">Detect failed: {detect.message}</p>
-            <button className="btn-secondary mt-2" onClick={() => setDetect({ kind: "notfound" })}>Try another method</button>
-          </div>
+            {state.kind === "error" && <p className="text-sm text-error">{state.message}</p>}
+          </>
         )}
       </div>
 
@@ -304,10 +200,15 @@ export function AuthStep({
             Cancel
           </button>
         ) : (
-          <button className="flex items-center gap-2 text-on-surface-variant font-semibold text-sm hover:text-on-surface transition-colors group" onClick={onBack}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="group-hover:-translate-x-1 transition-transform"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
-            Back
-          </button>
+          <>
+            <button className="flex items-center gap-2 text-on-surface-variant font-semibold text-sm hover:text-on-surface transition-colors group" onClick={onBack}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="group-hover:-translate-x-1 transition-transform"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
+              Back
+            </button>
+            <button className="btn-primary px-6" onClick={onNext} disabled={state.kind !== "connected"}>
+              Continue
+            </button>
+          </>
         )}
       </div>
     </div>

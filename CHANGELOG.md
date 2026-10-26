@@ -4,6 +4,31 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+Plaud 4.0 moved accounts to a new web platform, and the browser-session sign-in Applaud relied on stopped working. This release moves Applaud to Plaud's official developer API. Start from a fresh install: existing libraries and settings are not carried over.
+
+### Changed
+- **Sign-in is now OAuth.** **Sign in with Plaud** opens Plaud's own sign-in page; Applaud never sees your password and no longer reads browser cookies or Local Storage. Applaud registers itself with the authorisation server Plaud runs for its MCP integration (`mcp.plaud.ai`, dynamic client registration with PKCE) and renews its access token automatically. Works the same on Windows, macOS, Linux and Docker. If the browser can't reach the address Plaud sends it back to, paste that address into the sign-in step instead.
+- **Recordings come from Plaud's official API** (`platform.plaud.ai/developer/api`) instead of the undocumented web API. Audio, transcript, polished transcript, outline, highlights, summary and every other note tab are saved per recording; `metadata.json` holds the recording's record without its short-lived signed links.
+- Recording folders end in the **last** 8 characters of the Plaud id (Plaud's new ids share a long time-ordered prefix).
+- Plaud's in-app anchors (`[](plaud://…)`) are removed from summaries.
+- Content is only downloaded over https from Plaud's storage hosts (`APPLAUD_PLAUD_CONTENT_HOSTS` extends the list).
+
+### Added
+- **History window** (setup wizard and **Settings → History window**, default 30 days): only recordings from that many days before setup onwards are downloaded in full, plus everything recorded afterwards. Older recordings are listed with their details only.
+- **Download** on a details-only recording (dashboard row or detail page, `POST /api/recordings/:id/download`) fetches that one recording in full.
+- `GET /api/auth/status`, `POST /api/auth/plaud/start`, `GET /api/auth/plaud/callback`, `POST /api/auth/plaud/complete`, `POST /api/auth/disconnect`.
+
+### Removed
+- Browser session detection, login watching, and pasted `tokenstr` / `pld_ut` / `pld_urt` credentials (`/api/auth/detect`, `/accept`, `/validate`, `/watch`).
+- **Import recordings deleted in Plaud** and the Plaud-trash probes: the official API does not expose Plaud's trash. Applaud's own Trash is unchanged.
+- `APPLAUD_PLAUD_USER_AGENT`, `APPLAUD_POLLER_PAGE_OVERLAP` and the `APPLAUD_TRASH_PROBE_*` variables.
+
+### Known gaps
+- Images attached to summaries and any documents attached to recordings are not downloaded: the official API does not expose them.
+- Plaud documents its MCP authorisation server for AI assistants. If Plaud restricts it to those, sign-in will stop working until Plaud offers app registration.
+- Plaud's access token lasts 24 hours and its refresh token 7 days; each renewal issues a fresh 7-day refresh token (measured 2026-10-26). Applaud stays signed in as long as it runs at least once a week.
+- Plaud's authorisation server has no revocation endpoint, so **Disconnect** clears the session in Applaud only.
+
 ## [0.5.12] - 2026-10-13
 
 ### Changed

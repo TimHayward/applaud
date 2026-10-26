@@ -1,37 +1,6 @@
-export interface PlaudRawRecording {
-  id: string;
-  filename: string;
-  fullname: string;
-  filesize: number;
-  file_md5: string;
-  start_time: number;
-  end_time: number;
-  duration: number;
-  version: number;
-  version_ms: number;
-  edit_time: number;
-  is_trash: boolean;
-  is_trans: boolean;
-  is_summary: boolean;
-  serial_number: string;
-  filetype?: string;
-  timezone?: number;
-  zonemins?: number;
-  scene?: number;
-  filetag_id_list?: string[];
-  is_markmemo?: boolean;
-  wait_pull?: number;
-}
-
-export interface PlaudListResponse {
-  status: number;
-  msg: string;
-  request_id?: string;
-  data_file_total: number;
-  data_file_list: PlaudRawRecording[];
-}
-
 export type RecordingStatus =
+  /** Older than the history window and not requested: indexed, not downloaded. */
+  | "metadata_only"
   | "pending_audio"
   | "audio_only"
   | "complete"
@@ -83,6 +52,11 @@ export interface RecordingRow {
    * from source.
    */
   displayName: string | null;
+  /**
+   * Set when the user asked for a recording outside the history window to be
+   * downloaded in full. Null for recordings inside the window.
+   */
+  downloadRequestedAt: number | null;
 }
 
 export interface RecordingDetail extends RecordingRow {

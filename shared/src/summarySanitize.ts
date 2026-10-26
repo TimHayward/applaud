@@ -23,6 +23,8 @@ function formatMeetingDate(ms: number): string {
  * - Turns markdown images `![alt](url)` into **alt** (Plaud often ships a logo / note icon URL that
  *   cannot be loaded in the browser without Plaud cookies → broken `<img>`).
  * - Strips raw `<img …>` tags if present.
+ * - Drops Plaud's empty in-app anchors (`[](plaud://source?…)`, `[](plaud://highlight-card?…)`),
+ *   which only mean something inside Plaud's own app.
  *
  * ⚠️ This is a *display normalizer, not an HTML sanitizer.* The `<img …>` strip
  * is a naive regex that a crafted tag can slip past, and nothing else here
@@ -37,6 +39,10 @@ export function sanitizePlaudSummaryMarkdown(md: string, opts: SummarySanitizeOp
   let s = md;
 
   s = s.replace(/<img\b[^>]*>/gi, "");
+
+  // Empty-text links into Plaud's app: drop lines holding only such a link, then inline ones.
+  s = s.replace(/^[ \t]*\[\]\(plaud:\/\/[^)\s]*\)[ \t]*\r?\n/gim, "");
+  s = s.replace(/[ \t]*\[\]\(plaud:\/\/[^)\s]*\)/gi, "");
 
   s = s.replace(/!\[([^\]]*)\]\([^)]+\)/g, (_, alt: string) => {
     const t = String(alt ?? "").trim();

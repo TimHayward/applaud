@@ -137,4 +137,24 @@ describe("sanitizePlaudSummaryMarkdown", () => {
       expect(out).toBe("# Title\n\nA simple paragraph.");
     });
   });
+
+  describe("Plaud in-app anchors", () => {
+    it("drops a line holding only an anchor and inline source anchors", () => {
+      const input = [
+        "[](plaud://highlight-card?title=Highlight%20Summary&detail=Detail)",
+        "Opening paragraph.",
+        "",
+        "- **Point**: Something was agreed [](plaud://source?type=summary&fileId=f_1&start_time=1&end_time=2).",
+        "- Kept: [a real link](https://example.com)",
+      ].join("\n");
+      expect(sanitizePlaudSummaryMarkdown(input)).toBe(
+        [
+          "Opening paragraph.",
+          "",
+          "- **Point**: Something was agreed.",
+          "- Kept: [a real link](https://example.com)",
+        ].join("\n"),
+      );
+    });
+  });
 });

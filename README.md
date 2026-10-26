@@ -1,8 +1,8 @@
 # Applaud
 
-A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recordings to disk and fires webhooks when new recordings or transcripts arrive, so you can easily hook it up to n8n (or any other custom integration). Runs on your machine, uses your existing Plaud browser session for auth, and ships with a web UI for setup and browsing.
+A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recordings to disk and fires webhooks when new recordings or transcripts arrive, so you can easily hook it up to n8n (or any other custom integration). Runs on your machine, signs in through Plaud's own OAuth page, and ships with a web UI for setup and browsing.
 
-> Applaud is not affiliated with Plaud. It talks to the same undocumented web API that the Plaud web app uses, via your own logged-in session.
+> Applaud is not affiliated with Plaud. It uses Plaud's official developer API, signing in through the OAuth server Plaud runs for its MCP integration (`mcp.plaud.ai`). Plaud documents that server for AI assistants rather than for apps like this one, so treat the integration as best effort.
 
 > [!NOTE]
 > <img src="assets/rovenotes-logo.png" align="right" width="80" alt="RoveNotes" />
@@ -11,7 +11,8 @@ A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recording
 
 ## Features
 
-- **Automatic sync** — polls Plaud every 10 minutes (configurable) and downloads audio, transcripts, and AI summaries to local disk
+- **Automatic sync** — polls Plaud every 10 minutes (configurable) and downloads audio, transcripts, AI summaries and other note tabs to local disk
+- **History window** — downloads only the last N days (default 30) before install in full; older recordings are indexed as details only and can be downloaded one at a time
 - **Full-text search** — search recordings by filename or transcript content
 - **Audio player** — custom player with waveform visualization, play/pause, skip -10s/+30s, click-to-seek
 - **Transcript viewer** — speaker-labeled, timestamped, color-coded blocks with auto-scroll during playback, click-to-seek, and full-text search within transcripts
@@ -61,11 +62,13 @@ Requires Node.js >= 22 and pnpm >= 9.
 
 ## How it works
 
-1. **Auth:** Applaud reads your existing Plaud session from Chrome (or Edge / Brave / Arc / Vivaldi). No passwords, no OAuth, no Playwright — just your existing session.
-   - **Legacy accounts** still expose a long-lived JWT in Local Storage. Applaud copies the browser's `Local Storage/leveldb` directory to a temp path (which sidesteps Chrome's file lock) and pulls the bearer from the `tokenstr` key for `web.plaud.ai`.
-   - **Newer accounts** (Plaud stopped exposing `tokenstr` — see issue #31) use short-lived cookies instead. When `tokenstr` is absent, Applaud reads the `pld_ut` (user token, ~1 day) and `pld_urt` (refresh token, ~30 days) cookies from Chromium's on-disk cookie store, decrypting them with the platform key (Linux login keyring / the well-known fallback, or the macOS Keychain). It then lists your workspaces and mints a short-lived workspace token for the API, refreshing the user token off the refresh token as it ages — the same first-party flow the RoveNotes Connector uses. On **Windows**, cookies are DPAPI-encrypted and can't be read off disk, so paste them manually instead: sign in at `web.plaud.ai`, open `api.plaud.ai/auth/refresh-user-token` in the same browser to refresh your session, then copy `pld_urt` and `pld_ut` from your `api.plaud.ai` cookies.
+1. **Auth:** Applaud signs in with OAuth. In the setup wizard, **Sign in with Plaud** opens Plaud's own sign-in page in a new tab; you approve access and Plaud sends the tab back to Applaud. Applaud never sees your Plaud password.
+   - Plaud does not let individuals register developer apps, so Applaud registers itself with the authorisation server Plaud runs for its MCP integration (`mcp.plaud.ai`, dynamic client registration with PKCE). The token it receives works against Plaud's official developer API (`platform.plaud.ai/developer/api`).
+   - The access token (24 hours) renews itself from a refresh token (7 days); each renewal issues a fresh 7-day refresh token, so Applaud stays signed in as long as it runs at least once a week. If Plaud refuses the refresh token (expired or revoked), syncing pauses and Settings asks you to sign in again.
+   - Running Applaud somewhere that reaches the internet only through an `HTTPS_PROXY`? Node's built-in `fetch` ignores that variable unless you also set `NODE_USE_ENV_PROXY=1` (Node 22.21 or newer).
+   - Plaud sends the browser back to the address you opened Applaud on (for example `http://127.0.0.1:44471` or `http://nas.lan:44471`), so the browser must be able to reach that address. If the Plaud tab ends on a page that won't load, paste its address into the box under the sign-in button and Applaud finishes the sign-in.
 
-2. **Sync:** every 10 minutes (configurable), the server calls `/file/simple/web` on `api.plaud.ai` to list your latest recordings. New ones get a per-recording subfolder, their audio streamed down from S3, and — once Plaud finishes transcribing — transcript + summary pulled via `/ai/transsumm/` (with S3 fallback for older recordings).
+2. **Sync:** every 10 minutes (configurable), Applaud lists your recordings and stores their details. Recordings inside the **history window** (from *N* days before setup onwards; Settings → History window) are then downloaded in full: Applaud fetches each recording's record and immediately downloads its audio (Plaud's signed links expire after an hour), transcript, polished transcript, outline, highlights, summary and any other note tabs. Older recordings stay as details only until you press **Download** on one. Content is only fetched over https from Plaud's storage hosts.
 
 3. **Webhook:** if configured, Applaud POSTs a JSON payload to your URL whenever a new `audio_ready` or `transcript_ready` event happens. Includes file paths (relative to your recordings dir) plus ready-to-fetch HTTP URLs that the local media server serves, and — on `transcript_ready` — the flattened transcript text and summary markdown inline so n8n-style workflows don't need a second fetch.
 
@@ -75,12 +78,16 @@ Each recording gets its own folder under your chosen recordings directory:
 
 ```
 <recordings-dir>/
-  2026-04-11_My_meeting_title__74560101/
+  2026-04-11_My_meeting_title__b8c9d0e1/   # date, title, last 8 characters of the Plaud id
     audio.ogg
-    transcript.json     # raw Plaud transcript segments (with speaker embeddings)
-    transcript.txt      # speaker-labeled, timestamped plaintext
-    summary.md          # Plaud's AI-generated summary (when available)
-    metadata.json       # full /file/detail response
+    transcript.json            # Plaud transcript segments (speaker + timestamps)
+    transcript.txt             # speaker-labeled, timestamped plaintext
+    transcript_polished.json   # Plaud's cleaned-up transcript (when available)
+    outline.json               # topic outline (when available)
+    highlights.json            # moments flagged with the device button (when available)
+    summary.md                 # Plaud's AI summary (when available)
+    <Tab_name>__<type>__<id>.md  # any other note tab (templates, saved Ask Plaud answers)
+    metadata.json              # the recording's record from Plaud, without its signed links
 ```
 
 ## Webhook payload
@@ -264,7 +271,7 @@ Applaud is a foreground process. To keep it running without a terminal:
 
 Settings live in `~/.config/applaud/settings.json` (or `~/Library/Application Support/applaud/` on macOS, `%APPDATA%\applaud\` on Windows). Recording state is in `state.sqlite` alongside. Both are managed through the web UI — you shouldn't need to edit them by hand.
 
-The Plaud tokens are stored as plaintext in `settings.json` (with `chmod 600`) — the bearer/workspace token, and for newer accounts the `pld_ut` / `pld_urt` cookie values used to keep it fresh. The file lives in a user-only directory, and their scope is equivalent to "read this user's own Plaud data." The web UI never receives these values back — they're redacted in the config API. OS keychain integration is a future enhancement.
+The Plaud OAuth tokens (access and refresh) are stored as plaintext in `settings.json` (with `chmod 600`). The file lives in a user-only directory, and the tokens' scope is equivalent to "read this user's own Plaud data." The web UI never receives these values back — they're redacted in the config API. **Settings → Account Details** lets you sign in again; `POST /api/auth/disconnect` forgets the session (Plaud's authorisation server offers no revocation, so it can't be cancelled at Plaud's end). OS keychain integration is a future enhancement.
 
 **On Windows**, `chmod 600` is a no-op, so on first run Applaud restricts the ACL on `%APPDATA%\applaud\` instead (`icacls /inheritance:r`, granting only your account and `SYSTEM`) and drops an `.acl-hardened` marker so it only does this once. The tokens, your `lanToken`, and `webhook.secret` are still stored in cleartext — anything running as your user can read them. Set `APPLAUD_SKIP_ACL_HARDENING=1` to skip the ACL change; DPAPI-encrypted storage is a future enhancement.
 
@@ -282,9 +289,11 @@ These are optional and only matter for unusual setups (very large libraries, fla
 | Variable | Default | What it controls |
 | --- | --- | --- |
 | `APPLAUD_PLAUD_MAX_ATTEMPTS` | `3` | Retries for a single Plaud API call |
-| `APPLAUD_PLAUD_USER_AGENT` | a desktop Chrome UA | Spoofed User-Agent sent to Plaud (bypasses Cloudflare's bot check) |
+| `APPLAUD_PLAUD_OAUTH_ISSUER` | `https://mcp.plaud.ai` | Plaud OAuth authorisation server (registration, sign-in, tokens) |
+| `APPLAUD_PLAUD_API_BASE` | `https://platform.plaud.ai/developer/api` | Plaud developer API |
+| `APPLAUD_PLAUD_CONTENT_HOSTS` | unset | Extra hosts (comma-separated, suffix match) Plaud's signed content links may use, beyond `amazonaws.com` and `plaud.ai` |
 | `APPLAUD_POLLER_PAGE_SIZE` | `50` | Page size when walking your Plaud recording list |
-| `APPLAUD_POLLER_MAX_PAGES` | `200` | Hard cap on pages walked per poll (safety limit) |
+| `APPLAUD_POLLER_MAX_PAGES` | `200` | Hard cap on pages walked per poll (safety limit). After the first full walk, routine polls stop at the first page with nothing new; **Sync Now** walks the whole list |
 | `APPLAUD_WEBHOOK_BACKOFF_MS` | `5000,30000,120000` | Comma-separated retry backoff schedule for webhook delivery |
 | `APPLAUD_WEBHOOK_REDRIVE_BASE_MINUTES` | `5` | Delay before the first automatic re-delivery of a failed webhook; each further failure triples it |
 | `APPLAUD_WEBHOOK_REDRIVE_MAX_HOURS` | `24` | Upper bound on the automatic re-delivery delay |
@@ -293,9 +302,6 @@ These are optional and only matter for unusual setups (very large libraries, fla
 | `APPLAUD_WEBHOOK_URL_TTL_HOURS` | `168` | How long the signed `http_urls` in a webhook payload stay valid (LAN token installs) |
 | `APPLAUD_BROWSER_TICKET_TTL_HOURS` | `24` | Lifetime of the signed ticket the web UI uses for media links and live updates |
 | `APPLAUD_TRASH_RETENTION_DAYS` | `7` | Days a soft-deleted recording stays in Trash before local files are purged |
-| `APPLAUD_TRASH_PROBE_INTERVAL_HOURS` | `6` | How often Plaud-trashed recordings are re-checked for a transcript/summary |
-| `APPLAUD_TRASH_PROBE_SCHEDULED_LIMIT` | `25` | Max Plaud-trash rows probed per scheduled poll |
-| `APPLAUD_TRASH_PROBE_MANUAL_LIMIT` | `100` | Max Plaud-trash rows probed on a manual Sync Now |
 | `APPLAUD_RECORDINGS_MAX_LIMIT` | `500` | Hard cap on `limit` for any recordings list/search query |
 
 Security-related (see [Security notes](#security-notes)):

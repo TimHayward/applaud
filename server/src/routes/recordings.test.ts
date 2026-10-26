@@ -5,37 +5,31 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type Database from "better-sqlite3";
-import type { AppConfig, PlaudRawRecording } from "@applaud/shared";
+import type { AppConfig } from "@applaud/shared";
 
-const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
+const { loadConfig, downloadInBackground } = vi.hoisted(() => ({
+  loadConfig: vi.fn(),
+  downloadInBackground: vi.fn(),
+}));
 vi.mock("../config.js", () => ({ loadConfig }));
+vi.mock("../sync/poller.js", () => ({ poller: { downloadInBackground, resyncRecording: vi.fn() } }));
 vi.mock("../logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { recordingsRouter } from "./recordings.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
-import { upsertFromPlaud, softDeleteRecording, getRecordingById } from "../sync/state.js";
+import { upsertFromPlaud, softDeleteRecording, getRecordingById, setAudioFilename, type PlaudRecordingMeta } from "../sync/state.js";
 
 const RECORDING_ID = "abcdef0123456789";
 
-function makePlaudItem(overrides: Partial<PlaudRawRecording> = {}): PlaudRawRecording {
+function makePlaudItem(overrides: Partial<PlaudRecordingMeta> = {}): PlaudRecordingMeta {
   return {
     id: RECORDING_ID,
     filename: "Standup",
-    fullname: "Standup",
-    filesize: 12345,
-    file_md5: "deadbeef",
-    start_time: Date.UTC(2026, 3, 11, 12, 0),
-    end_time: Date.UTC(2026, 3, 11, 12, 1),
-    duration: 60_000,
-    version: 1,
-    version_ms: 0,
-    edit_time: 0,
-    is_trash: false,
-    is_trans: false,
-    is_summary: false,
-    serial_number: "S1",
+    startTime: Date.UTC(2026, 3, 11, 12, 0),
+    durationMs: 60_000,
+    serialNumber: "S1",
     ...overrides,
   };
 }
@@ -53,8 +47,10 @@ describe("recordingsRouter", () => {
     loadConfig.mockReset();
     loadConfig.mockReturnValue({
       recordingsDir,
-      importPlaudDeleted: false,
+      historyDays: 30,
+      installedAt: Date.UTC(2026, 3, 20),
     } as unknown as AppConfig);
+    downloadInBackground.mockReset();
 
     const app = express();
     app.use(express.json());
@@ -111,17 +107,34 @@ describe("recordingsRouter", () => {
     const body = await res.json();
     expect(body.recording.id).toBe(RECORDING_ID);
     expect(body).not.toHaveProperty("recordingsDir");
-    // Folder/mediaBase is "<date>_<name>__<first-8-of-id>" (see README layout).
-    expect(body.mediaBase).toContain(RECORDING_ID.slice(0, 8));
+    // Folder/mediaBase is "<date>_<name>__<last-8-of-id>" (see README layout).
+    expect(body.mediaBase).toContain(RECORDING_ID.slice(-8));
     // Default audio filename is exposed for the player/download to reference.
     expect(body.recording.audioFilename).toBe("audio.ogg");
   });
 
-  it("GET /:id exposes a non-ogg audioFilename derived from filetype", async () => {
-    upsertFromPlaud(makePlaudItem({ filetype: "audio/mpeg" }));
+  it("GET /:id exposes a non-ogg audioFilename recorded from the download URL", async () => {
+    upsertFromPlaud(makePlaudItem());
+    setAudioFilename(RECORDING_ID, "audio.mp3");
     const res = await fetch(`${baseUrl}/${RECORDING_ID}`);
     const body = await res.json();
     expect(body.recording.audioFilename).toBe("audio.mp3");
+  });
+
+  it("POST /:id/download queues a metadata-only recording for download", async () => {
+    upsertFromPlaud(makePlaudItem({ startTime: Date.UTC(2026, 0, 1) }));
+    expect(getRecordingById(RECORDING_ID)?.status).toBe("metadata_only");
+    const res = await fetch(`${baseUrl}/${RECORDING_ID}/download`, { method: "POST" });
+    expect(res.status).toBe(202);
+    const body = await res.json();
+    expect(body.recording.status).toBe("pending_audio");
+    expect(downloadInBackground).toHaveBeenCalledWith(RECORDING_ID);
+  });
+
+  it("POST /:id/download on an unknown id returns 404", async () => {
+    const res = await fetch(`${baseUrl}/does-not-exist/download`, { method: "POST" });
+    expect(res.status).toBe(404);
+    expect(downloadInBackground).not.toHaveBeenCalled();
   });
 
   it("POST /:id/rename sets a display name override", async () => {

@@ -1,85 +1,70 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { detectSession, autoDetectSupported } from "../auth/detect.js";
-import { startBrowserWatch, subscribeWatch } from "../auth/browser-watch.js";
-import {
-  plaudFetch,
-  PlaudAuthError,
-  PLAUD_API_BASES,
-  getPlaudApiBaseForRegion,
-  getPlaudRegionForBase,
-} from "../plaud/client.js";
-import { bootstrapFirstPartySession } from "../plaud/first-party.js";
 import { loadConfig, updateConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { poller } from "../sync/poller.js";
-import type { AppConfig, AuthDetectResponse, AuthValidateResponse, TicketResponse } from "@applaud/shared";
+import type { AuthStartResponse, AuthStatusResponse, TicketResponse } from "@applaud/shared";
 import { issueTicket } from "../auth/ticket.js";
 import { BROWSER_TICKET_TTL_MS } from "../constants.js";
+import {
+  buildAuthorizeUrl,
+  createPkcePair,
+  createState,
+  exchangeCode,
+  registerClient,
+  revokeToken,
+} from "../plaud/oauth.js";
+import { sessionPatch } from "../plaud/session.js";
+import { getCurrentUser } from "../plaud/client.js";
 
 export const authRouter = Router();
 
-function extractJwt(raw: string): string | null {
-  const trimmed = raw.trim();
-  // Accept either a raw JWT or the `PLADU_bearer eyJ...` storage key format
-  const m = trimmed.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
-  return m ? m[0] : null;
+/** Path Plaud's authorisation server sends the browser back to. */
+export const OAUTH_CALLBACK_PATH = "/api/auth/plaud/callback";
+
+/** How long a started sign-in stays valid (Plaud's own state TTL is 30 minutes). */
+const PENDING_TTL_MS = 15 * 60 * 1000;
+
+interface PendingAuth {
+  clientId: string;
+  redirectUri: string;
+  codeVerifier: string;
+  expiresAt: number;
 }
 
-function parseJwt(jwt: string): { iat: number | null; exp: number | null; email: string | null; region: string | null } {
-  try {
-    const parts = jwt.split(".");
-    if (parts.length !== 3) return { iat: null, exp: null, email: null, region: null };
-    const payload = parts[1];
-    if (!payload) return { iat: null, exp: null, email: null, region: null };
-    const json = JSON.parse(
-      Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"),
-    ) as { iat?: number; exp?: number; email?: string; region?: string };
-    return { iat: json.iat ?? null, exp: json.exp ?? null, email: json.email ?? null, region: json.region ?? null };
-  } catch {
-    return { iat: null, exp: null, email: null, region: null };
-  }
+/** Started sign-ins by `state`. In memory: a restart simply asks the user to start again. */
+const pending = new Map<string, PendingAuth>();
+
+function prunePending(now = Date.now()): void {
+  for (const [state, p] of pending) if (p.expiresAt <= now) pending.delete(state);
 }
 
-async function validateToken(token: string): Promise<AuthValidateResponse & { region?: string }> {
-  const { exp, region: jwtRegion } = parseJwt(token);
-  const defaultBase = getPlaudApiBaseForRegion(jwtRegion);
-  const candidateBases = [
-    defaultBase,
-    ...PLAUD_API_BASES.filter((base) => base !== defaultBase),
-  ];
+/** Test-only. */
+export function resetPendingAuthForTests(): void {
+  pending.clear();
+}
 
-  let lastError = "Plaud returned msg=user region mismatch";
-  for (const apiBase of candidateBases) {
+/**
+ * The redirect URI for this browser: the origin it is using to reach Applaud,
+ * so the sign-in returns to a host it can actually reach (loopback, a LAN
+ * name, or a reverse-proxied domain). The Host header has already passed the
+ * DNS-rebinding check; the Origin header is preferred only when it names the
+ * same host, since it also carries the scheme a TLS-terminating proxy hides.
+ */
+export function redirectUriFor(req: Request): string {
+  const host = req.get("host") ?? "127.0.0.1";
+  const origin = req.get("origin");
+  if (origin) {
     try {
-      const res = await plaudFetch(
-        "/file/simple/web?skip=0&limit=1&is_trash=2&sort_by=start_time&is_desc=true",
-        { authOverride: token, apiBase },
-      );
-      if (res.status !== 200) {
-        const body = await res.text().catch(() => "");
-        lastError = `Plaud returned HTTP ${res.status}: ${body.slice(0, 200)}`;
-        continue;
+      const o = new URL(origin);
+      if (o.host === host && (o.protocol === "http:" || o.protocol === "https:")) {
+        return `${o.protocol}//${o.host}${OAUTH_CALLBACK_PATH}`;
       }
-      const body = (await res.json()) as { msg?: string; status?: number };
-      if (body.status === 0) {
-        const validatedRegion = getPlaudRegionForBase(apiBase) ?? jwtRegion;
-        return { ok: true, exp: exp ?? undefined, region: validatedRegion ?? undefined };
-      }
-      const error = `Plaud returned msg=${body.msg}`;
-      if (typeof body.msg === "string" && body.msg.toLowerCase().includes("region mismatch")) {
-        lastError = error;
-        continue;
-      }
-      return { ok: false, error };
-    } catch (err) {
-      if (err instanceof PlaudAuthError) return { ok: false, error: err.message };
-      lastError = err instanceof Error ? err.message : String(err);
-      continue;
+    } catch {
+      // Malformed Origin: fall back to the request itself.
     }
   }
-
-  return { ok: false, error: lastError };
+  return `${req.protocol}://${host}${OAUTH_CALLBACK_PATH}`;
 }
 
 /**
@@ -94,232 +79,173 @@ authRouter.get("/ticket", (_req, res) => {
   res.json(body);
 });
 
-authRouter.post("/detect", async (_req, res) => {
-  // On Windows we can't read the on-disk session (DPAPI / App-Bound encryption),
-  // so skip the scan entirely and tell the client to go straight to manual paste.
-  if (!autoDetectSupported()) {
-    const r: AuthDetectResponse = { found: false, autoDetectSupported: false };
-    res.json(r);
-    return;
-  }
+authRouter.get("/status", (_req, res) => {
+  const cfg = loadConfig();
+  const body: AuthStatusResponse = {
+    connected: !!cfg.token && !!cfg.refreshToken,
+    connectedAt: cfg.plaudConnectedAt,
+    email: cfg.tokenEmail,
+    accessTokenExp: cfg.tokenExp,
+    refreshTokenExp: cfg.refreshTokenExp,
+  };
+  res.json(body);
+});
+
+/**
+ * Start a sign-in: register this install with Plaud's authorisation server
+ * for this redirect URI (once per URI), then hand back the authorisation URL
+ * for the browser to open.
+ */
+authRouter.post("/plaud/start", async (req, res) => {
+  const redirectUri = redirectUriFor(req);
+  const cfg = loadConfig();
   try {
-    const found = await detectSession();
-    if (!found) {
-      const r: AuthDetectResponse = { found: false };
-      res.json(r);
-      return;
+    let clientId = cfg.plaudClientId;
+    if (!clientId || cfg.plaudRedirectUri !== redirectUri) {
+      clientId = await registerClient(redirectUri);
+      updateConfig({ plaudClientId: clientId, plaudRedirectUri: redirectUri });
+      logger.info({ redirectUri }, "registered Applaud with Plaud's authorisation server");
     }
-    const r: AuthDetectResponse =
-      found.kind === "legacy"
-        ? {
-            found: true,
-            authMode: "legacy",
-            token: found.token,
-            profile: found.profile,
-            browser: found.browser,
-            email: found.email ?? undefined,
-          }
-        : {
-            found: true,
-            authMode: "first_party",
-            ut: found.ut,
-            urt: found.urt,
-            profile: found.profile,
-            browser: found.browser,
-          };
-    res.json(r);
-  } catch (err) {
-    logger.error({ err }, "auth detect failed");
-    const r: AuthDetectResponse = {
-      found: false,
-      error: err instanceof Error ? err.message : String(err),
+    const { verifier, challenge } = createPkcePair();
+    const state = createState();
+    prunePending();
+    pending.set(state, { clientId, redirectUri, codeVerifier: verifier, expiresAt: Date.now() + PENDING_TTL_MS });
+    const body: AuthStartResponse = {
+      authorizeUrl: buildAuthorizeUrl({ clientId, redirectUri, codeChallenge: challenge, state }),
+      redirectUri,
     };
-    res.status(500).json(r);
+    res.json(body);
+  } catch (err) {
+    logger.error({ err }, "failed to start Plaud sign-in");
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
-const AcceptSchema = z.object({
-  token: z.string().min(10).optional(),
-  email: z.string().optional(),
-  ut: z.string().min(10).optional(),
-  urt: z.string().min(10).optional(),
-});
+type CompleteResult = { ok: true; email: string | null } | { ok: false; status: number; error: string };
 
-const ValidateSchema = z.object({
-  token: z.string().min(10),
-});
-
-/**
- * Persist new Plaud credentials. After setup this is a reconnect (Settings →
- * Plaud account), so sync right away instead of leaving "auth required" up
- * until the next scheduled poll. During setup the poller hasn't started yet;
- * `complete-setup` starts it.
- */
-function saveCredentials(patch: Partial<AppConfig>): void {
-  updateConfig(patch);
-  if (loadConfig().setupComplete) void poller.trigger();
-}
-
-/**
- * First-party accept: bootstrap a session from a captured `pld_ut`/`pld_urt`
- * pair (list workspaces, mint a workspace token) and persist the full token
- * set so the poller can keep it fresh.
- */
-async function acceptFirstParty(
-  ut: string,
-  urt: string,
-  res: import("express").Response,
-): Promise<void> {
-  const result = await bootstrapFirstPartySession({ ut, urt });
-  if (!result.ok) {
-    res.status(400).json({ ok: false, error: result.error });
-    return;
+/** Finish a sign-in from the authorisation server's `code` + `state`. */
+async function completeSignIn(params: {
+  code?: string;
+  state?: string;
+  error?: string;
+  errorDescription?: string;
+}): Promise<CompleteResult> {
+  if (params.error) {
+    return { ok: false, status: 400, error: `Plaud sign-in was not completed: ${params.errorDescription ?? params.error}` };
   }
-  saveCredentials(result.patch);
-  res.json({ ok: true, email: result.email, exp: result.patch.tokenExp ?? undefined });
-}
-
-authRouter.post("/accept", async (req, res) => {
-  const parsed = AcceptSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "invalid body" });
-    return;
-  }
-
-  // First-party path: a `pld_ut` / `pld_urt` cookie pair.
-  if (parsed.data.ut && parsed.data.urt) {
-    const ut = extractJwt(parsed.data.ut);
-    const urt = extractJwt(parsed.data.urt);
-    if (!ut || !urt) {
-      res.status(400).json({ ok: false, error: "pld_ut / pld_urt must be JWT values" });
-      return;
+  if (!params.code || !params.state) return { ok: false, status: 400, error: "missing code or state" };
+  prunePending();
+  const p = pending.get(params.state);
+  if (!p) return { ok: false, status: 400, error: "this sign-in has expired or was already used; start again" };
+  // Single use, whatever happens next.
+  pending.delete(params.state);
+  try {
+    const tokens = await exchangeCode({
+      clientId: p.clientId,
+      code: params.code,
+      codeVerifier: p.codeVerifier,
+      redirectUri: p.redirectUri,
+    });
+    updateConfig({
+      ...sessionPatch(tokens),
+      plaudClientId: p.clientId,
+      plaudRedirectUri: p.redirectUri,
+      plaudConnectedAt: Date.now(),
+    });
+    let email: string | null = null;
+    try {
+      email = (await getCurrentUser()).email;
+    } catch (err) {
+      logger.warn({ err }, "signed in, but the Plaud account lookup failed");
     }
-    await acceptFirstParty(ut, urt, res);
-    return;
+    updateConfig({ tokenEmail: email });
+    logger.info("Plaud account connected");
+    // After setup this is a reconnect: sync now rather than at the next tick.
+    if (loadConfig().setupComplete) void poller.trigger();
+    return { ok: true, email };
+  } catch (err) {
+    logger.error({ err }, "Plaud token exchange failed");
+    return { ok: false, status: 502, error: err instanceof Error ? err.message : String(err) };
   }
+}
 
-  // Legacy path: a single bearer JWT lifted from `tokenstr`.
-  if (!parsed.data.token) {
-    res.status(400).json({ error: "no token provided" });
-    return;
-  }
-  const jwt = extractJwt(parsed.data.token);
-  if (!jwt) {
-    res.status(400).json({ error: "no JWT found in the provided string" });
-    return;
-  }
-  const { email: jwtEmail, exp, region: jwtRegion } = parseJwt(jwt);
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
 
-  const v = await validateToken(jwt);
-  if (!v.ok) {
-    res.status(400).json({ ok: false, error: v.error });
-    return;
-  }
-  // Prefer client-provided email (comes from LevelDB scan in the detect flow);
-  // fall back to anything the JWT itself carries.
-  const email = parsed.data.email ?? jwtEmail ?? null;
-  saveCredentials({
-    authMode: "legacy",
-    token: jwt,
-    tokenExp: exp,
-    tokenEmail: email,
-    plaudRegion: v.region ?? jwtRegion,
+function callbackPage(title: string, message: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5"><h1 style="font-size:1.25rem">${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><p><a href="/">Return to Applaud</a></p></body></html>`;
+}
+
+/**
+ * The browser lands here from Plaud. Mounted ahead of the LAN-token guard
+ * (a top-level navigation can't carry the bearer header): the single-use,
+ * short-lived `state` minted by /plaud/start is what authorises it.
+ */
+export async function oauthCallbackHandler(req: Request, res: Response): Promise<void> {
+  const q = (k: string): string | undefined => (typeof req.query[k] === "string" ? (req.query[k] as string) : undefined);
+  const result = await completeSignIn({
+    code: q("code"),
+    state: q("state"),
+    error: q("error"),
+    errorDescription: q("error_description"),
   });
-  res.json({ ok: true, email, exp });
-});
+  res.setHeader("Cache-Control", "no-store");
+  if (result.ok) {
+    res
+      .status(200)
+      .type("html")
+      .send(callbackPage("Plaud connected", "You can close this tab and return to Applaud."));
+  } else {
+    res.status(result.status).type("html").send(callbackPage("Plaud sign-in failed", result.error));
+  }
+}
 
-authRouter.post("/validate", async (req, res) => {
-  const parsed = ValidateSchema.safeParse(req.body);
+const CompleteSchema = z.object({ callbackUrl: z.string().min(10).max(4096) });
+
+/**
+ * Fallback for when the browser can't reach the redirect URI (e.g. Applaud is
+ * opened through a different address than the one Plaud sends you back to):
+ * paste the address you ended up on and Applaud finishes the sign-in.
+ */
+authRouter.post("/plaud/complete", async (req, res) => {
+  const parsed = CompleteSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ ok: false, error: "invalid body" });
     return;
   }
-  const jwt = extractJwt(parsed.data.token);
-  if (!jwt) {
-    res.json({ ok: false, error: "no JWT found" });
-    return;
-  }
-  res.json(await validateToken(jwt));
-});
-
-authRouter.post("/watch", async (_req, res) => {
-  // Server is the source of truth for OS support: the Windows UI never reaches
-  // the watch flow, but guard the endpoint too so a stale/rogue client can't
-  // kick off a scan that can never find a session on this platform.
-  if (!autoDetectSupported()) {
-    res.status(400).json({ error: "auto-detection is not supported on this platform" });
-    return;
-  }
+  let url: URL;
   try {
-    const id = await startBrowserWatch(true);
-    res.json({ watchId: id });
-  } catch (err) {
-    logger.error({ err }, "failed to start browser watch");
-    res
-      .status(500)
-      .json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-authRouter.get("/watch/:id/events", (req, res) => {
-  const id = req.params.id;
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders();
-
-  const send = (data: unknown): void => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-  send({ type: "subscribed" });
-
-  const unsub = subscribeWatch(id, (e) => {
-    if (e.type !== "found") {
-      send(e);
-      return;
-    }
-    // Persist the found session, then advance the UI. First-party sessions
-    // need a bootstrap round-trip (list workspaces + mint), so this is async;
-    // surface a bootstrap failure as an error event rather than a false "found".
-    void (async () => {
-      const s = e.session;
-      try {
-        if (s.kind === "legacy") {
-          // Note: the JWT region claim may not match the user's actual region
-          // (Plaud can migrate accounts). The first sync call auto-corrects it:
-          // plaudJson follows Plaud's -302 region redirect and persists it.
-          const { email, exp, region } = parseJwt(s.token);
-          saveCredentials({
-            authMode: "legacy",
-            token: s.token,
-            tokenExp: exp,
-            tokenEmail: email ?? s.email,
-            plaudRegion: region,
-          });
-          send({ type: "found", authMode: "legacy", profile: s.profile, browser: s.browser, email: email ?? s.email ?? undefined });
-          return;
-        }
-        const result = await bootstrapFirstPartySession({ ut: s.ut, urt: s.urt });
-        if (!result.ok) {
-          send({ type: "error", message: result.error });
-          return;
-        }
-        saveCredentials(result.patch);
-        send({ type: "found", authMode: "first_party", profile: s.profile, browser: s.browser, email: result.email ?? undefined });
-      } catch (err) {
-        send({ type: "error", message: err instanceof Error ? err.message : String(err) });
-      }
-    })();
-  });
-
-  if (!unsub) {
-    send({ type: "error", message: "watch id not found" });
-    res.end();
+    url = new URL(parsed.data.callbackUrl.trim());
+  } catch {
+    res.status(400).json({ ok: false, error: "that is not a valid address" });
     return;
   }
-
-  req.on("close", () => {
-    unsub();
-    res.end();
+  const g = (k: string): string | undefined => url.searchParams.get(k) ?? undefined;
+  const result = await completeSignIn({
+    code: g("code"),
+    state: g("state"),
+    error: g("error"),
+    errorDescription: g("error_description"),
   });
+  if (result.ok) res.json({ ok: true, email: result.email });
+  else res.status(result.status).json({ ok: false, error: result.error });
+});
+
+/** Revoke the session at Plaud (best effort) and forget it locally. */
+authRouter.post("/disconnect", async (_req, res) => {
+  const cfg = loadConfig();
+  if (cfg.plaudClientId && cfg.refreshToken) {
+    const revoked = await revokeToken({ clientId: cfg.plaudClientId, token: cfg.refreshToken });
+    if (!revoked) logger.warn("Plaud did not confirm the token revocation; clearing the local session anyway");
+  }
+  updateConfig({
+    token: null,
+    tokenExp: null,
+    refreshToken: null,
+    refreshTokenExp: null,
+    tokenEmail: null,
+    plaudConnectedAt: null,
+  });
+  res.json({ ok: true });
 });

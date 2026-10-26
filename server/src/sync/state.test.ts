@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type Database from "better-sqlite3";
-import type { AppConfig, PlaudRawRecording } from "@applaud/shared";
+import type { AppConfig } from "@applaud/shared";
 
 // Hoisted mocks. Must be set up before importing state.ts.
 const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
@@ -35,49 +35,44 @@ import {
   markWebhookFired,
   recordWebhookFailure,
   webhookRedriveDelayMs,
+  requestDownload,
+  setPlaudAvailability,
+  setAudioFilename,
+  type PlaudRecordingMeta,
 } from "./state.js";
 import { WEBHOOK_REDRIVE_MAX_ATTEMPTS } from "../constants.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 
 const baseConfig: AppConfig = {
-  version: 1,
+  version: 2,
   setupComplete: true,
   token: "t",
   tokenExp: null,
   tokenEmail: null,
-  plaudRegion: null,
+  refreshToken: null,
+  refreshTokenExp: null,
+  plaudClientId: null,
+  plaudRedirectUri: null,
+  plaudConnectedAt: null,
   recordingsDir: "/test/recordings",
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
   publicBaseUrl: null,
   lanToken: null,
-  authMode: null,
-  ut: null,
-  utExp: null,
-  urt: null,
-  urtExp: null,
-  plaudWorkspaceId: null,
-  importPlaudDeleted: false,
+  // Wide enough that the April 2026 fixtures sit inside the history window.
+  historyDays: 3650,
+  installedAt: null,
+  libraryIndexedAt: null,
 };
 
-function makePlaudItem(overrides: Partial<PlaudRawRecording> = {}): PlaudRawRecording {
+function makePlaudItem(overrides: Partial<PlaudRecordingMeta> = {}): PlaudRecordingMeta {
   return {
     id: "abcdef0123456789",
     filename: "Standup",
-    fullname: "Standup",
-    filesize: 12345,
-    file_md5: "deadbeef",
-    start_time: Date.UTC(2026, 3, 11, 12, 0),
-    end_time: Date.UTC(2026, 3, 11, 12, 1),
-    duration: 60_000,
-    version: 1,
-    version_ms: 0,
-    edit_time: 0,
-    is_trash: false,
-    is_trans: false,
-    is_summary: true,
-    serial_number: "S1",
+    startTime: Date.UTC(2026, 3, 11, 12, 0),
+    durationMs: 60_000,
+    serialNumber: "S1",
     ...overrides,
   };
 }
@@ -102,45 +97,63 @@ describe("upsertFromPlaud", () => {
   it("inserts a new recording with computed folder and a folder-relative audio name", () => {
     const out = upsertFromPlaud(makePlaudItem());
     expect(out.id).toBe("abcdef0123456789");
-    expect(out.folder).toBe("2026-04-11_Standup__abcdef01");
-    expect(out.filesizeBytes).toBe(12345);
-    expect(out.isTrash).toBe(false);
+    expect(out.folder).toBe("2026-04-11_Standup__23456789");
+    expect(out.endTime).toBe(Date.UTC(2026, 3, 11, 12, 1));
+    // Size is unknown until the audio is downloaded.
+    expect(out.filesizeBytes).toBe(0);
+    // Plaud's list carries no transcript/summary flags, so both start out expected.
+    expect(out.plaudIsTrans).toBe(true);
     expect(out.plaudIsSummary).toBe(true);
-
-    // Default (no filetype) keeps the historical audio.ogg name.
     expect(out.audioFilename).toBe("audio.ogg");
 
     // No absolute paths are persisted — only names relative to the folder.
     const row = db
       .prepare<[string], Record<string, unknown>>("SELECT * FROM recordings WHERE id = ?")
       .get("abcdef0123456789");
-    expect(row?.audio_filename).toBe("audio.ogg");
     expect(JSON.stringify(row)).not.toContain("/test/recordings");
   });
 
-  it("derives the audio filename from Plaud's filetype", () => {
-    const out = upsertFromPlaud(makePlaudItem({ filetype: "mp3" }));
-    expect(out.audioFilename).toBe("audio.mp3");
-  });
-
-  it("preserves the derived audio filename across a folder rename", () => {
-    upsertFromPlaud(makePlaudItem({ filetype: "mp3" }));
-    const renamed = upsertFromPlaud(makePlaudItem({ filename: "Standup renamed", filetype: "mp3" }));
+  it("keeps the audio filename set from the download URL across a folder rename", () => {
+    upsertFromPlaud(makePlaudItem());
+    setAudioFilename("abcdef0123456789", "audio.mp3");
+    const renamed = upsertFromPlaud(makePlaudItem({ filename: "Standup renamed" }));
     expect(renamed.audioFilename).toBe("audio.mp3");
-    expect(renamed.folder).toBe("2026-04-11_Standup_renamed__abcdef01");
+    expect(renamed.folder).toBe("2026-04-11_Standup_renamed__23456789");
   });
 
-  it("records Plaud's is_trans and only queues a transcript fetch once it is true", () => {
-    upsertFromPlaud(makePlaudItem({ is_trans: false, is_summary: false }));
+  it("stops queueing transcript/summary work once Plaud is known not to have them", () => {
+    upsertFromPlaud(makePlaudItem());
     db.prepare("UPDATE recordings SET audio_downloaded_at = 1 WHERE id = ?").run("abcdef0123456789");
-    expect(getRecordingById("abcdef0123456789")?.plaudIsTrans).toBe(false);
-    expect(findRecordingsNeedingAssets()).toEqual([]);
-    expect(countPendingTranscripts()).toBe(0);
-
-    upsertFromPlaud(makePlaudItem({ is_trans: true, is_summary: false }));
-    expect(getRecordingById("abcdef0123456789")?.plaudIsTrans).toBe(true);
     expect(findRecordingsNeedingAssets().map((r) => r.id)).toEqual(["abcdef0123456789"]);
     expect(countPendingTranscripts()).toBe(1);
+
+    setPlaudAvailability("abcdef0123456789", false, false);
+    expect(findRecordingsNeedingAssets()).toEqual([]);
+    expect(countPendingTranscripts()).toBe(0);
+  });
+
+  it("leaves recordings older than the history window as metadata only until requested", () => {
+    const installedAt = Date.UTC(2026, 3, 20);
+    loadConfig.mockReturnValue({ ...baseConfig, historyDays: 7, installedAt });
+    upsertFromPlaud(makePlaudItem({ id: "f_inside00001", startTime: installedAt - 2 * 86_400_000 }));
+    upsertFromPlaud(makePlaudItem({ id: "f_outside0001", startTime: installedAt - 30 * 86_400_000 }));
+
+    expect(findRecordingsNeedingAssets().map((r) => r.id)).toEqual(["f_inside00001"]);
+    expect(getRecordingById("f_outside0001")?.status).toBe("metadata_only");
+
+    const requested = requestDownload("f_outside0001");
+    expect(requested?.downloadRequestedAt).not.toBeNull();
+    expect(requested?.status).toBe("pending_audio");
+    expect(findRecordingsNeedingAssets().map((r) => r.id).sort()).toEqual(["f_inside00001", "f_outside0001"]);
+  });
+
+  it("requestDownload re-arms transcript/summary checks and ignores unknown or deleted rows", () => {
+    upsertFromPlaud(makePlaudItem());
+    setPlaudAvailability("abcdef0123456789", false, false);
+    expect(requestDownload("abcdef0123456789")?.plaudIsTrans).toBe(true);
+    expect(requestDownload("nope")).toBeNull();
+    softDeleteRecording("abcdef0123456789");
+    expect(requestDownload("abcdef0123456789")).toBeNull();
   });
 
   it("renames folder on disk + DB when filename changes (different sanitized output)", () => {
@@ -150,15 +163,15 @@ describe("upsertFromPlaud", () => {
 
     expect(fsMocks.renameSync).toHaveBeenCalledTimes(1);
     const [oldAbs, newAbs] = fsMocks.renameSync.mock.calls[0]!;
-    expect(oldAbs).toContain("2026-04-11_Standup__abcdef01");
-    expect(newAbs).toContain("2026-04-11_Standup_renamed__abcdef01");
+    expect(oldAbs).toContain("2026-04-11_Standup__23456789");
+    expect(newAbs).toContain("2026-04-11_Standup_renamed__23456789");
 
     const row = db
       .prepare<[string], { folder: string; filename: string }>(
         "SELECT folder, filename FROM recordings WHERE id = ?",
       )
       .get("abcdef0123456789");
-    expect(row?.folder).toBe("2026-04-11_Standup_renamed__abcdef01");
+    expect(row?.folder).toBe("2026-04-11_Standup_renamed__23456789");
     expect(row?.filename).toBe("Standup renamed");
   });
 
@@ -181,7 +194,7 @@ describe("upsertFromPlaud", () => {
       .get("abcdef0123456789");
     // Filename is updated, but the folder stays put (files remain where they are).
     expect(row?.filename).toBe("Standup renamed");
-    expect(row?.folder).toBe("2026-04-11_Standup__abcdef01");
+    expect(row?.folder).toBe("2026-04-11_Standup__23456789");
   });
 
   it("skips rename when filename change does not affect sanitized folder name", () => {
@@ -196,13 +209,6 @@ describe("upsertFromPlaud", () => {
     expect(row?.filename).toBe("Stand|up");
   });
 
-  it("flips is_trash and plaud_is_summary on subsequent upsert", () => {
-    upsertFromPlaud(makePlaudItem({ is_trash: false, is_summary: true }));
-    const after = upsertFromPlaud(makePlaudItem({ is_trash: true, is_summary: false }));
-    expect(after.isTrash).toBe(true);
-    expect(after.plaudIsSummary).toBe(false);
-  });
-
   it("does not call renameSync when the on-disk folder is missing (existsSync false)", () => {
     upsertFromPlaud(makePlaudItem({ filename: "Original" }));
     fsMocks.existsSync.mockReturnValue(false);
@@ -213,7 +219,7 @@ describe("upsertFromPlaud", () => {
     const row = db
       .prepare<[string], { folder: string }>("SELECT folder FROM recordings WHERE id = ?")
       .get("abcdef0123456789");
-    expect(row?.folder).toBe("2026-04-11_New__abcdef01");
+    expect(row?.folder).toBe("2026-04-11_New__23456789");
   });
 
   it("throws when recordingsDir is not configured", () => {
@@ -411,7 +417,7 @@ describe("softDeleteRecording ÔåÆ purge flow", () => {
     purgeExpiredSoftDeletes();
 
     expect(fsMocks.rmSync).toHaveBeenCalledTimes(1);
-    expect(fsMocks.rmSync.mock.calls[0]![0]).toContain("2026-04-11_Standup__abcdef01");
+    expect(fsMocks.rmSync.mock.calls[0]![0]).toContain("2026-04-11_Standup__23456789");
     expect(isSyncIgnoredId("abcdef0123456789")).toBe(true);
     const row = db.prepare("SELECT id FROM recordings WHERE id = ?").get("abcdef0123456789");
     expect(row).toBeUndefined();

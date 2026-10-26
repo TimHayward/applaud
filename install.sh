@@ -36,7 +36,7 @@ detect_os() {
 }
 
 ensure_xcode_cli() {
-  # Native modules (better-sqlite3, classic-level) need a C compiler.
+  # Native modules (better-sqlite3) need a C compiler.
   # On macOS this comes from the Xcode Command Line Tools.
   if [ "$(detect_os)" != "macos" ]; then return; fi
   if xcode-select -p >/dev/null 2>&1; then

@@ -12,6 +12,7 @@ import {
   restoreRecording,
   purgeSoftDeletedRecordingNow,
   setRecordingDisplayName,
+  requestDownload,
 } from "../sync/state.js";
 import { loadConfig } from "../config.js";
 import { poller } from "../sync/poller.js";
@@ -246,6 +247,23 @@ recordingsRouter.delete("/:id", (req, res) => {
   }
   softDeleteRecording(id);
   res.json({ ok: true });
+});
+
+/**
+ * Download a recording that sits outside the history window (metadata only
+ * until now). Marks it as requested, so the poller keeps it in scope, and
+ * starts the download straight away in the background; progress arrives over
+ * the sync event stream.
+ */
+recordingsRouter.post("/:id/download", (req, res) => {
+  const id = req.params.id;
+  const row = id ? requestDownload(id) : null;
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  poller.downloadInBackground(id);
+  res.status(202).json({ ok: true, recording: row });
 });
 
 recordingsRouter.post("/:id/resync", async (req, res) => {

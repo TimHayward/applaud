@@ -4,6 +4,8 @@ import path from "node:path";
 import { ensureConfigDir, dbPath } from "./paths.js";
 import { logger } from "./logger.js";
 import { DEFAULT_AUDIO_FILENAME } from "./sync/layout.js";
+import { loadConfig } from "./config.js";
+import { historyWindowStart } from "./sync/window.js";
 import type { RecordingRow, RecordingStatus } from "@applaud/shared";
 
 let db: Database.Database | null = null;
@@ -69,6 +71,11 @@ const MIGRATIONS: Migration[] = [
     up: (d) => addColumn(d, "recordings", "plaud_is_trans", "INTEGER NOT NULL DEFAULT 1"),
   },
   { version: 3, name: "folder-relative file paths", up: migrateRelativePaths },
+  {
+    version: 4,
+    name: "on-demand download of recordings outside the history window",
+    up: (d) => addColumn(d, "recordings", "download_requested_at", "INTEGER"),
+  },
 ];
 
 /** Schema version this build writes. */
@@ -256,8 +263,11 @@ function migrateBaseline(d: Database.Database): void {
   }
 }
 
-function statusOf(row: RecordingDbRow): RecordingStatus {
+function statusOf(row: RecordingDbRow, windowStart: number): RecordingStatus {
   if (row.last_error) return "error";
+  if (!row.audio_downloaded_at && row.start_time < windowStart && row.download_requested_at == null) {
+    return "metadata_only";
+  }
   if (!row.audio_downloaded_at) return "pending_audio";
   if (!row.transcript_downloaded_at) return "audio_only";
   return "complete";
@@ -295,6 +305,7 @@ interface RecordingDbRow {
   is_starred: number;
   plaud_tags: string | null;
   display_name: string | null;
+  download_requested_at: number | null;
 }
 
 function parseTagIds(json: string | null): string[] {
@@ -327,7 +338,7 @@ export function rowToRecording(row: RecordingDbRow): RecordingRow {
     webhookTranscriptFiredAt: row.webhook_transcript_fired_at,
     isTrash: row.is_trash === 1,
     lastError: row.last_error,
-    status: statusOf(row),
+    status: statusOf(row, historyWindowStart(loadConfig())),
     userDeletedAt: row.user_deleted_at ?? null,
     userPurgeAt: row.user_purge_at ?? null,
     plaudIsSummary: (row.plaud_is_summary ?? 0) === 1,
@@ -335,6 +346,7 @@ export function rowToRecording(row: RecordingDbRow): RecordingRow {
     isStarred: (row.is_starred ?? 0) === 1,
     plaudTagIds: parseTagIds(row.plaud_tags),
     displayName: row.display_name ?? null,
+    downloadRequestedAt: row.download_requested_at ?? null,
   };
 }
 
