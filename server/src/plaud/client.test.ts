@@ -1,185 +1,117 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { AppConfig } from "@applaud/shared";
-
-// Mock the config module BEFORE importing client.ts so that plaudJson sees
-// our controlled loadConfig / updateConfig. vi.hoisted is required because
-// vi.mock factories run before module imports.
-const { loadConfig, updateConfig } = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
-  updateConfig: vi.fn(),
-}));
-vi.mock("../config.js", () => ({ loadConfig, updateConfig }));
-
-// And silence the logger so the test output stays clean.
-vi.mock("../logger.js", () => ({
-  logger: {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  },
-}));
-
-import { plaudJson, PlaudApiError, PlaudAuthError, getPlaudRegionForBase } from "./client.js";
+import { gzipSync } from "node:zlib";
 import { installFetchMock, type FetchMock } from "../test/fixtures/fetch.js";
 
-const baseConfig: AppConfig = {
-  version: 1,
-  setupComplete: true,
-  token: "test-token",
-  tokenExp: null,
-  tokenEmail: null,
-  plaudRegion: null,
-  recordingsDir: "/tmp/r",
-  webhook: null,
-  pollIntervalMinutes: 10,
-  bind: { host: "127.0.0.1", port: 44471 },
-  publicBaseUrl: null,
-  lanToken: null,
-  authMode: null,
-  ut: null,
-  utExp: null,
-  urt: null,
-  urtExp: null,
-  plaudWorkspaceId: null,
-  importPlaudDeleted: false,
-};
-
-describe("getPlaudRegionForBase", () => {
-  it("maps the EU central API host back to its region key", () => {
-    expect(getPlaudRegionForBase("https://api-euc1.plaud.ai")).toBe("aws:eu-central-1");
-  });
-
-  it("maps the US default API host back to its region key", () => {
-    expect(getPlaudRegionForBase("https://api.plaud.ai")).toBe("aws:us-west-2");
-  });
-
-  it("maps the AP southeast API host back to its region key", () => {
-    expect(getPlaudRegionForBase("https://api-apse1.plaud.ai")).toBe("aws:ap-southeast-1");
-  });
-
-  it("returns null for an unknown base URL", () => {
-    expect(getPlaudRegionForBase("https://api-rogue.plaud.ai")).toBeNull();
-  });
+const { getAccessToken } = vi.hoisted(() => ({ getAccessToken: vi.fn() }));
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return { ...actual, getAccessToken };
 });
+vi.mock("../logger.js", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
-describe("plaudJson", () => {
-  let mock: FetchMock;
+import {
+  assertContentUrl,
+  audioExtensionFromUrl,
+  fetchContentText,
+  getCurrentUser,
+  getFile,
+  listFiles,
+  loadBlockContent,
+  parseApiTimestamp,
+  PlaudApiError,
+  PlaudAuthError,
+} from "./client.js";
+
+const API = "https://platform.plaud.ai/developer/api";
+
+describe("Plaud developer API client", () => {
+  let fm: FetchMock;
 
   beforeEach(() => {
-    loadConfig.mockReset();
-    updateConfig.mockReset();
-    loadConfig.mockReturnValue(baseConfig);
-    mock = installFetchMock();
+    fm = installFetchMock();
+    getAccessToken.mockReset();
+    getAccessToken.mockResolvedValue("at");
   });
 
   afterEach(() => {
-    mock.restore();
-    vi.useRealTimers();
+    fm.restore();
   });
 
-  async function runWithTimers<T>(p: Promise<T>): Promise<T> {
-    let done = false;
-    const wrapped = p.finally(() => {
-      done = true;
-    });
-    while (!done) {
-      await Promise.resolve();
-      await vi.runAllTimersAsync();
-    }
-    return wrapped;
-  }
-
-  it("parses normal JSON payloads", async () => {
-    mock.enqueue({
-      status: 200,
-      body: JSON.stringify({ ok: true, items: [] }),
-    });
-    const out = await plaudJson<{ ok: boolean }>("/file/list");
-    expect(out).toEqual({ ok: true, items: [] });
-
-    expect(mock.calls.length).toBe(1);
-    expect(mock.calls[0]!.url).toBe("https://api.plaud.ai/file/list");
-    expect(updateConfig).not.toHaveBeenCalledWith({ plaudRegion: expect.anything() });
+  it("lists files with paging and the date filter, sending the bearer", async () => {
+    fm.enqueue({ body: JSON.stringify({ type: "list", data: [{ id: "f_1", name: "A" }, { nope: 1 }], page: 2, page_size: 50 }) });
+    const files = await listFiles({ page: 2, pageSize: 50, startMs: 1000, endMs: 2000 });
+    expect(files.map((f) => f.id)).toEqual(["f_1"]);
+    const call = fm.calls[0]!;
+    expect(call.url).toBe(`${API}/open/third-party/files/?page=2&page_size=50&start_date=1000&end_date=2000`);
+    expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer at");
   });
 
-  const redirectTo = (api: string): string =>
-    JSON.stringify({ status: -302, msg: "user region mismatch", data: { domains: { api } } });
-
-  it("follows a -302 region redirect once and persists the corrected region", async () => {
-    mock.enqueue({ status: 200, body: redirectTo("https://api-euc1.plaud.ai") });
-    mock.enqueue({ status: 200, body: JSON.stringify({ status: 0, items: [] }) });
-
-    const out = await plaudJson<{ status: number }>("/file/list");
-    expect(out.status).toBe(0);
-    expect(mock.calls.map((c) => c.url)).toEqual([
-      "https://api.plaud.ai/file/list",
-      "https://api-euc1.plaud.ai/file/list",
-    ]);
-    expect(updateConfig).toHaveBeenCalledWith({ plaudRegion: "aws:eu-central-1" });
+  it("never asks for fewer than Plaud's minimum page size", async () => {
+    fm.enqueue({ body: JSON.stringify({ data: [] }) });
+    await listFiles({ page: 1, pageSize: 1 });
+    expect(fm.calls[0]!.url).toContain("page_size=10");
   });
 
-  it("refuses a -302 to an unknown host instead of sending the token there", async () => {
-    mock.enqueue({ status: 200, body: redirectTo("https://api-rogue.plaud.ai") });
-    await expect(plaudJson("/file/list")).rejects.toBeInstanceOf(PlaudApiError);
-    expect(mock.calls.length).toBe(1);
-    expect(updateConfig).not.toHaveBeenCalled();
+  it("renews the token once on a 401 and gives up on a second", async () => {
+    fm.enqueue({ status: 401, body: "{}" });
+    fm.enqueue({ body: JSON.stringify({ id: "f_1", name: "A" }) });
+    expect((await getFile("f_1")).id).toBe("f_1");
+    expect(getAccessToken.mock.calls.map((c) => c[0])).toEqual([false, true]);
+
+    fm.enqueue({ status: 401, body: "{}" });
+    fm.enqueue({ status: 401, body: "{}" });
+    await expect(getFile("f_1")).rejects.toBeInstanceOf(PlaudAuthError);
   });
 
-  it("stops after a second -302 rather than looping", async () => {
-    mock.enqueue({ status: 200, body: redirectTo("https://api-euc1.plaud.ai") });
-    mock.enqueue({ status: 200, body: redirectTo("https://api-apse1.plaud.ai") });
-    await expect(plaudJson("/file/list")).rejects.toThrow(/second region redirect/);
-    expect(mock.calls.length).toBe(2);
+  it("surfaces a 404 as a PlaudApiError with the status", async () => {
+    fm.enqueue({ status: 404, body: "not found" });
+    const err = await getFile("gone").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PlaudApiError);
+    expect((err as PlaudApiError).status).toBe(404);
   });
 
-  it("returns the -302 envelope unchanged when the caller pinned apiBase", async () => {
-    mock.enqueue({ status: 200, body: redirectTo("https://api-euc1.plaud.ai") });
-    const out = await plaudJson<{ status: number }>("/file/list", { apiBase: "https://api.plaud.ai" });
-    expect(out.status).toBe(-302);
-    expect(updateConfig).not.toHaveBeenCalled();
+  it("reads the current user, wrapped or bare", async () => {
+    fm.enqueue({ body: JSON.stringify({ data: { id: 7, nickname: "N", email: "a@b.c" } }) });
+    expect(await getCurrentUser()).toEqual({ id: "7", nickname: "N", email: "a@b.c" });
+    fm.enqueue({ body: JSON.stringify({ id: "u", email: null }) });
+    expect(await getCurrentUser()).toEqual({ id: "u", nickname: null, email: null });
   });
 
-  it("authOverride uses override token and explicit apiBase", async () => {
-    mock.enqueue({
-      status: 200,
-      body: JSON.stringify({ ok: true }),
-    });
-
-    const out = await plaudJson<{ ok: boolean }>("/auth/validate", {
-      method: "POST",
-      body: "{}",
-      authOverride: "candidate-token",
-      apiBase: "https://api-euc1.plaud.ai",
-    });
-    expect(out).toEqual({ ok: true });
-    expect(mock.calls.length).toBe(1);
-    const auth1 = (mock.calls[0]!.init!.headers as Record<string, string>)["authorization"];
-    expect(mock.calls[0]!.url).toBe("https://api-euc1.plaud.ai/auth/validate");
-    expect(auth1).toBe("Bearer candidate-token");
-    expect(updateConfig).not.toHaveBeenCalledWith({ plaudRegion: expect.anything() });
+  it("only fetches content from https storage hosts on the allowlist", () => {
+    expect(() => assertContentUrl("https://euc1-prod.s3-accelerate.amazonaws.com/x.ogg")).not.toThrow();
+    expect(() => assertContentUrl("http://bucket.s3.amazonaws.com/x")).toThrow(/https/);
+    expect(() => assertContentUrl("https://192.168.1.10/x")).toThrow(/not allowed/);
+    expect(() => assertContentUrl("https://evilamazonaws.com/x")).toThrow(/not allowed/);
+    expect(() => assertContentUrl("https://u:p@bucket.s3.amazonaws.com/x")).toThrow(/credentials/);
   });
 
-  it("HTTP 401 throws PlaudAuthError without retrying for region", async () => {
-    mock.enqueue({ status: 401, body: '{"err":"unauthorized"}' });
-    await expect(plaudJson("/file/list")).rejects.toBeInstanceOf(PlaudAuthError);
-    expect(mock.calls.length).toBe(1);
+  it("gunzips gzipped content and passes plain content through", async () => {
+    fm.enqueue({ body: "plain" });
+    expect(await fetchContentText("https://b.s3.amazonaws.com/a.md")).toBe("plain");
+
+    const gz = gzipSync(Buffer.from('[{"content":"hi"}]'));
+    fm.fn.mockImplementationOnce(async () => new Response(gz, { status: 200 }));
+    expect(await fetchContentText("https://b.s3.amazonaws.com/t.json.gz")).toBe('[{"content":"hi"}]');
   });
 
-  it("retries on 5xx and succeeds on the third attempt", async () => {
-    vi.useFakeTimers();
-    mock.enqueue({ status: 502, body: "bad gateway" });
-    mock.enqueue({ status: 503, body: "service unavailable" });
-    mock.enqueue({ status: 200, body: JSON.stringify({ ok: true }) });
-
-    const out = await runWithTimers(plaudJson<{ ok: boolean }>("/file/list"));
-    expect(out).toEqual({ ok: true });
-    expect(mock.calls.length).toBe(3);
+  it("prefers inline block content over the link", async () => {
+    expect(await loadBlockContent({ data_content: "inline", data_link: "https://b.s3.amazonaws.com/x" })).toBe("inline");
+    expect(fm.calls).toHaveLength(0);
+    fm.enqueue({ body: "linked" });
+    expect(await loadBlockContent({ data_content: "", data_link: "https://b.s3.amazonaws.com/x" })).toBe("linked");
   });
 
-  it("throws PlaudApiError on non-JSON success body", async () => {
-    mock.enqueue({ status: 200, body: "not-json" });
-    await expect(plaudJson("/file/list")).rejects.toBeInstanceOf(PlaudApiError);
-    expect(mock.calls.length).toBe(1);
+  it("parses Plaud's zone-less timestamps as UTC", () => {
+    expect(parseApiTimestamp("2026-10-26T10:30:29.542000")).toBe(Date.UTC(2026, 9, 26, 10, 30, 29, 542));
+    expect(parseApiTimestamp("2026-10-26T10:30:29+01:00")).toBe(Date.UTC(2026, 9, 26, 9, 30, 29));
+    expect(parseApiTimestamp("")).toBeNull();
+    expect(parseApiTimestamp("garbage")).toBeNull();
+  });
+
+  it("reads the audio extension from a signed URL", () => {
+    expect(audioExtensionFromUrl("https://b.s3.amazonaws.com/audiofiles/f/o_1.ogg?X-Amz-Expires=3600")).toBe("ogg");
+    expect(audioExtensionFromUrl("https://b.s3.amazonaws.com/audiofiles/f/o_1")).toBeNull();
   });
 });

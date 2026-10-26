@@ -86,7 +86,8 @@ export function SyncStatusBadge(): JSX.Element {
     );
   }
 
-  const tokenExp = cfg.data?.config.tokenExp;
+  // The access token renews itself; only the refresh token's expiry needs a new sign-in.
+  const tokenExp = cfg.data?.config.refreshTokenExp;
   const daysUntilExpiry = tokenExp ? Math.ceil((tokenExp * 1000 - Date.now()) / 86_400_000) : null;
   const tokenExpiringSoon = daysUntilExpiry !== null && daysUntilExpiry <= TOKEN_EXPIRY_WARNING_DAYS;
 

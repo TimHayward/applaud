@@ -28,7 +28,7 @@ export function Settings(): JSX.Element {
   const [secretTouched, setSecretTouched] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
   const [pollMinutes, setPollMinutes] = useState(10);
-  const [importPlaudDeleted, setImportPlaudDeleted] = useState(false);
+  const [historyDays, setHistoryDays] = useState(30);
   const [lanTokenInput, setLanTokenInput] = useState("");
   const [lanTokenExists, setLanTokenExists] = useState(false);
   const [lanTokenTouched, setLanTokenTouched] = useState(false);
@@ -38,7 +38,7 @@ export function Settings(): JSX.Element {
   const [testResult, setTestResult] = useState<null | { ok: boolean; message: string }>(null);
   const [clearIgnoreBusy, setClearIgnoreBusy] = useState(false);
   const [clearIgnoreMsg, setClearIgnoreMsg] = useState<null | { ok: boolean; text: string }>(null);
-  // Mounted only on demand: AuthStep scans local browsers for a session on mount.
+  // Mounted only on demand: opening it starts a fresh Plaud sign-in.
   const [reconnecting, setReconnecting] = useState(false);
 
   // Sync the form from the server config — but never on top of unsaved edits.
@@ -57,7 +57,7 @@ export function Settings(): JSX.Element {
     setSecretTouched(false);
     setShowSecret(false);
     setPollMinutes(c.pollIntervalMinutes);
-    setImportPlaudDeleted(c.importPlaudDeleted ?? false);
+    setHistoryDays(c.historyDays);
     setLanTokenExists(Boolean(c.lanToken));
     setLanTokenInput("");
     setLanTokenTouched(false);
@@ -84,7 +84,7 @@ export function Settings(): JSX.Element {
         webhook,
         publicBaseUrl: publicBaseUrl.trim() || null,
         pollIntervalMinutes: pollMinutes,
-        importPlaudDeleted,
+        historyDays,
         ...(lanTokenTouched ? { lanToken: lanTokenInput } : {}),
       });
       if (lanTokenTouched) {
@@ -166,7 +166,9 @@ export function Settings(): JSX.Element {
 
   const s = syncStatus.data;
   const isHealthy = s && !s.authRequired && !s.lastError;
-  const expiresInDays = c.tokenExp ? daysUntil(c.tokenExp) : null;
+  // The access token renews itself; the refresh token's expiry is when a new sign-in is needed.
+  const expiresInDays = c.refreshTokenExp ? daysUntil(c.refreshTokenExp) : null;
+  const installedLabel = c.installedAt ? new Date(c.installedAt).toLocaleDateString() : "setup";
 
   return (
     <div className="max-w-[48rem] mx-auto space-y-8">
@@ -288,10 +290,14 @@ export function Settings(): JSX.Element {
             </div>
           </div>
           <div className="space-y-2">
-            <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Token Expiration</label>
+            <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">Sign-in Renewal</label>
             <div className="bg-surface-container-highest/50 border border-outline-variant/20 rounded-lg p-4 flex items-center justify-between">
               <span className="text-sm text-on-surface">
-                {expiresInDays === null ? "—" : expiresInDays > 0 ? `Expires in ${expiresInDays} days` : "Expired"}
+                {expiresInDays === null
+                  ? "Renews automatically"
+                  : expiresInDays > 0
+                    ? `Sign in again within ${expiresInDays} days`
+                    : "Expired: sign in again"}
               </span>
             </div>
           </div>
@@ -561,24 +567,28 @@ export function Settings(): JSX.Element {
         </div>
       </section>
 
-      {/* Plaud import option (saved with Save Settings) */}
+      {/* History window (saved with Save Settings) */}
       <section className="card p-8 space-y-4">
-        <h2 className="text-xl font-bold text-on-surface">Plaud library</h2>
+        <h2 className="text-xl font-bold text-on-surface">History window</h2>
         <p className="text-sm text-on-surface-variant max-w-prose">
-          By default only files that are still active in Plaud are listed and synced. Enable the option below to also
-          download and show items you deleted in the Plaud app (they appear with the trash badge on the recordings list).
+          Applaud downloads every recording from this many days before {installedLabel} onwards. Older recordings are
+          listed with their details only; choose Download on one to fetch it. Raising the number downloads the newly
+          covered recordings straight away. Lowering it never deletes anything already downloaded.
         </p>
-        <label className="flex items-start gap-3 cursor-pointer select-none">
+        <label className="flex items-center gap-3">
           <input
-            type="checkbox"
-            className="mt-0.5 h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary shrink-0"
-            checked={importPlaudDeleted}
+            type="number"
+            min={0}
+            max={3650}
+            className="w-28 bg-surface-container-highest/50 border-0 rounded-lg p-3 text-sm text-on-surface focus:ring-2 focus:ring-primary/40 focus:outline-none"
+            value={historyDays}
             onChange={(e) => {
-              setImportPlaudDeleted(e.target.checked);
+              const n = Math.max(0, Math.min(3650, Math.floor(Number(e.target.value) || 0)));
+              setHistoryDays(n);
               setDirty(true);
             }}
           />
-          <span className="text-sm font-medium text-on-surface">Import recordings deleted in Plaud</span>
+          <span className="text-sm text-on-surface">days of history</span>
         </label>
       </section>
 

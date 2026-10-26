@@ -72,7 +72,8 @@ const PatchSchema = z.object({
       port: z.number().int().min(1).max(65535),
     })
     .optional(),
-  importPlaudDeleted: z.boolean().optional(),
+  /** Days of history before install to download in full (0–3650). */
+  historyDays: z.number().int().min(0).max(3650).optional(),
   lanToken: LanToken.optional(),
   /** "" or null clears it (webhook URLs fall back to the bind address). */
   publicBaseUrl: HttpUrl.or(z.literal("")).nullable().optional(),
@@ -86,7 +87,6 @@ configRouter.post("/", (req, res) => {
   }
   const patch = parsed.data;
   const prev = loadConfig();
-  const prevImportPlaudDeleted = prev.importPlaudDeleted;
   const mergedSecret = patch.webhook
     ? mergeWebhookSecret(prev.webhook?.secret, patch.webhook.secret)
     : undefined;
@@ -122,7 +122,8 @@ configRouter.post("/", (req, res) => {
       : {}),
   };
   const next = updateConfig(normalized);
-  if (patch.importPlaudDeleted === true && !prevImportPlaudDeleted) {
+  // A wider window brings older recordings into scope: fetch them now.
+  if (patch.historyDays !== undefined && patch.historyDays > prev.historyDays && next.setupComplete) {
     void poller.trigger();
   }
   // Poll interval takes effect immediately by rescheduling the running timer.
@@ -248,7 +249,8 @@ configRouter.post("/complete-setup", (req, res) => {
     res.status(400).json({ error: "recordingsDir not set" });
     return;
   }
-  updateConfig({ setupComplete: true });
+  // The history window is anchored on the moment sync is first set up.
+  updateConfig({ setupComplete: true, installedAt: cfg.installedAt ?? Date.now() });
   poller.start();
   res.json({ ok: true });
 });

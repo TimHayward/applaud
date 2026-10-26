@@ -8,7 +8,7 @@ import { logger } from "./logger.js";
 import { loadConfig, updateConfig } from "./config.js";
 import { ensureConfigDir, lockPath, configDir } from "./paths.js";
 import { sweepOrphanedTempFiles } from "./fsAtomic.js";
-import { authRouter } from "./routes/auth.js";
+import { authRouter, oauthCallbackHandler, OAUTH_CALLBACK_PATH } from "./routes/auth.js";
 import { configRouter } from "./routes/config.js";
 import { recordingsRouter } from "./routes/recordings.js";
 import { syncRouter } from "./routes/sync.js";
@@ -210,6 +210,13 @@ async function main(): Promise<void> {
   // Gate /api and /media behind cfg.lanToken when one is configured (always in
   // container mode; see ensureContainerAuth). /media additionally accepts
   // `?token=` for <audio>/<a>/<img>, which can't set headers.
+  // Plaud sends the browser back here after sign-in. A top-level navigation
+  // can't carry the LAN token, so this one route sits ahead of the guard; the
+  // single-use state from /api/auth/plaud/start authorises it instead.
+  app.get(OAUTH_CALLBACK_PATH, (req, res) => {
+    void oauthCallbackHandler(req, res);
+  });
+
   app.use("/api", requireLanToken);
   app.use("/media", requireLanTokenMedia);
 

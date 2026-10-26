@@ -37,10 +37,31 @@ function envList(name: string): string[] {
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** Spoofed as a desktop browser so Cloudflare's WAF doesn't 403 the "applaud/x.y.z" UA (see #26). */
-export const PLAUD_USER_AGENT =
-  process.env.APPLAUD_PLAUD_USER_AGENT ??
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+/**
+ * Plaud's hosted OAuth authorisation server (dynamic client registration +
+ * PKCE). Overridable for testing against a staging deployment.
+ */
+export const PLAUD_OAUTH_ISSUER = process.env.APPLAUD_PLAUD_OAUTH_ISSUER ?? "https://mcp.plaud.ai";
+
+/** Plaud's official developer API, which accepts the OAuth access token. */
+export const PLAUD_API_BASE =
+  process.env.APPLAUD_PLAUD_API_BASE ?? "https://platform.plaud.ai/developer/api";
+
+/** Renew the OAuth access token this long before it expires. */
+export const PLAUD_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Hosts Plaud's pre-signed content links (audio, transcript blocks, notes)
+ * may point at. Applaud never sends a credential to these, but only fetches
+ * from hosts on this list so a tampered response can't aim the downloader at
+ * the LAN. Suffix match on whole labels. Extend with
+ * `APPLAUD_PLAUD_CONTENT_HOSTS` if Plaud moves its storage.
+ */
+export const PLAUD_CONTENT_HOST_SUFFIXES: readonly string[] = [
+  "amazonaws.com",
+  "plaud.ai",
+  ...envList("APPLAUD_PLAUD_CONTENT_HOSTS"),
+];
 
 /** Retries for a single Plaud API call (5xx / network errors). */
 export const PLAUD_FETCH_MAX_ATTEMPTS = envInt("APPLAUD_PLAUD_MAX_ATTEMPTS", 3);
@@ -68,13 +89,6 @@ export const POLLER_RUN_WATCHDOG_MS = envMs("APPLAUD_POLL_WATCHDOG_MINUTES", 30 
 /** Page size / hard page cap for the discovery walk (poller Phase 1). */
 export const POLLER_LIST_PAGE_SIZE = envInt("APPLAUD_POLLER_PAGE_SIZE", 50);
 export const POLLER_LIST_MAX_PAGES = envInt("APPLAUD_POLLER_MAX_PAGES", 200);
-/**
- * Rows to re-read from the end of the previous page on each subsequent page of
- * the discovery walk. A delete mid-walk shifts items up across the page
- * boundary; overlapping a few rows keeps a brand-new recording from being
- * skipped for a cycle. Upsert is idempotent, so the re-reads are free.
- */
-export const POLLER_LIST_PAGE_OVERLAP = envInt("APPLAUD_POLLER_PAGE_OVERLAP", 5);
 
 /** Backoff schedule between webhook delivery retries. */
 export const WEBHOOK_RETRY_BACKOFF_MS: readonly number[] = process.env.APPLAUD_WEBHOOK_BACKOFF_MS
@@ -111,17 +125,6 @@ export const WEBHOOK_MEDIA_URL_TTL_MS = envMs("APPLAUD_WEBHOOK_URL_TTL_HOURS", 7
 
 /** Soft-deleted recordings are purged from disk and DB after this delay. */
 export const SOFT_DELETE_RETENTION_MS = envMs("APPLAUD_TRASH_RETENTION_DAYS", 7 * DAY_MS, DAY_MS);
-
-/** Throttled Plaud-trash rows to check for transcript/summary (poller Phase 3). */
-export const PLAUD_TRASH_ASSET_PROBE_INTERVAL_MS = envMs(
-  "APPLAUD_TRASH_PROBE_INTERVAL_HOURS",
-  6 * HOUR_MS,
-  HOUR_MS,
-);
-/** Max trash rows probed per scheduled poll. */
-export const PLAUD_TRASH_ASSET_PROBE_SCHEDULED_LIMIT = envInt("APPLAUD_TRASH_PROBE_SCHEDULED_LIMIT", 25);
-/** Sync Now: higher than scheduled poll, but bounded so one manual sync can't fan out without limit. */
-export const PLAUD_TRASH_ASSET_PROBE_MANUAL_SYNC_LIMIT = envInt("APPLAUD_TRASH_PROBE_MANUAL_LIMIT", 100);
 
 /** Hard cap on `limit` for recording list/search queries, regardless of what the client asks for. */
 export const RECORDINGS_LIST_MAX_LIMIT = envInt("APPLAUD_RECORDINGS_MAX_LIMIT", 500);

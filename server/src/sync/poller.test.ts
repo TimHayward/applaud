@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
-import type { AppConfig, PlaudRawRecording } from "@applaud/shared";
+import type { AppConfig } from "@applaud/shared";
 import path from "node:path";
+import type { PlaudFileDetail, PlaudFileSummary } from "../plaud/client.js";
 
-const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
+const { loadConfig, updateConfig } = vi.hoisted(() => ({ loadConfig: vi.fn(), updateConfig: vi.fn() }));
 const fsMocks = vi.hoisted(() => ({
   writeFileSync: vi.fn(),
   existsSync: vi.fn((p: string): boolean => Boolean(p) && false),
@@ -11,19 +12,15 @@ const fsMocks = vi.hoisted(() => ({
   renameSync: vi.fn(),
   rmSync: vi.fn(),
 }));
-const plaudListMocks = vi.hoisted(() => ({ listRecordings: vi.fn() }));
-const plaudAudioMocks = vi.hoisted(() => ({ downloadAudio: vi.fn() }));
-const plaudTranscriptMocks = vi.hoisted(() => ({
-  getTranscriptAndSummary: vi.fn(),
-  flattenTranscript: vi.fn(),
-  extractSummaryMarkdown: vi.fn(),
-  extractMarkdownFromSummaryPayload: vi.fn(),
-  fetchTranscriptFromContentList: vi.fn(),
+const clientMocks = vi.hoisted(() => ({
+  listFiles: vi.fn(),
+  getFile: vi.fn(),
+  downloadToFile: vi.fn(),
+  fetchContentText: vi.fn(),
 }));
-const plaudDetailMocks = vi.hoisted(() => ({ getFileDetail: vi.fn() }));
 const webhookMocks = vi.hoisted(() => ({ fireWebhookForRecording: vi.fn() }));
 
-vi.mock("../config.js", () => ({ loadConfig, updateConfig: vi.fn() }));
+vi.mock("../config.js", () => ({ loadConfig, updateConfig }));
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, ...fsMocks };
@@ -31,179 +28,276 @@ vi.mock("node:fs", async () => {
 vi.mock("../logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-vi.mock("../plaud/list.js", () => plaudListMocks);
-vi.mock("../plaud/audio.js", () => plaudAudioMocks);
-vi.mock("../plaud/transcript.js", () => plaudTranscriptMocks);
-vi.mock("../plaud/detail.js", () => plaudDetailMocks);
+vi.mock("../plaud/client.js", async () => {
+  const actual = await vi.importActual<typeof import("../plaud/client.js")>("../plaud/client.js");
+  return {
+    ...actual,
+    listFiles: clientMocks.listFiles,
+    getFile: clientMocks.getFile,
+    downloadToFile: clientMocks.downloadToFile,
+    // Inline content wins; linked content comes from the mock.
+    loadBlockContent: async (b: { data_content?: string; data_link?: string }) =>
+      b.data_content ? b.data_content : b.data_link ? clientMocks.fetchContentText(b.data_link) : "",
+  };
+});
 vi.mock("../webhook/post.js", () => webhookMocks);
 vi.mock("./events.js", () => ({ emit: vi.fn() }));
 
-import { poller } from "./poller.js";
-import { getRecordingById, upsertFromPlaud } from "./state.js";
+import { noteFileName, poller, stripSignedLinks, toRecordingMeta } from "./poller.js";
+import { getRecordingById, requestDownload, upsertFromPlaud } from "./state.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
-import { POLLER_RUN_WATCHDOG_MS } from "../constants.js";
+import { POLLER_LIST_PAGE_SIZE, POLLER_RUN_WATCHDOG_MS } from "../constants.js";
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.now();
 
 const baseConfig: AppConfig = {
-  version: 1,
+  version: 2,
   setupComplete: true,
   token: "token",
   tokenExp: null,
   tokenEmail: null,
-  plaudRegion: null,
-  authMode: null,
-  ut: null,
-  utExp: null,
-  urt: null,
-  urtExp: null,
-  plaudWorkspaceId: null,
+  refreshToken: "refresh",
+  refreshTokenExp: null,
+  plaudClientId: "client",
+  plaudRedirectUri: "http://127.0.0.1:44471/api/auth/plaud/callback",
+  plaudConnectedAt: null,
   recordingsDir: "/test/recordings",
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
   publicBaseUrl: null,
   lanToken: null,
-  importPlaudDeleted: false,
+  historyDays: 30,
+  installedAt: NOW,
+  libraryIndexedAt: null,
 };
 
-function makePlaudItem(overrides: Partial<PlaudRawRecording> = {}): PlaudRawRecording {
+/** Plaud's timestamp format: UTC without a zone suffix. */
+function plaudTime(ms: number): string {
+  return new Date(ms).toISOString().replace("Z", "");
+}
+
+function listed(id: string, startMs: number, over: Partial<PlaudFileSummary> = {}): PlaudFileSummary {
   return {
-    id: "abcdef0123456789",
-    filename: "Standup",
-    fullname: "Standup",
-    filesize: 12345,
-    file_md5: "deadbeef",
-    start_time: Date.UTC(2026, 3, 11, 12, 0),
-    end_time: Date.UTC(2026, 3, 11, 12, 1),
+    id,
+    name: `Recording ${id}`,
+    created_at: plaudTime(startMs),
+    start_at: plaudTime(startMs),
     duration: 60_000,
-    version: 1,
-    version_ms: 0,
-    edit_time: 0,
-    is_trash: false,
-    is_trans: false,
-    is_summary: false,
-    serial_number: "S1",
-    ...overrides,
+    serial_number: null,
+    ...over,
   };
 }
 
-describe("poller asset overwrite behavior", () => {
-  let db: Database.Database;
-  let fetchMock: ReturnType<typeof vi.fn>;
+const SEGMENTS = JSON.stringify([
+  { start_time: 0, end_time: 1000, content: "Hello.", speaker: "Speaker 1", original_speaker: "Speaker 1" },
+]);
 
-  const contentUrl = "https://content.test/note.md";
-  const extraUrl = "https://assets.test/image.jpg";
+function detail(id: string, startMs: number, over: Partial<PlaudFileDetail> = {}): PlaudFileDetail {
+  return {
+    ...listed(id, startMs),
+    presigned_url: `https://bucket.s3.amazonaws.com/audiofiles/${id}/o_1.ogg?X-Amz-Expires=3600`,
+    source_list: [
+      { data_id: "o_trans0001", data_type: "transaction", data_content: SEGMENTS, data_link: "https://bucket.s3.amazonaws.com/t.json.gz" },
+      { data_id: "o_polish001", data_type: "transaction_polish", data_content: "", data_link: "https://bucket.s3.amazonaws.com/p.json.gz" },
+      { data_id: "o_outline01", data_type: "outline", data_content: '[{"start_time":0,"end_time":1,"topic":"Intro"}]' },
+    ],
+    note_list: [
+      { data_id: "o_summary01", data_type: "auto_sum_note", data_tab_name: "Summary", data_content: "# Summary\n\nAgreed things." },
+      { data_id: "o_minutes99", data_type: "consumer_note", data_tab_name: "Meeting minutes", data_content: "Minutes body" },
+    ],
+    ...over,
+  };
+}
+
+/** Final destinations written via writeFileAtomic (temp file + rename). */
+function writtenFiles(): string[] {
+  return fsMocks.renameSync.mock.calls.map((c) => path.basename(String(c[1])));
+}
+
+describe("poller", () => {
+  let db: Database.Database;
 
   beforeEach(() => {
     db = setupTestDb();
-
     loadConfig.mockReset();
     loadConfig.mockReturnValue(baseConfig);
-
-    fsMocks.writeFileSync.mockReset();
-    fsMocks.existsSync.mockReset();
+    updateConfig.mockReset();
+    for (const m of Object.values(fsMocks)) m.mockReset();
     fsMocks.existsSync.mockReturnValue(false);
-    fsMocks.mkdirSync.mockReset();
-    fsMocks.renameSync.mockReset();
-    fsMocks.rmSync.mockReset();
-
-    plaudListMocks.listRecordings.mockReset();
-    plaudListMocks.listRecordings.mockResolvedValue({
-      status: 0,
-      msg: "ok",
-      data_file_total: 0,
-      data_file_list: [],
-    });
-
-    plaudAudioMocks.downloadAudio.mockReset();
-    plaudAudioMocks.downloadAudio.mockResolvedValue(12345);
-
-    plaudTranscriptMocks.getTranscriptAndSummary.mockReset();
-    plaudTranscriptMocks.getTranscriptAndSummary.mockResolvedValue({
-      data_result: [{ text: "hello" }],
-      data_result_summ: null,
-    });
-    plaudTranscriptMocks.flattenTranscript.mockReset();
-    plaudTranscriptMocks.flattenTranscript.mockReturnValue("flattened transcript");
-    plaudTranscriptMocks.extractSummaryMarkdown.mockReset();
-    plaudTranscriptMocks.extractSummaryMarkdown.mockReturnValue(null);
-    plaudTranscriptMocks.extractMarkdownFromSummaryPayload.mockReset();
-    plaudTranscriptMocks.extractMarkdownFromSummaryPayload.mockImplementation((raw: string) => raw);
-    plaudTranscriptMocks.fetchTranscriptFromContentList.mockReset();
-    plaudTranscriptMocks.fetchTranscriptFromContentList.mockResolvedValue({ segments: [], summaryMd: null });
-
-    plaudDetailMocks.getFileDetail.mockReset();
-
+    clientMocks.listFiles.mockReset();
+    clientMocks.listFiles.mockResolvedValue([]);
+    clientMocks.getFile.mockReset();
+    clientMocks.downloadToFile.mockReset();
+    clientMocks.downloadToFile.mockResolvedValue(4096);
+    clientMocks.fetchContentText.mockReset();
+    clientMocks.fetchContentText.mockResolvedValue('[{"content":"polished"}]');
     webhookMocks.fireWebhookForRecording.mockReset();
     webhookMocks.fireWebhookForRecording.mockResolvedValue(true);
-
-    fetchMock = vi.fn(async (url: string) => {
-      if (url === contentUrl) return new Response("# refreshed note", { status: 200 });
-      if (url === extraUrl) return new Response("image-bytes", { status: 200 });
-      return new Response("not found", { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
     teardownTestDb(db);
   });
 
-  it("normal sync skips existing content_list markdown and mapped extra assets", async () => {
-    upsertFromPlaud(makePlaudItem());
-    const row = getRecordingById("abcdef0123456789");
-    expect(row).toBeTruthy();
+  describe("history window", () => {
+    it("downloads recordings inside the window and only indexes older ones", async () => {
+      const recent = NOW - 2 * DAY;
+      const old = NOW - 90 * DAY;
+      clientMocks.listFiles.mockResolvedValueOnce([listed("f_recent0001", recent), listed("f_old0000001", old)]);
+      clientMocks.getFile.mockImplementation(async (id: string) => detail(id, id === "f_recent0001" ? recent : old));
 
-    const markdownPath = path.join(
-      baseConfig.recordingsDir!,
-      row!.folder,
-      "Meeting_Notes__outline__12345678.md",
-    );
-    const extraPath = path.join(baseConfig.recordingsDir!, row!.folder, path.normalize("permanent/marks/image.jpg"));
-    const existingPaths = new Set([path.normalize(markdownPath), path.normalize(extraPath)]);
-    fsMocks.existsSync.mockImplementation((p: string) => existingPaths.has(path.normalize(p)));
+      await poller.trigger();
 
-    plaudDetailMocks.getFileDetail.mockResolvedValue({
-      file_id: row!.id,
-      file_name: row!.filename,
-      file_version: 1,
-      duration: row!.durationMs,
-      is_trash: false,
-      start_time: row!.startTime,
-      scene: 0,
-      serial_number: row!.serialNumber,
-      session_id: 1,
-      filetag_id_list: [],
-      content_list: [
-        {
-          data_id: "note000012345678",
-          data_type: "outline",
-          task_status: 1,
-          err_code: "",
-          err_msg: "",
-          data_title: "Outline",
-          data_tab_name: "Meeting Notes",
-          data_link: contentUrl,
-        },
-      ],
-      download_path_mapping: {
-        "permanent/marks/image.jpg": extraUrl,
-      },
+      expect(clientMocks.getFile).toHaveBeenCalledTimes(1);
+      expect(clientMocks.getFile).toHaveBeenCalledWith("f_recent0001");
+      const recentRow = getRecordingById("f_recent0001")!;
+      expect(recentRow.audioDownloadedAt).not.toBeNull();
+      expect(recentRow.transcriptDownloadedAt).not.toBeNull();
+      expect(recentRow.summaryDownloadedAt).not.toBeNull();
+      expect(recentRow.status).toBe("complete");
+
+      const oldRow = getRecordingById("f_old0000001")!;
+      expect(oldRow.audioDownloadedAt).toBeNull();
+      expect(oldRow.status).toBe("metadata_only");
     });
 
-    await poller.trigger();
+    it("downloads an older recording once the user requests it", async () => {
+      const old = NOW - 90 * DAY;
+      upsertFromPlaud(toRecordingMeta(listed("f_old0000001", old))!);
+      clientMocks.getFile.mockResolvedValue(detail("f_old0000001", old));
 
-    const writtenPaths = fsMocks.writeFileSync.mock.calls.map((call) => path.normalize(String(call[0])));
-    expect(writtenPaths).not.toContain(path.normalize(markdownPath));
-    expect(writtenPaths).not.toContain(path.normalize(extraPath));
+      expect(requestDownload("f_old0000001")?.status).toBe("pending_audio");
+      await poller.trigger();
 
-    const fetchedUrls = fetchMock.mock.calls.map((call) => String(call[0]));
-    expect(fetchedUrls).not.toContain(contentUrl);
-    expect(fetchedUrls).not.toContain(extraUrl);
+      expect(clientMocks.getFile).toHaveBeenCalledWith("f_old0000001");
+      expect(getRecordingById("f_old0000001")?.status).toBe("complete");
+    });
+
+    it("widening the window brings older recordings into scope", async () => {
+      const old = NOW - 90 * DAY;
+      upsertFromPlaud(toRecordingMeta(listed("f_old0000001", old))!);
+      clientMocks.getFile.mockResolvedValue(detail("f_old0000001", old));
+      loadConfig.mockReturnValue({ ...baseConfig, historyDays: 120 });
+
+      await poller.trigger();
+
+      expect(clientMocks.getFile).toHaveBeenCalledWith("f_old0000001");
+    });
+  });
+
+  describe("downloaded files", () => {
+    const ID = "f_recent0001";
+    const START = NOW - DAY;
+
+    beforeEach(() => {
+      clientMocks.listFiles.mockResolvedValueOnce([listed(ID, START)]);
+      clientMocks.getFile.mockResolvedValue(detail(ID, START));
+    });
+
+    it("writes audio, transcript, extra blocks, summary and other notes", async () => {
+      await poller.trigger();
+
+      expect(clientMocks.downloadToFile).toHaveBeenCalledWith(
+        expect.stringContaining("o_1.ogg"),
+        expect.stringMatching(/audio\.ogg$/),
+      );
+      expect(writtenFiles()).toEqual(
+        expect.arrayContaining([
+          "metadata.json",
+          "transcript.json",
+          "transcript.txt",
+          "transcript_polished.json",
+          "outline.json",
+          "summary.md",
+          "Meeting_minutes__consumer_note__inutes99.md",
+        ]),
+      );
+      // Linked content (the polished transcript) was fetched; inline content was not.
+      expect(clientMocks.fetchContentText).toHaveBeenCalledTimes(1);
+    });
+
+    it("never stores the pre-signed links in metadata.json", async () => {
+      await poller.trigger();
+      const call = fsMocks.writeFileSync.mock.calls.find((c) => String(c[0]).includes("metadata.json"));
+      const written = String(call?.[1]);
+      expect(written).not.toContain("X-Amz");
+      expect(written).not.toContain("presigned_url");
+      expect(written).not.toContain("data_link");
+    });
+
+    it("keeps existing note files on a normal sync but rewrites them on resync", async () => {
+      fsMocks.existsSync.mockImplementation((p: string) => String(p).endsWith("outline.json"));
+      await poller.trigger();
+      expect(writtenFiles()).not.toContain("outline.json");
+
+      fsMocks.renameSync.mockClear();
+      await poller.resyncRecording(ID);
+      expect(writtenFiles()).toContain("outline.json");
+      expect(clientMocks.downloadToFile).toHaveBeenCalledTimes(1); // audio not fetched again
+    });
+
+    it("records an error and retries later when Plaud has no audio link yet", async () => {
+      clientMocks.getFile.mockResolvedValue(detail(ID, START, { presigned_url: null }));
+      await poller.trigger();
+      const row = getRecordingById(ID)!;
+      expect(row.audioDownloadedAt).toBeNull();
+      expect(row.lastError).toMatch(/no audio link/);
+      expect(row.transcriptDownloadedAt).not.toBeNull();
+    });
+  });
+
+  describe("transcript availability", () => {
+    it("stops asking about an old recording Plaud never transcribed", async () => {
+      const old = NOW - 20 * DAY;
+      clientMocks.listFiles.mockResolvedValueOnce([listed("f_quiet00001", old)]);
+      clientMocks.getFile.mockResolvedValue(detail("f_quiet00001", old, { source_list: [], note_list: [] }));
+
+      await poller.trigger();
+      expect(clientMocks.getFile).toHaveBeenCalledTimes(1);
+
+      await poller.trigger();
+      expect(clientMocks.getFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps checking a recent recording that has no transcript yet", async () => {
+      const recent = NOW - 60 * 60 * 1000;
+      clientMocks.listFiles.mockResolvedValue([listed("f_fresh00001", recent)]);
+      clientMocks.getFile.mockResolvedValue(detail("f_fresh00001", recent, { source_list: [], note_list: [] }));
+
+      await poller.trigger();
+      await poller.trigger();
+      expect(clientMocks.getFile).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("discovery", () => {
+    const page = (offset: number, n: number): PlaudFileSummary[] =>
+      Array.from({ length: n }, (_, i) => listed(`f_page${String(offset + i).padStart(6, "0")}`, NOW - 200 * DAY));
+
+    it("walks the whole list until it has been indexed once", async () => {
+      clientMocks.listFiles
+        .mockResolvedValueOnce(page(0, POLLER_LIST_PAGE_SIZE))
+        .mockResolvedValueOnce(page(POLLER_LIST_PAGE_SIZE, 3));
+      await poller.trigger();
+      expect(clientMocks.listFiles).toHaveBeenCalledTimes(2);
+      expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ libraryIndexedAt: expect.any(Number) }));
+    });
+
+    it("after indexing, a routine poll stops at the first page with nothing new", async () => {
+      for (const f of page(0, POLLER_LIST_PAGE_SIZE)) upsertFromPlaud(toRecordingMeta(f)!);
+      loadConfig.mockReturnValue({ ...baseConfig, libraryIndexedAt: NOW });
+      clientMocks.listFiles.mockResolvedValue(page(0, POLLER_LIST_PAGE_SIZE));
+
+      // Drive a scheduled-style cycle (not Sync Now, which always walks fully).
+      await (poller as unknown as { runOnce(): Promise<void> }).runOnce();
+      expect(clientMocks.listFiles).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("webhook delivery and re-drive (Phase 2b)", () => {
-    const ID = "abcdef0123456789";
+    const ID = "f_hook000001";
     const webhookConfig = (enabledAt?: number): AppConfig => ({
       ...baseConfig,
       webhook: { url: "https://hook.example/x", enabled: true, ...(enabledAt != null ? { enabledAt } : {}) },
@@ -218,10 +312,10 @@ describe("poller asset overwrite behavior", () => {
         .get(id);
     /** A fully-downloaded row, so only Phase 2b (not the download path) can fire for it. */
     const downloaded = (id: string, at: number): void => {
-      upsertFromPlaud(makePlaudItem({ id, filename: `Rec ${id}` }));
+      upsertFromPlaud(toRecordingMeta(listed(id, NOW - DAY))!);
       db.prepare(
-        "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ? WHERE id = ?",
-      ).run(at, at, id);
+        "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ?, summary_downloaded_at = ? WHERE id = ?",
+      ).run(at, at, at, id);
     };
 
     it("does not replay recordings downloaded before the webhook was enabled", async () => {
@@ -242,29 +336,27 @@ describe("poller asset overwrite behavior", () => {
     });
 
     it("stops the re-drive batch at the first failure and backs that delivery off", async () => {
-      downloaded("rec1000000000000", Date.now() - 1000);
-      downloaded("rec2000000000000", Date.now() - 2000);
+      downloaded("f_hook000001", Date.now() - 1000);
+      downloaded("f_hook000002", Date.now() - 2000);
       loadConfig.mockReturnValue(webhookConfig(0));
       webhookMocks.fireWebhookForRecording.mockResolvedValue(false);
 
       await poller.trigger();
 
       expect(webhookMocks.fireWebhookForRecording).toHaveBeenCalledTimes(1);
-      const [failedId, failedEvent] = [
-        (webhookMocks.fireWebhookForRecording.mock.calls[0]![1] as { id: string }).id,
-        webhookMocks.fireWebhookForRecording.mock.calls[0]![0] as string,
-      ];
+      const failedId = (webhookMocks.fireWebhookForRecording.mock.calls[0]![1] as { id: string }).id;
+      const failedEvent = webhookMocks.fireWebhookForRecording.mock.calls[0]![0] as string;
       const failed = backoff(failedId);
       const [attempts, nextAt] = failedEvent === "audio_ready" ? [failed?.a, failed?.an] : [failed?.t, failed?.tn];
       expect(attempts).toBe(1);
       expect(nextAt).toBeGreaterThan(Date.now());
-      const other = backoff(failedId === "rec1000000000000" ? "rec2000000000000" : "rec1000000000000");
+      const other = backoff(failedId === "f_hook000001" ? "f_hook000002" : "f_hook000001");
       expect(other).toMatchObject({ a: 0, t: 0 });
     });
 
     it("does not re-fire a just-failed inline delivery in the same cycle", async () => {
-      upsertFromPlaud(makePlaudItem({ is_trans: true }));
-      plaudDetailMocks.getFileDetail.mockRejectedValue(new Error("no detail"));
+      clientMocks.listFiles.mockResolvedValueOnce([listed(ID, NOW - DAY)]);
+      clientMocks.getFile.mockResolvedValue(detail(ID, NOW - DAY));
       loadConfig.mockReturnValue(webhookConfig(0));
       webhookMocks.fireWebhookForRecording.mockResolvedValue(false);
 
@@ -277,42 +369,11 @@ describe("poller asset overwrite behavior", () => {
     });
 
     it("leaves no back-off state when no webhook is configured", async () => {
-      upsertFromPlaud(makePlaudItem());
-      plaudDetailMocks.getFileDetail.mockRejectedValue(new Error("no detail"));
+      clientMocks.listFiles.mockResolvedValueOnce([listed(ID, NOW - DAY)]);
+      clientMocks.getFile.mockResolvedValue(detail(ID, NOW - DAY));
       await poller.trigger();
       expect(webhookMocks.fireWebhookForRecording).not.toHaveBeenCalled();
       expect(backoff(ID)).toMatchObject({ a: 0, an: null, t: 0, tn: null });
-    });
-  });
-
-  describe("Plaud is_trans gating", () => {
-    const ID = "abcdef0123456789";
-    const audioDone = (): void => {
-      db.prepare("UPDATE recordings SET audio_downloaded_at = 1 WHERE id = ?").run(ID);
-    };
-
-    it("does not ask Plaud for a transcript it hasn't produced", async () => {
-      upsertFromPlaud(makePlaudItem({ is_trans: false }));
-      audioDone();
-      await poller.trigger();
-      expect(plaudTranscriptMocks.getTranscriptAndSummary).not.toHaveBeenCalled();
-      expect(plaudDetailMocks.getFileDetail).not.toHaveBeenCalled();
-    });
-
-    it("fetches the transcript once Plaud reports one", async () => {
-      upsertFromPlaud(makePlaudItem({ is_trans: true }));
-      audioDone();
-      await poller.trigger();
-      expect(plaudTranscriptMocks.getTranscriptAndSummary).toHaveBeenCalledWith(ID);
-      expect(getRecordingById(ID)?.transcriptDownloadedAt).not.toBeNull();
-    });
-
-    it("a manual resync still tries, as the escape hatch", async () => {
-      upsertFromPlaud(makePlaudItem({ is_trans: false }));
-      audioDone();
-      plaudDetailMocks.getFileDetail.mockRejectedValue(new Error("no detail"));
-      await poller.resyncRecording(ID);
-      expect(plaudTranscriptMocks.getTranscriptAndSummary).toHaveBeenCalledWith(ID);
     });
   });
 
@@ -324,9 +385,7 @@ describe("poller asset overwrite behavior", () => {
     it("stops the abandoned cycle at its next checkpoint and doesn't start another alongside it", async () => {
       vi.useFakeTimers();
       let releasePage!: (v: unknown) => void;
-      plaudListMocks.listRecordings.mockImplementationOnce(
-        () => new Promise((resolve) => (releasePage = resolve)),
-      );
+      clientMocks.listFiles.mockImplementationOnce(() => new Promise((resolve) => (releasePage = resolve)));
 
       const first = poller.trigger();
       await vi.advanceTimersByTimeAsync(POLLER_RUN_WATCHDOG_MS + 1);
@@ -336,87 +395,55 @@ describe("poller asset overwrite behavior", () => {
 
       // The hung cycle is still out there: a new run must not start beside it.
       await poller.trigger();
-      expect(plaudListMocks.listRecordings).toHaveBeenCalledTimes(1);
+      expect(clientMocks.listFiles).toHaveBeenCalledTimes(1);
 
-      // Its page finally lands (a full page, so it would normally fetch page 2
-      // and upsert) — but it was aborted, so it stops right there.
-      releasePage({
-        status: 0,
-        msg: "ok",
-        data_file_total: 1,
-        data_file_list: [makePlaudItem()],
-      });
+      // Its page finally lands, but the cycle was aborted, so it stops there.
+      releasePage([listed("f_late000001", NOW - DAY)]);
       await vi.advanceTimersByTimeAsync(0);
-      expect(plaudListMocks.listRecordings).toHaveBeenCalledTimes(1);
-      expect(getRecordingById("abcdef0123456789")).toBeNull();
+      expect(clientMocks.listFiles).toHaveBeenCalledTimes(1);
+      expect(getRecordingById("f_late000001")).toBeNull();
 
       // Once it has stopped, polling resumes normally.
       await poller.trigger();
-      expect(plaudListMocks.listRecordings).toHaveBeenCalledTimes(2);
+      expect(clientMocks.listFiles).toHaveBeenCalledTimes(2);
       expect(poller.status().lastError).toBeNull();
     });
   });
+});
 
-  it("resync overwrites existing content_list markdown and mapped extra assets", async () => {
-    upsertFromPlaud(makePlaudItem());
-    db
-      .prepare(
-        "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ?, summary_downloaded_at = ? WHERE id = ?",
-      )
-      .run(111, 222, null, "abcdef0123456789");
-
-    const row = getRecordingById("abcdef0123456789");
-    expect(row).toBeTruthy();
-
-    const markdownPath = path.join(
-      baseConfig.recordingsDir!,
-      row!.folder,
-      "Meeting_Notes__outline__12345678.md",
-    );
-    const extraPath = path.join(baseConfig.recordingsDir!, row!.folder, path.normalize("permanent/marks/image.jpg"));
-    const existingPaths = new Set([path.normalize(markdownPath), path.normalize(extraPath)]);
-    fsMocks.existsSync.mockImplementation((p: string) => existingPaths.has(path.normalize(p)));
-
-    plaudDetailMocks.getFileDetail.mockResolvedValue({
-      file_id: row!.id,
-      file_name: row!.filename,
-      file_version: 1,
-      duration: row!.durationMs,
-      is_trash: false,
-      start_time: row!.startTime,
-      scene: 0,
-      serial_number: row!.serialNumber,
-      session_id: 1,
-      filetag_id_list: [],
-      content_list: [
-        {
-          data_id: "note000012345678",
-          data_type: "outline",
-          task_status: 1,
-          err_code: "",
-          err_msg: "",
-          data_title: "Outline",
-          data_tab_name: "Meeting Notes",
-          data_link: contentUrl,
-        },
-      ],
-      download_path_mapping: {
-        "permanent/marks/image.jpg": extraUrl,
-      },
+describe("poller helpers", () => {
+  it("toRecordingMeta reads Plaud's zone-less timestamps as UTC and prefers start_at", () => {
+    const meta = toRecordingMeta({
+      id: "of_1",
+      name: "  Note  ",
+      created_at: "2026-10-22T10:37:46",
+      start_at: "2026-10-22T10:30:39.438000",
+      duration: 415000,
+      serial_number: null,
     });
+    expect(meta).toEqual({
+      id: "of_1",
+      filename: "Note",
+      startTime: Date.UTC(2026, 9, 22, 10, 30, 39, 438),
+      durationMs: 415000,
+      serialNumber: "",
+    });
+  });
 
-    await poller.resyncRecording("abcdef0123456789");
+  it("toRecordingMeta rejects a recording with no usable time", () => {
+    expect(toRecordingMeta({ id: "x", name: "x", created_at: null, start_at: "nope", duration: 1, serial_number: null })).toBeNull();
+  });
 
-    // Writes go through writeFileAtomic (temp file + rename), so the final
-    // destination is the rename target, not the raw writeFileSync path.
-    const writtenPaths = fsMocks.renameSync.mock.calls.map((call) => path.normalize(String(call[1])));
-    expect(writtenPaths).toContain(path.normalize(markdownPath));
-    expect(writtenPaths).toContain(path.normalize(extraPath));
+  it("stripSignedLinks keeps block content but drops links", () => {
+    const out = stripSignedLinks(detail("f_1", NOW)) as { source_list: Record<string, unknown>[] };
+    expect(out).not.toHaveProperty("presigned_url");
+    expect(out.source_list[0]).toHaveProperty("data_content");
+    expect(out.source_list[0]).not.toHaveProperty("data_link");
+  });
 
-    const fetchedUrls = fetchMock.mock.calls.map((call) => String(call[0]));
-    expect(fetchedUrls).toContain(contentUrl);
-    expect(fetchedUrls).toContain(extraUrl);
-
-    expect(plaudAudioMocks.downloadAudio).not.toHaveBeenCalled();
+  it("noteFileName is filesystem-safe and distinct per note", () => {
+    expect(noteFileName({ data_id: "o_abcdef123456", data_type: "consumer_note", data_tab_name: "Q&A: next/steps" })).toBe(
+      "Q&A_next_steps__consumer_note__ef123456.md",
+    );
   });
 });

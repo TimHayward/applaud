@@ -2,9 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   flattenTranscript,
   extractMarkdownFromSummaryPayload,
-  extractSummaryMarkdown,
   type TranscriptSegment,
-  type TranssummResponse,
 } from "./transcript.js";
 
 function seg(partial: Partial<TranscriptSegment>): TranscriptSegment {
@@ -108,61 +106,5 @@ describe("extractMarkdownFromSummaryPayload", () => {
     expect(
       extractMarkdownFromSummaryPayload({ ai_content: "   ", markdown: "real" }),
     ).toBe("real");
-  });
-});
-
-describe("extractSummaryMarkdown — fallback chain across the response object", () => {
-  function resp(partial: Partial<TranssummResponse>): TranssummResponse {
-    return {
-      status: 200,
-      msg: "ok",
-      data_result: null,
-      data_result_summ: null,
-      data_result_summ_mul: null,
-      outline_result: null,
-      ...partial,
-    };
-  }
-
-  it("prefers data_result_summ when present", () => {
-    const out = extractSummaryMarkdown(
-      resp({ data_result_summ: { content: { markdown: "# primary" } } }),
-    );
-    expect(out).toBe("# primary");
-  });
-
-  it("falls back to data_result_summ_mul when data_result_summ is empty", () => {
-    const out = extractSummaryMarkdown(
-      resp({
-        data_result_summ: null,
-        data_result_summ_mul: { ai_content: "# multi" },
-      }),
-    );
-    expect(out).toBe("# multi");
-  });
-
-  it("falls back to data_note_result when both summ fields are empty", () => {
-    const out = extractSummaryMarkdown(
-      resp({
-        data_note_result: { markdown: "# note" },
-      }),
-    );
-    expect(out).toBe("# note");
-  });
-
-  it("synthesizes a Topics section from outline_result as last resort", () => {
-    const out = extractSummaryMarkdown(
-      resp({
-        outline_result: [
-          { start_time: 0, end_time: 10_000, topic: "Intro" },
-          { start_time: 60_000, end_time: 90_000, topic: "Decision" },
-        ],
-      }),
-    );
-    expect(out).toBe("## Topics\n\n- **00:00** — Intro\n- **01:00** — Decision");
-  });
-
-  it("returns null when nothing in the response carries a summary", () => {
-    expect(extractSummaryMarkdown(resp({}))).toBeNull();
   });
 });

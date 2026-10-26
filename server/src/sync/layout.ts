@@ -24,7 +24,8 @@ export function dateStamp(startTimeMs: number): string {
 
 export function folderName(startTimeMs: number, filename: string, id: string): string {
   const safe = sanitizeFilename(filename) || "recording";
-  const shortId = id.slice(0, 8);
+  // Plaud ids are time-ordered (`f_019f3c…`), so the tail is the distinctive part.
+  const shortId = id.slice(-8);
   return `${dateStamp(startTimeMs)}_${safe}__${shortId}`;
 }
 
@@ -51,10 +52,10 @@ const AUDIO_EXTENSIONS: Record<string, string> = {
 };
 
 /**
- * Resolve the on-disk audio filename from Plaud's `filetype` field. Tolerant
- * of bare extensions ("mp3"), dotted (".mp3"), and mime types ("audio/mpeg").
- * Falls back to `audio.ogg` for anything unrecognized so existing behavior is
- * preserved for the common case.
+ * Resolve the on-disk audio filename from a file type or extension (such as
+ * the extension of Plaud's signed audio URL). Tolerant of bare extensions
+ * ("mp3"), dotted (".mp3"), and mime types ("audio/mpeg"). Falls back to
+ * `audio.ogg` for anything unrecognized.
  */
 export function audioFilenameForFiletype(filetype?: string | null): string {
   if (!filetype) return DEFAULT_AUDIO_FILENAME;

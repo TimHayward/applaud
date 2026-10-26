@@ -33,6 +33,18 @@ function dateStringToToMs(s: string): number | undefined {
 }
 
 function StatusDots({ row }: { row: RecordingRow }): JSX.Element {
+  if (row.status === "metadata_only") {
+    return (
+      <div className="flex items-center gap-2 text-[10px] font-label font-bold uppercase tracking-widest">
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-surface-container-highest text-outline"
+          title="Older than the history window: details only. Download to fetch audio, transcript and notes."
+        >
+          details only
+        </span>
+      </div>
+    );
+  }
   const hasAudio = !!row.audioDownloadedAt;
   const hasTranscript = !!row.transcriptDownloadedAt;
   const hasSummary =
@@ -155,6 +167,26 @@ export function Dashboard(): JSX.Element {
     });
     try {
       await api.resyncRecording(id);
+      await qc.invalidateQueries({ queryKey: ["recordings"] });
+    } catch (err) {
+      setResyncErrors((prev) => ({ ...prev, [id]: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setResyncingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  /** Queue a details-only recording for download; progress arrives over the sync stream. */
+  const downloadRecording = async (id: string, e: MouseEvent): Promise<void> => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (resyncingIds.has(id)) return;
+    setResyncingIds((prev) => new Set(prev).add(id));
+    try {
+      await api.downloadRecording(id);
       await qc.invalidateQueries({ queryKey: ["recordings"] });
     } catch (err) {
       setResyncErrors((prev) => ({ ...prev, [id]: err instanceof Error ? err.message : String(err) }));
@@ -424,16 +456,37 @@ export function Dashboard(): JSX.Element {
                     <span>{formatDateShort(r.startTime)}</span>
                     <span className="w-1 h-1 rounded-full bg-outline-variant" />
                     <span>{formatDurationClock(r.durationMs)}</span>
-                    <span className="w-1 h-1 rounded-full bg-outline-variant" />
-                    <span>{formatBytes(r.filesizeBytes)}</span>
+                    {r.filesizeBytes > 0 && (
+                      <>
+                        <span className="w-1 h-1 rounded-full bg-outline-variant" />
+                        <span>{formatBytes(r.filesizeBytes)}</span>
+                      </>
+                    )}
                   </div>
                   {resyncErrors[r.id] && (
-                    <p className="mt-1 text-xs text-error">Resync failed: {resyncErrors[r.id]}</p>
+                    <p className="mt-1 text-xs text-error">
+                      {r.status === "metadata_only" ? "Download failed" : "Resync failed"}: {resyncErrors[r.id]}
+                    </p>
                   )}
                 </div>
               </div>
               <div className="relative flex items-center gap-3">
                 <StatusDots row={r} />
+                {r.status === "metadata_only" ? (
+                  <button
+                    className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-primary text-on-primary hover:bg-primary/90 transition-all active:scale-95 shadow-sm"
+                    onClick={(e) => void downloadRecording(r.id, e)}
+                    title="Download recording"
+                    aria-label="Download recording"
+                    disabled={resyncingIds.has(r.id)}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={resyncingIds.has(r.id) ? "animate-pulse" : ""}>
+                      <path d="M12 3v12" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <path d="M5 21h14" />
+                    </svg>
+                  </button>
+                ) : (
                 <button
                   className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-primary text-on-primary hover:bg-primary/90 transition-all active:scale-95 shadow-sm"
                   onClick={(e) => void resyncRecording(r.id, e)}
@@ -447,6 +500,7 @@ export function Dashboard(): JSX.Element {
                     <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
                   </svg>
                 </button>
+                )}
               </div>
             </Link>
           ))}

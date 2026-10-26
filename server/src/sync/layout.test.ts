@@ -107,18 +107,20 @@ describe("dateStamp", () => {
 });
 
 describe("folderName", () => {
-  it("composes date + sanitized filename + 8-char id", () => {
-    const out = folderName(
-      Date.UTC(2026, 3, 11, 12, 0),
-      "Team standup",
-      "abcdef0123456789feedfacecafebabe",
-    );
-    expect(out).toBe("2026-04-11_Team_standup__abcdef01");
+  it("composes date + sanitized filename + the id's last 8 characters", () => {
+    const out = folderName(Date.UTC(2026, 3, 11, 12, 0), "Team standup", "f_019f3c20aa11b2c3d4e5f6a7b8c9d0e1");
+    expect(out).toBe("2026-04-11_Team_standup__b8c9d0e1");
   });
 
   it("falls back to 'recording' when filename sanitizes to empty", () => {
-    const out = folderName(Date.UTC(2026, 3, 11), "...", "abcdef01zzzzzzzz");
+    const out = folderName(Date.UTC(2026, 3, 11), "...", "zzzzzzzzabcdef01");
     expect(out).toBe("2026-04-11_recording__abcdef01");
+  });
+
+  it("distinguishes Plaud's time-ordered ids, which share a long prefix", () => {
+    const a = folderName(Date.UTC(2026, 3, 11), "Standup", "f_019f3c21aa11b2c3d4e5f6a7b8c90001");
+    const b = folderName(Date.UTC(2026, 3, 11), "Standup", "f_019f3c21aa11b2c3d4e5f6a7b8c90002");
+    expect(a).not.toBe(b);
   });
 
   it("two recordings with the SAME filename + date + different id produce different folders", () => {
@@ -127,11 +129,11 @@ describe("folderName", () => {
     expect(a).not.toBe(b);
   });
 
-  it("two recordings with the same id prefix collide (known limitation — short id)", () => {
-    // Documented behavior: only first 8 chars of id are used. If two ids share
-    // the first 8 chars, the folders collide. This is a known tradeoff.
-    const a = folderName(Date.UTC(2026, 3, 11), "Standup", "abcdef01-different-tail");
-    const b = folderName(Date.UTC(2026, 3, 11), "Standup", "abcdef01-yet-another");
+  it("two recordings with the same id suffix collide (known limitation — short id)", () => {
+    // Documented behavior: only the last 8 chars of id are used. Same name,
+    // same day and same id tail is needed for a collision.
+    const a = folderName(Date.UTC(2026, 3, 11), "Standup", "different-head-abcdef01");
+    const b = folderName(Date.UTC(2026, 3, 11), "Standup", "another-head-abcdef01");
     expect(a).toBe(b);
   });
 });

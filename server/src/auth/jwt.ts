@@ -1,9 +1,8 @@
 /**
  * Decode a JWT payload without verifying the signature.
  *
- * Used only to read `iat`/`exp` so the browser-detection picker can choose
- * the newest token among multiple profiles. We never trust this output for
- * authorization — Plaud's API is the source of truth.
+ * Used only to read `exp` so token renewal can be scheduled. We never trust
+ * this output for authorization; Plaud's API is the source of truth.
  */
 
 export interface JwtClaims {

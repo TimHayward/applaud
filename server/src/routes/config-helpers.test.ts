@@ -8,20 +8,20 @@ const baseConfig: AppConfig = {
   token: null,
   tokenExp: null,
   tokenEmail: null,
-  plaudRegion: null,
+  refreshToken: null,
+  refreshTokenExp: null,
+  plaudClientId: null,
+  plaudRedirectUri: null,
+  plaudConnectedAt: null,
+  historyDays: 30,
+  installedAt: null,
+  libraryIndexedAt: null,
   recordingsDir: "/tmp/recordings",
   webhook: null,
   pollIntervalMinutes: 10,
   bind: { host: "127.0.0.1", port: 44471 },
   publicBaseUrl: null,
   lanToken: null,
-  authMode: null,
-  ut: null,
-  utExp: null,
-  urt: null,
-  urtExp: null,
-  plaudWorkspaceId: null,
-  importPlaudDeleted: false,
 };
 
 describe("redactConfig", () => {
@@ -35,13 +35,9 @@ describe("redactConfig", () => {
     expect(out.token).toBeNull();
   });
 
-  it("redacts the first-party ut/urt secrets when set, leaves them null when absent", () => {
-    const withSecrets = redactConfig({ ...baseConfig, ut: "eyJ.ut", urt: "eyJ.urt" });
-    expect(withSecrets.ut).toBe(SECRET_REDACTED);
-    expect(withSecrets.urt).toBe(SECRET_REDACTED);
-    const without = redactConfig({ ...baseConfig, ut: null, urt: null });
-    expect(without.ut).toBeNull();
-    expect(without.urt).toBeNull();
+  it("redacts the Plaud refresh token when set, leaves it null when absent", () => {
+    expect(redactConfig({ ...baseConfig, refreshToken: "eyJ.rt" }).refreshToken).toBe(SECRET_REDACTED);
+    expect(redactConfig({ ...baseConfig, refreshToken: null }).refreshToken).toBeNull();
   });
 
   it("redacts webhook.secret when set", () => {
