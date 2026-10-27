@@ -18,6 +18,11 @@ Plaud 4.0 moved accounts to a new web platform, and the browser-session sign-in 
 - **Download** on a details-only recording (dashboard row or detail page, `POST /api/recordings/:id/download`) fetches that one recording in full.
 - `GET /api/auth/status`, `POST /api/auth/plaud/start`, `GET /api/auth/plaud/callback`, `POST /api/auth/plaud/complete`, `POST /api/auth/disconnect`.
 
+- **Docker / Portainer:** `docker-compose.yml` builds from the repository and takes `APPLAUD_PORT`, `APPLAUD_ALLOWED_HOSTS` and `APPLAUD_LAN_TOKEN` as variables; its volumes are now `config` and `recordings`. New guide: [`docs/portainer.md`](docs/portainer.md).
+
+### Fixed
+- In a container, an empty `APPLAUD_LAN_TOKEN` (for example a blank stack variable) was stored as the token, which left `/api` and `/media` unauthenticated. An empty value is now treated as unset and a token is generated.
+
 ### Removed
 - Browser session detection, login watching, and pasted `tokenstr` / `pld_ut` / `pld_urt` credentials (`/api/auth/detect`, `/accept`, `/validate`, `/watch`).
 - **Import recordings deleted in Plaud** and the Plaud-trash probes: the official API does not expose Plaud's trash. Applaud's own Trash is unchanged.

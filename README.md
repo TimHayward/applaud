@@ -204,40 +204,25 @@ The `n8n/` folder contains importable n8n workflow templates. To use one, open n
 
 ## Docker
 
-Pull the pre-built image and run:
+> **Portainer:** see [`docs/portainer.md`](docs/portainer.md) for a step-by-step guide (stack built from this repository, LAN-only access, network requirements, updates and backups).
+
+The published image (`ghcr.io/timhayward/applaud:latest`) is still **v0.5.12**, which predates the Plaud 4.0 sign-in. Until the next release, build from source:
 
 ```bash
-docker run -d \
-  --name applaud \
-  -p 44471:44471 \
-  -v applaud-config:/data/config \
-  -v applaud-recordings:/data/recordings \
-  ghcr.io/timhayward/applaud:latest
+git clone https://github.com/TimHayward/applaud.git
+cd applaud
+docker compose up -d --build
 ```
 
-Or build from source:
+`docker-compose.yml` builds the image, creates the `config` and `recordings` volumes, and reads three optional variables (from the shell or an `.env` file):
 
-```bash
-docker build -t applaud .
-docker run -d \
-  --name applaud \
-  -p 44471:44471 \
-  -v applaud-config:/data/config \
-  -v applaud-recordings:/data/recordings \
-  applaud
-```
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `APPLAUD_PORT` | `44471` | Host port |
+| `APPLAUD_ALLOWED_HOSTS` | empty | Hostname(s) you open Applaud on, when not an IP or a `.lan`/`.local` name |
+| `APPLAUD_LAN_TOKEN` | generated | Pin the LAN access token (first start only) |
 
-### Docker Compose
-
-Or use the bundled compose file:
-
-```bash
-docker compose up -d
-```
-
-To build from source instead of pulling the image, uncomment `build: .` (and comment out `image:`) in `docker-compose.yml`.
-
-Open `http://localhost:44471/setup` to configure. On first run, the setup wizard will ask you to paste your Plaud token manually (browser auto-detect doesn't work inside a container).
+Open `http://<host>:44471/setup` (with `?token=…`, see below), click **Sign in with Plaud**, and enter `/data/recordings` as the recordings folder. The container needs outbound HTTPS to Plaud (`mcp.plaud.ai`, `platform.plaud.ai`, Plaud's storage on `*.amazonaws.com`) but no inbound access from the internet.
 
 ### Docker access token
 
