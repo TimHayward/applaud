@@ -114,7 +114,10 @@ function ensureContainerAuth(): void {
     );
     return;
   }
-  const provided = process.env.APPLAUD_LAN_TOKEN;
+  // An empty value (e.g. a blank `${APPLAUD_LAN_TOKEN:-}` in a compose file)
+  // means "not set". Taken literally it would store "" as the token, which the
+  // guard reads as "no token" and serves everything unauthenticated.
+  const provided = process.env.APPLAUD_LAN_TOKEN?.trim() || undefined;
   if (provided && provided.length < LAN_TOKEN_MIN_LENGTH) {
     logger.error(
       { minLength: LAN_TOKEN_MIN_LENGTH },
