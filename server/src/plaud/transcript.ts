@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 export interface TranscriptSegment {
+  /** Plaud's stable id for the segment; present on every segment seen so far. */
+  segment_uid?: string;
   start_time: number;
   end_time: number;
   content: string;

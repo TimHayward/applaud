@@ -91,7 +91,7 @@ function listed(id: string, startMs: number, over: Partial<PlaudFileSummary> = {
 }
 
 const SEGMENTS = JSON.stringify([
-  { start_time: 0, end_time: 1000, content: "Hello.", speaker: "Speaker 1", original_speaker: "Speaker 1" },
+  { segment_uid: "seg-1", start_time: 0, end_time: 1000, content: "Hello.", speaker: "Speaker 1", original_speaker: "Speaker 1" },
 ]);
 
 function detail(id: string, startMs: number, over: Partial<PlaudFileDetail> = {}): PlaudFileDetail {
