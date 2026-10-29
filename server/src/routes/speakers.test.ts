@@ -9,7 +9,13 @@ import { DEFAULT_SPEAKER_CONFIG, type RecordingSpeakersResponse, type SetSpeaker
 
 const { loadConfig, runner } = vi.hoisted(() => ({
   loadConfig: vi.fn(),
-  runner: { labelsChanged: vi.fn(async () => {}), enqueue: vi.fn(), status: vi.fn(), check: vi.fn() },
+  runner: {
+    labelsChanged: vi.fn(async () => {}),
+    peopleChanged: vi.fn(),
+    enqueue: vi.fn(),
+    status: vi.fn(),
+    check: vi.fn(),
+  },
 }));
 vi.mock("../config.js", () => ({ loadConfig }));
 vi.mock("../speakers/service.js", () => ({ speakerRunner: () => runner }));
@@ -62,6 +68,7 @@ describe("speakersRouter", () => {
     ).run(toBlob(new Float32Array([1, 0, 0])));
     enable(true);
     runner.labelsChanged.mockClear();
+    runner.peopleChanged.mockClear();
     runner.enqueue.mockClear();
 
     const app = express();
@@ -97,6 +104,23 @@ describe("speakersRouter", () => {
         margin: null,
         speechMs: 30_000,
         candidates: [],
+        clips: [{ segmentKey: "u1", startMs: 0, endMs: 4_000, text: "Hi" }],
+        segments: 1,
+      },
+    ]);
+    expect(body.segments).toEqual([
+      {
+        key: "u1",
+        startMs: 0,
+        endMs: 4_000,
+        text: "Hi",
+        speaker: "Speaker 1",
+        speakerId: null,
+        plaudSpeaker: "Speaker 1",
+        plaudLabel: "Speaker 1",
+        status: "unknown",
+        suggestedSpeaker: null,
+        override: false,
       },
     ]);
     expect(JSON.stringify(body)).not.toMatch(/centroid|vector/);
@@ -111,8 +135,30 @@ describe("speakersRouter", () => {
     const body = (await res.json()) as SetSpeakerLabelResponse;
     expect(body.voiceprint).toBe("added");
     expect(body.labels[0]).toMatchObject({ status: "confirmed", assignedBy: "user", speakerName: "Ann" });
-    expect(body.people).toEqual([{ id: 1, name: "Ann", isOwner: false, voiceprints: 1 }]);
+    expect(body.people).toEqual([
+      { id: 1, name: "Ann", isOwner: false, voiceprints: 1, recordings: 1, lowResemblance: 0 },
+    ]);
+    expect(body.segments[0]).toMatchObject({ speaker: "Ann", speakerId: 1, status: "confirmed" });
     expect(runner.labelsChanged).toHaveBeenCalledWith("r1");
+  });
+
+  it("renames, merges and deletes people, refreshing outputs each time", async () => {
+    db.prepare("INSERT INTO speakers (id, name, created_at, updated_at) VALUES (1, 'Ann', 0, 0), (2, 'Annie', 0, 0)").run();
+    const renamed = await call("PATCH", "/speakers/people/1", { name: "Ann Lee" });
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as { people: { name: string }[] }).people.map((p) => p.name)).toEqual([
+      "Ann Lee",
+      "Annie",
+    ]);
+    expect((await call("POST", "/speakers/people/2/merge", { intoId: 1 })).status).toBe(200);
+    expect((await call("DELETE", "/speakers/people/1")).status).toBe(200);
+    expect(runner.peopleChanged).toHaveBeenCalledTimes(3);
+    expect((await call("DELETE", "/speakers/people/1")).status).toBe(404);
+    expect((await call("PATCH", "/speakers/people/abc", { name: "X" })).status).toBe(400);
+  });
+
+  it("counts labels to review", async () => {
+    expect(await (await call("GET", "/speakers/review")).json()).toEqual({ enabled: true, recordings: { r1: 1 } });
   });
 
   it("validates label changes", async () => {
@@ -143,8 +189,10 @@ describe("speakersRouter", () => {
       labels: [],
       overrides: {},
       people: [],
+      segments: [],
     });
     expect((await call("PUT", "/recordings/r1/speakers/Speaker%201", { status: "ignored" })).status).toBe(409);
+    expect((await call("DELETE", "/speakers/people/1")).status).toBe(409);
     expect((await call("POST", "/recordings/r1/speakers/reanalyse")).status).toBe(409);
   });
 });

@@ -158,6 +158,11 @@ export class SpeakerRunner {
     this.refresh([recordingId]);
   }
 
+  /** People were renamed, merged or deleted, or voiceprints removed: re-match and rewrite every output that changed. */
+  peopleChanged(): void {
+    this.refresh(analysedRecordings());
+  }
+
   /**
    * Re-match every recording from stored centroids (no model run) and rewrite
    * the `-Applaud` transcripts that changed, plus those of `recordings`.

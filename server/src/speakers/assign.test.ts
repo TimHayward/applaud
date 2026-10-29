@@ -6,7 +6,7 @@ vi.mock("../logger.js", () => ({
 }));
 
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
-import { labelCandidates, matchRecording, loadLibrary, rematchAll, setLabel, setSegmentSpeaker } from "./assign.js";
+import { matchRecording, loadLibrary, rematchAll, setLabel, setSegmentSpeaker } from "./assign.js";
 import { addVoiceprint, removeLabelVoiceprints } from "./library.js";
 import type { MatchThresholds } from "./matcher.js";
 import { toBlob } from "./vectors.js";
@@ -108,15 +108,6 @@ describe("matchRecording", () => {
     expect(row("r1", "S1")).toEqual({ status: "unknown", speaker_id: null, assigned_by: null });
   });
 
-  it("ranks candidates for the labelling UI", () => {
-    person(1, "Ann");
-    person(2, "Bob");
-    voiceprint(1, "old", "S1", A);
-    voiceprint(2, "old", "S2", B);
-    labelRow("r1", "S1", new Float32Array([0.9, 0.1, 0]));
-    expect(labelCandidates("r1", "S1", MODEL).map((c) => c.speakerId)).toEqual([1, 2]);
-    expect(labelCandidates("r1", "S1", "m@other")).toEqual([]);
-  });
 });
 
 describe("setLabel", () => {

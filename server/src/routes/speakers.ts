@@ -5,6 +5,8 @@ import {
   type RecordingSpeakerLabel,
   type RecordingSpeakersResponse,
   type SetSpeakerLabelResponse,
+  type SpeakerPeopleResponse,
+  type SpeakerReviewResponse,
   type SpeakerStatusResponse,
 } from "@applaud/shared";
 import { loadConfig } from "../config.js";
@@ -12,11 +14,25 @@ import { getDb } from "../db.js";
 import { logger } from "../logger.js";
 import { getRecordingById } from "../sync/state.js";
 import { observedPlaudNames } from "../speakers/analyse.js";
-import { labelCandidates, setLabel, setSegmentSpeaker } from "../speakers/assign.js";
-import { loadSegments } from "../speakers/outputs.js";
-import { listPeople, PERSON_NAME_MAX } from "../speakers/people.js";
+import { loadLibrary, setLabel, setSegmentSpeaker } from "../speakers/assign.js";
+import { selectClips } from "../speakers/clips.js";
+import { deleteVoiceprint } from "../speakers/library.js";
+import { rankCandidates } from "../speakers/matcher.js";
+import { applaudSegments, loadSegments } from "../speakers/outputs.js";
+import {
+  deletePerson,
+  labelsToReview,
+  listPeople,
+  listVoiceprints,
+  mergePeople,
+  PERSON_NAME_MAX,
+  renamePerson,
+  type PersonChange,
+} from "../speakers/people.js";
 import { describeError } from "../speakers/runner.js";
+import type { SpeakerSegment } from "../speakers/segments.js";
 import { speakerRunner } from "../speakers/service.js";
+import { fromBlob } from "../speakers/vectors.js";
 
 /** Mounted at /api: speaker identification status, the capability check, labels and re-analysis. */
 export const speakersRouter = Router();
@@ -51,7 +67,87 @@ speakersRouter.post("/speakers/check", async (_req, res) => {
 });
 
 speakersRouter.get("/speakers/people", (_req, res) => {
-  res.json({ people: speakerConfig(loadConfig()).enabled ? listPeople() : [] });
+  const body: SpeakerPeopleResponse = { people: speakerConfig(loadConfig()).enabled ? listPeople() : [] };
+  res.json(body);
+});
+
+/** Labels still to name or confirm, per recording: the dashboard's "needs labelling" marks. */
+speakersRouter.get("/speakers/review", (_req, res) => {
+  const enabled = speakerConfig(loadConfig()).enabled;
+  const body: SpeakerReviewResponse = { enabled, recordings: enabled ? labelsToReview() : {} };
+  res.json(body);
+});
+
+/** 409 while the feature is off; otherwise the numeric id from the path (400 when it isn't one). */
+function personId(raw: string | undefined, res: Response): number | null {
+  if (!speakerConfig(loadConfig()).enabled) {
+    res.status(409).json({ error: "speaker identification is off" });
+    return null;
+  }
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "invalid id" });
+    return null;
+  }
+  return id;
+}
+
+/** Send the outcome of a people change; on success, re-match and rewrite outputs, then list people. */
+function peopleResult(out: PersonChange, res: Response): void {
+  if (!out.ok) {
+    res.status(out.code).json({ error: out.error });
+    return;
+  }
+  try {
+    speakerRunner().peopleChanged();
+  } catch (err) {
+    logger.warn({ err: describeError(err) }, "could not refresh speakers after a people change");
+  }
+  const body: SpeakerPeopleResponse = { people: listPeople() };
+  res.json(body);
+}
+
+speakersRouter.patch("/speakers/people/:id", (req, res) => {
+  const id = personId(req.params.id, res);
+  if (id === null) return;
+  const parsed = z.object({ name: z.string().max(PERSON_NAME_MAX * 2) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  peopleResult(renamePerson(id, parsed.data.name), res);
+});
+
+speakersRouter.post("/speakers/people/:id/merge", (req, res) => {
+  const id = personId(req.params.id, res);
+  if (id === null) return;
+  const parsed = z.object({ intoId: z.number().int().positive() }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  peopleResult(mergePeople(id, parsed.data.intoId), res);
+});
+
+speakersRouter.delete("/speakers/people/:id", (req, res) => {
+  const id = personId(req.params.id, res);
+  if (id === null) return;
+  peopleResult(deletePerson(id), res);
+});
+
+speakersRouter.get("/speakers/people/:id/voiceprints", (req, res) => {
+  const id = personId(req.params.id, res);
+  if (id === null) return;
+  res.json({ voiceprints: listVoiceprints(id) });
+});
+
+speakersRouter.delete("/speakers/voiceprints/:id", (req, res) => {
+  const id = personId(req.params.id, res);
+  if (id === null) return;
+  peopleResult(
+    deleteVoiceprint(id) === null ? { ok: false, code: 404, error: "voiceprint not found" } : { ok: true },
+    res,
+  );
 });
 
 /** 409 while the feature is off, 404 for an unknown recording; otherwise the recording id. */
@@ -70,7 +166,8 @@ function guard(id: string, res: Response): string | null {
 
 function recordingSpeakers(recordingId: string): RecordingSpeakersResponse {
   const d = getDb();
-  const activeModelId = speakerConfig(loadConfig()).activeModelId;
+  const cfg = loadConfig();
+  const activeModelId = speakerConfig(cfg).activeModelId;
   const analysed = d.prepare("SELECT speakers_processed_at FROM recordings WHERE id = ?").get(recordingId) as
     | { speakers_processed_at: number | null }
     | undefined;
@@ -78,7 +175,7 @@ function recordingSpeakers(recordingId: string): RecordingSpeakersResponse {
   const names = new Map(people.map((p) => [p.id, p.name]));
   const rows = d
     .prepare(
-      `SELECT plaud_label, plaud_name, status, assigned_by, speaker_id, confidence, margin, speech_ms
+      `SELECT plaud_label, plaud_name, status, assigned_by, speaker_id, confidence, margin, speech_ms, centroid, model_id
        FROM recording_speakers WHERE recording_id = ? ORDER BY plaud_label`,
     )
     .all(recordingId) as {
@@ -90,10 +187,25 @@ function recordingSpeakers(recordingId: string): RecordingSpeakersResponse {
     confidence: number | null;
     margin: number | null;
     speech_ms: number | null;
+    centroid: Buffer | null;
+    model_id: string | null;
   }[];
   const overrides = d
     .prepare("SELECT segment_key, speaker_id FROM segment_overrides WHERE recording_id = ?")
     .all(recordingId) as { segment_key: string; speaker_id: number }[];
+
+  // The transcript is read for clips and the named transcript; a recording
+  // whose transcript can't be read still lists its labels.
+  let segments: SpeakerSegment[] = [];
+  try {
+    segments = (cfg.recordingsDir && loadSegments(cfg.recordingsDir, recordingId)?.segments) || [];
+  } catch (err) {
+    logger.warn({ recordingId, err: describeError(err) }, "could not read the transcript for speakers");
+  }
+  const byLabel = new Map<string, SpeakerSegment[]>();
+  for (const s of segments) byLabel.set(s.label, [...(byLabel.get(s.label) ?? []), s]);
+  const library = activeModelId ? loadLibrary(activeModelId) : [];
+
   return {
     enabled: true,
     analysed: !!analysed?.speakers_processed_at,
@@ -107,21 +219,47 @@ function recordingSpeakers(recordingId: string): RecordingSpeakersResponse {
       confidence: r.confidence,
       margin: r.margin,
       speechMs: r.speech_ms,
-      candidates: labelCandidates(recordingId, r.plaud_label, activeModelId).map((c) => ({
-        speakerId: c.speakerId,
-        name: names.get(c.speakerId) ?? "",
-        score: c.score,
-      })),
+      candidates:
+        r.centroid && r.model_id === activeModelId
+          ? rankCandidates(fromBlob(r.centroid), library)
+              .slice(0, 3)
+              .map((c) => ({ speakerId: c.speakerId, name: names.get(c.speakerId) ?? "", score: c.score }))
+          : [],
+      clips: selectClips(byLabel.get(r.plaud_label) ?? []),
+      segments: byLabel.get(r.plaud_label)?.length ?? 0,
     })),
     overrides: Object.fromEntries(overrides.map((o) => [o.segment_key, o.speaker_id])),
     people,
+    segments: analysed?.speakers_processed_at
+      ? applaudSegments(recordingId, segments).map((s) => ({
+          key: s.segment_key,
+          startMs: s.start_time,
+          endMs: s.end_time,
+          text: s.content,
+          speaker: s.speaker,
+          speakerId: s.speaker_id,
+          plaudSpeaker: s.plaud_speaker,
+          plaudLabel: s.original_speaker,
+          status: s.label_status,
+          suggestedSpeaker: s.suggested_speaker ?? null,
+          override: s.segment_override === true,
+        }))
+      : [],
   };
 }
 
+const OFF: RecordingSpeakersResponse = {
+  enabled: false,
+  analysed: false,
+  labels: [],
+  overrides: {},
+  people: [],
+  segments: [],
+};
+
 speakersRouter.get("/recordings/:id/speakers", (req, res) => {
   if (!speakerConfig(loadConfig()).enabled) {
-    const off: RecordingSpeakersResponse = { enabled: false, analysed: false, labels: [], overrides: {}, people: [] };
-    res.json(off);
+    res.json(OFF);
     return;
   }
   const id = guard(req.params.id, res);

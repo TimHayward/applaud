@@ -1,6 +1,6 @@
 import { getDb } from "../db.js";
 import { addVoiceprint, removeLabelVoiceprints, type AddOutcome } from "./library.js";
-import { matchLabels, rankCandidates, type Candidate, type LibraryPerson, type MatchThresholds } from "./matcher.js";
+import { matchLabels, type LibraryPerson, type MatchThresholds } from "./matcher.js";
 import { resolvePerson, type PersonRef } from "./people.js";
 import { fromBlob } from "./vectors.js";
 
@@ -109,16 +109,6 @@ export function rematchAll(modelId: string | null, t: MatchThresholds, now = Dat
     }[]
   ).map((r) => r.recording_id);
   return d.transaction(() => ids.filter((id) => matchRecording(id, library, modelId, t, now)))();
-}
-
-/** The best people for a label, for the labelling UI. */
-export function labelCandidates(recordingId: string, plaudLabel: string, modelId: string | null, limit = 3): Candidate[] {
-  if (!modelId) return [];
-  const row = getDb()
-    .prepare("SELECT centroid, model_id FROM recording_speakers WHERE recording_id = ? AND plaud_label = ?")
-    .get(recordingId, plaudLabel) as { centroid: Buffer | null; model_id: string | null } | undefined;
-  if (!row?.centroid || row.model_id !== modelId) return [];
-  return rankCandidates(fromBlob(row.centroid), loadLibrary(modelId)).slice(0, limit);
 }
 
 export type LabelAction = { status: "confirmed"; person: PersonRef } | { status: "ignored" } | { status: "unknown" };

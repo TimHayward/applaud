@@ -166,6 +166,61 @@ export interface SpeakerPerson {
   isOwner: boolean;
   /** Voiceprints held for this person (never the voiceprints themselves). */
   voiceprints: number;
+  /** Recordings where they are confirmed or named automatically. */
+  recordings: number;
+  /** Voiceprints that don't sound like the person's others. */
+  lowResemblance: number;
+}
+
+/** A clip of one label's speech to listen to. */
+export interface SpeakerClip {
+  segmentKey: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+/** A transcript segment with Applaud's names applied (as in `transcript-Applaud.json`). */
+export interface SpeakerTranscriptSegment {
+  key: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+  /** Applaud's name: the person when confirmed or automatic, else Plaud's name. */
+  speaker: string;
+  speakerId: number | null;
+  /** Plaud's name for the segment. */
+  plaudSpeaker: string;
+  /** Plaud's label (`original_speaker`). */
+  plaudLabel: string;
+  status: SpeakerLabelStatus;
+  suggestedSpeaker: string | null;
+  override: boolean;
+}
+
+/** One of a person's voiceprints, described. */
+export interface SpeakerVoiceprint {
+  id: number;
+  recordingId: string;
+  recordingTitle: string | null;
+  recordingStart: number | null;
+  plaudLabel: string;
+  source: string;
+  isAnchor: boolean;
+  lowResemblance: boolean;
+  speechMs: number;
+  createdAt: number;
+}
+
+/** `GET /api/speakers/people`. */
+export interface SpeakerPeopleResponse {
+  people: SpeakerPerson[];
+}
+
+/** `GET /api/speakers/review`: labels still to name or confirm, by recording id. */
+export interface SpeakerReviewResponse {
+  enabled: boolean;
+  recordings: Record<string, number>;
 }
 
 /** One Plaud speaker label in a recording, and who Applaud thinks it is. */
@@ -185,6 +240,10 @@ export interface RecordingSpeakerLabel {
   speechMs: number | null;
   /** Best-matching people, best first. */
   candidates: { speakerId: number; name: string; score: number }[];
+  /** Up to five stretches of this label's speech, best first. */
+  clips: SpeakerClip[];
+  /** Segments Plaud gave this label. */
+  segments: number;
 }
 
 /** `GET /api/recordings/:id/speakers`. */
@@ -196,6 +255,8 @@ export interface RecordingSpeakersResponse {
   /** Segment key → person, for segments assigned on their own. */
   overrides: Record<string, number>;
   people: SpeakerPerson[];
+  /** The transcript with Applaud's names; empty until analysed. */
+  segments: SpeakerTranscriptSegment[];
 }
 
 /** Assign by an existing person's id, or by name (an existing person's, or a new one). */

@@ -101,7 +101,25 @@ export function writeApplaudTranscript(recordingsDir: string, recordingId: strin
   const loaded = loadSegments(recordingsDir, recordingId);
   if (!loaded) return "skipped";
   const { paths, segments } = loaded;
+  const out = applaudSegments(recordingId, segments);
+  const json = `${JSON.stringify(out, null, 2)}\n`;
+  const text = flattenTranscript(
+    out.map((s) => ({
+      start_time: s.start_time,
+      end_time: s.end_time,
+      content: s.content,
+      speaker: s.speaker,
+      original_speaker: s.original_speaker,
+    })),
+  );
+  const a = writeIfChanged(paths.applaudTranscriptJsonPath, json);
+  const b = writeIfChanged(paths.applaudTranscriptTxtPath, text);
+  return a || b ? "written" : "unchanged";
+}
 
+/** A recording's segments with the names stored for it applied. */
+export function applaudSegments(recordingId: string, segments: SpeakerSegment[]): ApplaudSegment[] {
+  const d = getDb();
   const labels = new Map(
     (
       d
@@ -124,20 +142,7 @@ export function writeApplaudTranscript(recordingsDir: string, recordingId: strin
     (d.prepare("SELECT id, name FROM speakers").all() as { id: number; name: string }[]).map((r) => [r.id, r.name]),
   );
 
-  const out = buildApplaudTranscript(segments, labels, overrides, names);
-  const json = `${JSON.stringify(out, null, 2)}\n`;
-  const text = flattenTranscript(
-    out.map((s) => ({
-      start_time: s.start_time,
-      end_time: s.end_time,
-      content: s.content,
-      speaker: s.speaker,
-      original_speaker: s.original_speaker,
-    })),
-  );
-  const a = writeIfChanged(paths.applaudTranscriptJsonPath, json);
-  const b = writeIfChanged(paths.applaudTranscriptTxtPath, text);
-  return a || b ? "written" : "unchanged";
+  return buildApplaudTranscript(segments, labels, overrides, names);
 }
 
 function writeIfChanged(file: string, content: string): boolean {
