@@ -2,7 +2,7 @@
 
 |               |                                                                                                                                                                                                                                          |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**    | Phase 0 complete (GO). Phase 1 built on branch `plan/single-container-speakers`; awaiting verification on the Portainer host (section 10, Phase 1 record).                                                                               |
+| **Status**    | Phase 0 complete (GO). Phase 1 built on branch `plan/single-container-speakers` and verified on the Portainer host (section 10, Phase 1 record).                                                                                          |
 | **Updated**   | 2026-10-29                                                                                                                                                                                                                               |
 | **Owner**     | Tim Hayward                                                                                                                                                                                                                              |
 | **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A). The calibration tool lived on branch `claude/nice-noether-fmry57`, which no longer exists; see section 13.                                                                       |
@@ -337,15 +337,16 @@ Model and thresholds selected on real recordings. See Appendix A. The host findi
 - Move the calibration tool from the spike branch to `tools/speaker-calibration/`, reading audio from a local recordings directory, so it can be rerun (Phase 3 exit check, future model changes).
 - `docs/portainer.md`: "Speaker identification" section (section 4.5).
 
-**Phase 1 record (2026-10-29).** Built and tested locally; not yet run in the container on the Portainer host.
+**Phase 1 record (2026-10-29).** Built and tested locally, then run in the container on the Portainer host.
 
 | Item | State |
 | --- | --- |
 | Segment fields; model licence (Apache-2.0, per ModelScope); `linux-arm64` build of `sherpa-onnx-node` (published) | Done |
 | Speaker process, supervisor, capability check, migration v5, job queue, owner enrolment, backfill, model-change re-embedding, generic-label helper, transcript normalisation | Done, with unit tests (552 tests pass) |
-| Image: ffmpeg, `sherpa-onnx-node` 1.12.28 with its native packages pinned to the same version, model baked in and SHA-256 checked | Written; the image has not been built yet (no Docker on the development machine) |
+| Image: ffmpeg, `sherpa-onnx-node` 1.12.28 with its native packages pinned to the same version, model baked in and SHA-256 checked | Done; built by Portainer from the branch (linux-x64). `docker-compose.yml` gained `pull_policy: build`, because Portainer's re-pull asked Docker Hub for `applaud:local` and failed the redeploy |
 | Settings card: on/off, status, Check again, owner name | Done |
 | End-to-end on the built server (Windows) with the real model: enable, analyse, owner enrolment, force-killing the speaker process and recovering | Done |
+| In the container on the Portainer host: capability check, backfill, owner enrolment | Done. Status Available with model `…@c5915837`. 28 of 28 analyse jobs done, none failed or retried. 99 labels: 26 confirmed as the owner from the Plaud account name, 73 unknown (Phase 2's input). 12 owner voiceprints (one anchor and the cap of 12 reached), each from 60 to 69 s of speech, none flagged low resemblance |
 | Image size before and after | Not measured |
 | Move the calibration tool to `tools/` | Not done: the spike branch was deleted (section 13) |
 
@@ -409,7 +410,7 @@ Kept here so the design is not lost. Neither is scheduled; each would be re-plan
 
 | Item                                                                                                       | Owner | Needed by          |
 | ---------------------------------------------------------------------------------------------------------- | ----- | ------------------ |
-| Build the image and run Phase 1's exit checks in the container on the Portainer host; record the image size  | User / Dev | Phase 1 sign-off |
+| Record the image size on the Portainer host (Phase 1's other container checks passed, section 10)           | User  | Phase 1 PR        |
 | Recreate the calibration tool in `tools/speaker-calibration/` (the spike branch holding it was deleted), reading audio and labels from a local recordings folder | Dev   | Phase 3 recalibration |
 | Run the named-speaker scan over existing recordings, to seed people beyond the owner                       | User  | Phase 3            |
 
