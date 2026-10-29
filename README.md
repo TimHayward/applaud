@@ -4,10 +4,6 @@ A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recording
 
 > Applaud is not affiliated with Plaud. It uses Plaud's official developer API, signing in through the OAuth server Plaud runs for its MCP integration (`mcp.plaud.ai`). Plaud documents that server for AI assistants rather than for apps like this one, so treat the integration as best effort.
 
-> [!NOTE]
-> <img src="assets/rovenotes-logo.png" align="right" width="80" alt="RoveNotes" />
->
-> **Want more features without the complexity of self-hosting?** Check out the professionally managed version at **[rovenotes.com](https://rovenotes.com)**. It includes everything in Applaud plus additional destinations — Google Drive, Notion, Obsidian, reMarkable tablet, Google Calendar, Todoist, and email (in addition to webhooks / n8n) — and supports multiple AI summaries per recording.
 
 ## Features
 
