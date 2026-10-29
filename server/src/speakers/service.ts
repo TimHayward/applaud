@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { speakerConfig } from "@applaud/shared";
+import { speakerConfig, type SpeakerConfig } from "@applaud/shared";
 import { loadConfig, updateConfig } from "../config.js";
 import { logger } from "../logger.js";
 import { getCurrentUser } from "../plaud/client.js";
 import type { Embedder } from "./embedder.js";
 import { LocalEmbedder } from "./local-embedder.js";
+import type { MatchThresholds } from "./matcher.js";
 import { SpeakerRunner } from "./runner.js";
 
 /** The model baked into the image (D10); `APPLAUD_SPEAKER_MODEL` overrides the path. */
@@ -71,6 +72,15 @@ async function ownerName(): Promise<string | null> {
   return loadConfig().plaudNickname;
 }
 
+export function matchThresholds(s: SpeakerConfig): MatchThresholds {
+  return {
+    autoThreshold: s.autoThreshold,
+    autoMargin: s.autoMargin,
+    minSpeechMs: s.minSpeechSec * 1000,
+    suggestThreshold: s.suggestThreshold,
+  };
+}
+
 let runner: SpeakerRunner | null = null;
 
 export function speakerRunner(): SpeakerRunner {
@@ -84,6 +94,7 @@ export function speakerRunner(): SpeakerRunner {
         recordingsDir: cfg.recordingsDir,
         minSpeechMs: s.minSpeechSec * 1000,
         activeModelId: s.activeModelId,
+        thresholds: matchThresholds(s),
       };
     },
     ownerName,

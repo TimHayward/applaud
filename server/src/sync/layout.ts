@@ -71,6 +71,9 @@ export interface RecordingPaths {
   audioPath: string;
   transcriptJsonPath: string;
   transcriptTxtPath: string;
+  /** Plaud's transcript with Applaud's speaker names (speaker identification). */
+  applaudTranscriptJsonPath: string;
+  applaudTranscriptTxtPath: string;
   summaryMdPath: string;
   metadataPath: string;
 }
@@ -86,6 +89,8 @@ export function recordingPaths(
     audioPath: path.join(dir, audioFilename),
     transcriptJsonPath: path.join(dir, "transcript.json"),
     transcriptTxtPath: path.join(dir, "transcript.txt"),
+    applaudTranscriptJsonPath: path.join(dir, "transcript-Applaud.json"),
+    applaudTranscriptTxtPath: path.join(dir, "transcript-Applaud.txt"),
     summaryMdPath: path.join(dir, "summary.md"),
     metadataPath: path.join(dir, "metadata.json"),
   };

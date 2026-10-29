@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type Database from "better-sqlite3";
@@ -9,7 +9,8 @@ vi.mock("../logger.js", () => ({
 }));
 
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
-import { FakeEmbedder } from "../test/fixtures/embedder.js";
+import { FakeEmbedder, hashVector } from "../test/fixtures/embedder.js";
+import { setLabel } from "./assign.js";
 import { EmbedderError } from "./embedder.js";
 import { SpeakerRunner, describeError, type RunnerSettings } from "./runner.js";
 
@@ -24,7 +25,13 @@ beforeEach(() => {
   db = setupTestDb();
   dir = mkdtempSync(path.join(os.tmpdir(), "applaud-runner-"));
   embedder = new FakeEmbedder({ modelId: "m@1" });
-  settings = { enabled: true, recordingsDir: dir, minSpeechMs: 20_000, activeModelId: null };
+  settings = {
+    enabled: true,
+    recordingsDir: dir,
+    minSpeechMs: 20_000,
+    activeModelId: null,
+    thresholds: { autoThreshold: 0.75, autoMargin: 0.1, minSpeechMs: 20_000, suggestThreshold: 0.55 },
+  };
   owner = "Tim Hayward";
   runner = new SpeakerRunner({
     embedder,
@@ -153,6 +160,37 @@ describe("SpeakerRunner", () => {
     await runner.ownerChanged();
     expect(db.prepare("SELECT COUNT(*) AS n FROM speaker_embeddings").get()).toEqual({ n: 0 });
     expect(embedder.requests.length).toBe(requests);
+  });
+
+  it("writes the Applaud transcript and labels a confirmed person in other recordings", async () => {
+    // One voice per speaker letter, the same in every recording.
+    embedder = new FakeEmbedder({ modelId: "m@1", dim: 64, vectorFor: (id) => hashVector(id.replace(/^r\d+|\d+$/g, ""), 64) });
+    runner = new SpeakerRunner({
+      embedder,
+      settings: () => settings,
+      ownerName: async () => owner,
+      setActiveModel: (id) => {
+        settings = { ...settings, activeModelId: id };
+      },
+    });
+    addRecording("r1");
+    addRecording("r2");
+    runner.start();
+    await runner.idle();
+    const r2Text = (): string => readFileSync(path.join(dir, "f_r2", "transcript-Applaud.txt"), "utf8");
+    expect(r2Text()).toContain("[00:10] Speaker 2: ");
+
+    expect(setLabel("r1", "Speaker 2", { status: "confirmed", person: { name: "Ann" } }, 20_000)).toMatchObject({
+      ok: true,
+      voiceprint: "added",
+    });
+    await runner.labelsChanged("r1");
+    expect(db.prepare("SELECT status, assigned_by FROM recording_speakers WHERE recording_id = 'r2' AND plaud_label = 'Speaker 2'").get()).toEqual({
+      status: "auto",
+      assigned_by: "matcher",
+    });
+    expect(r2Text()).toContain("[00:10] Ann: ");
+    expect(r2Text()).toContain("[00:00] Tim Hayward: ");
   });
 
   it("keeps file paths out of error messages", () => {

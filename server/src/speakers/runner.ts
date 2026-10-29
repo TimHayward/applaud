@@ -1,6 +1,7 @@
 import type { SpeakerState, SpeakerStatus } from "@applaud/shared";
 import { logger } from "../logger.js";
 import { analyseRecording, enrolOwner, recordingsWithStaleVoiceprints, reembedRecording } from "./analyse.js";
+import { rematchAll } from "./assign.js";
 import { EmbedderError, type Embedder } from "./embedder.js";
 import {
   claimNextJob,
@@ -15,12 +16,15 @@ import {
   type JobKind,
   type SpeakerJob,
 } from "./jobs.js";
+import type { MatchThresholds } from "./matcher.js";
+import { analysedRecordings, writeApplaudTranscript } from "./outputs.js";
 
 export interface RunnerSettings {
   enabled: boolean;
   recordingsDir: string | null;
   minSpeechMs: number;
   activeModelId: string | null;
+  thresholds: MatchThresholds;
 }
 
 export interface RunnerDeps {
@@ -67,6 +71,8 @@ export class SpeakerRunner {
       return;
     }
     requeueRunning(this.now());
+    // Outputs for recordings analysed before matching existed, or changed while off.
+    this.refresh(analysedRecordings());
     this.backfill();
     void this.check();
   }
@@ -139,6 +145,40 @@ export class SpeakerRunner {
   async ownerChanged(): Promise<void> {
     if (!this.deps.settings().enabled) return;
     enrolOwner(await this.deps.ownerName(), this.deps.settings().minSpeechMs, this.now());
+    this.refresh();
+  }
+
+  /**
+   * The user changed a recording's labels (which may have changed the library):
+   * re-apply the owner tag to labels handed back, re-match, rewrite outputs.
+   */
+  async labelsChanged(recordingId: string): Promise<void> {
+    if (!this.deps.settings().enabled) return;
+    enrolOwner(await this.deps.ownerName(), this.deps.settings().minSpeechMs, this.now());
+    this.refresh([recordingId]);
+  }
+
+  /**
+   * Re-match every recording from stored centroids (no model run) and rewrite
+   * the `-Applaud` transcripts that changed, plus those of `recordings`.
+   */
+  refresh(recordings: Iterable<string> = []): void {
+    const s = this.deps.settings();
+    if (!s.enabled) return;
+    let changed: string[] = [];
+    try {
+      changed = rematchAll(s.activeModelId, s.thresholds, this.now());
+    } catch (err) {
+      logger.warn({ err: describeError(err) }, "speaker matching failed");
+    }
+    if (!s.recordingsDir) return;
+    for (const id of new Set([...changed, ...recordings])) {
+      try {
+        writeApplaudTranscript(s.recordingsDir, id);
+      } catch (err) {
+        logger.warn({ recordingId: id, err: describeError(err) }, "could not write the Applaud transcript");
+      }
+    }
   }
 
   /** Resolves when the current run of the queue finishes (tests). */
@@ -215,6 +255,7 @@ export class SpeakerRunner {
       // Not done means nothing to analyse yet (no audio); the next transcript
       // download queues the recording again.
       completeJob(job, this.now());
+      if (out.done && job.kind === "analyse") this.refresh([job.recordingId]);
       if (job.kind === "reembed") this.maybeActivateModel();
       this.crashes = 0;
       this.lastRun = { recordingId: job.recordingId, kind: job.kind, at: this.now(), ok: true, error: out.done ? null : out.reason };
@@ -277,6 +318,7 @@ export class SpeakerRunner {
     if (pendingJobs("reembed") > 0) return;
     this.deps.setActiveModel(this.modelId);
     logger.info({ modelId: this.modelId }, "speaker model active");
+    this.refresh();
   }
 }
 
