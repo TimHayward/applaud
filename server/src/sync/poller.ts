@@ -44,6 +44,7 @@ import {
   WEBHOOK_REDRIVE_MAX_PER_POLL,
 } from "../constants.js";
 import { fireWebhookForRecording, type FireOptions } from "../webhook/post.js";
+import { speakers } from "../speakers/service.js";
 import { emit } from "./events.js";
 import type { RecordingRow } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
@@ -280,6 +281,11 @@ class Poller {
       this.lastPollAt = Date.now();
       this.inFlight = false;
       emit("poll_end");
+      try {
+        speakers.afterPoll();
+      } catch (err) {
+        logger.warn({ err }, "could not queue speaker analysis");
+      }
       if (this.queuedTrigger) {
         this.queuedTrigger = false;
         void this.runOnce();
@@ -520,6 +526,11 @@ class Poller {
         // (which clears the transcript state first).
         const fresh = getRecordingById(row.id);
         if (fresh) await this.deliverWebhook("transcript_ready", fresh);
+        try {
+          speakers.onTranscript(row.id);
+        } catch (err) {
+          logger.warn({ err, id: row.id }, "could not queue speaker analysis");
+        }
       }
     } finally {
       this.processingIds.delete(row.id);

@@ -14,7 +14,9 @@ import { recordingsRouter } from "./routes/recordings.js";
 import { syncRouter } from "./routes/sync.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { mediaRouter } from "./routes/media.js";
+import { speakersRouter } from "./routes/speakers.js";
 import { poller } from "./sync/poller.js";
+import { speakers } from "./speakers/service.js";
 import { requireLanToken, requireLanTokenMedia } from "./auth/lan-token.js";
 import { buildAppCsp, securityHeaders } from "./security/headers.js";
 import { requireAllowedHost } from "./security/host-check.js";
@@ -226,6 +228,7 @@ async function main(): Promise<void> {
   // API routes
   app.use("/api/auth", authRouter);
   app.use("/api/config", configRouter);
+  app.use("/api", speakersRouter);
   app.use("/api/recordings", recordingsRouter);
   app.use("/api/sync", syncRouter);
   app.use("/api/webhooks", webhooksRouter);
@@ -278,6 +281,8 @@ async function main(): Promise<void> {
     } else {
       poller.start();
     }
+    // Off unless switched on in Settings; runs apart from sync.
+    speakers.start();
   });
 }
 

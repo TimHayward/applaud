@@ -119,4 +119,16 @@ describe("speaker jobs", () => {
     expect(enqueueBackfill(0)).toBe(0); // already queued
     expect(claimNextJob(0)?.recordingId).toBe("ready");
   });
+
+  it("backfill re-queues a finished job for a recording still not analysed, but not a failed one", () => {
+    insertRecording("waited");
+    insertRecording("broken");
+    enqueueBackfill(0);
+    completeJob(claimNextJob(0)!); // e.g. ended with "audio not downloaded"
+    const broken = claimNextJob(0)!;
+    failJob({ ...broken, attempts: MAX_ATTEMPTS - 1 }, "bad", {}, 0); // its last attempt
+    expect(enqueueBackfill(10)).toBe(1);
+    expect(status("waited")).toMatchObject({ status: "queued", attempts: 0 });
+    expect(status("broken")).toMatchObject({ status: "failed" });
+  });
 });

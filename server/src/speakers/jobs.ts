@@ -27,15 +27,20 @@ export function enqueueJob(kind: JobKind, recordingId: string, now = Date.now())
 
 /**
  * Queue analysis for every recording with audio and a transcript on disk
- * that has never been analysed and isn't queued already. Returns how many.
+ * that has never been analysed: new ones, and ones whose last job ended
+ * before both files were there. Queued and failed jobs are left alone.
+ * Returns how many were queued.
  */
 export function enqueueBackfill(now = Date.now()): number {
   return getDb()
     .prepare(
-      `INSERT OR IGNORE INTO speaker_jobs (kind, recording_id, status, attempts, next_attempt_at, created_at, updated_at)
+      `INSERT INTO speaker_jobs (kind, recording_id, status, attempts, next_attempt_at, created_at, updated_at)
        SELECT 'analyse', id, 'queued', 0, ?, ?, ? FROM recordings
        WHERE audio_downloaded_at IS NOT NULL AND transcript_downloaded_at IS NOT NULL
-         AND speakers_processed_at IS NULL AND user_deleted_at IS NULL AND is_trash = 0`,
+         AND speakers_processed_at IS NULL AND user_deleted_at IS NULL AND is_trash = 0
+       ON CONFLICT (kind, recording_id) DO UPDATE SET
+         status = 'queued', attempts = 0, next_attempt_at = excluded.next_attempt_at, updated_at = excluded.updated_at
+       WHERE speaker_jobs.status = 'done'`,
     )
     .run(now, now, now).changes;
 }

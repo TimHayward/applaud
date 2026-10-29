@@ -16,6 +16,8 @@ import { clearSyncIgnore } from "../sync/state.js";
 import { redactConfig, mergeWebhookSecret, SECRET_REDACTED } from "./config-helpers.js";
 import { LAN_TOKEN_MIN_LENGTH, RATE_LIMIT_SENSITIVE_MAX, RATE_LIMIT_WINDOW_MS } from "../constants.js";
 import { createRateLimiter } from "../security/rate-limit.js";
+import { speakerConfig } from "@applaud/shared";
+import { speakerRunner } from "../speakers/service.js";
 
 export const configRouter = Router();
 
@@ -77,6 +79,13 @@ const PatchSchema = z.object({
   lanToken: LanToken.optional(),
   /** "" or null clears it (webhook URLs fall back to the bind address). */
   publicBaseUrl: HttpUrl.or(z.literal("")).nullable().optional(),
+  speakers: z
+    .object({
+      enabled: z.boolean().optional(),
+      /** The Plaud speaker name that is the owner; "" or null falls back to the Plaud nickname. */
+      ownerName: z.string().trim().max(200).nullable().optional(),
+    })
+    .optional(),
 });
 
 configRouter.post("/", (req, res) => {
@@ -87,6 +96,7 @@ configRouter.post("/", (req, res) => {
   }
   const patch = parsed.data;
   const prev = loadConfig();
+  const prevSpeakers = speakerConfig(prev);
   const mergedSecret = patch.webhook
     ? mergeWebhookSecret(prev.webhook?.secret, patch.webhook.secret)
     : undefined;
@@ -106,8 +116,9 @@ configRouter.post("/", (req, res) => {
         ? prev.webhook?.enabledAt
         : Date.now()
       : undefined;
+  const { speakers: speakersPatch, ...rest } = patch;
   const normalized = {
-    ...patch,
+    ...rest,
     webhook: patch.webhook
       ? {
           url: patch.webhook.url,
@@ -120,8 +131,24 @@ configRouter.post("/", (req, res) => {
     ...(patch.publicBaseUrl !== undefined
       ? { publicBaseUrl: patch.publicBaseUrl ? patch.publicBaseUrl.replace(/\/+$/, "") : null }
       : {}),
+    ...(speakersPatch !== undefined
+      ? {
+          speakers: {
+            ...prevSpeakers,
+            ...(speakersPatch.enabled !== undefined ? { enabled: speakersPatch.enabled } : {}),
+            ...(speakersPatch.ownerName !== undefined ? { ownerName: speakersPatch.ownerName || null } : {}),
+          },
+        }
+      : {}),
   };
   const next = updateConfig(normalized);
+  const nextSpeakers = speakerConfig(next);
+  if (nextSpeakers.enabled !== prevSpeakers.enabled) {
+    if (nextSpeakers.enabled) speakerRunner().start();
+    else speakerRunner().stop();
+  } else if (nextSpeakers.enabled && nextSpeakers.ownerName !== prevSpeakers.ownerName) {
+    void speakerRunner().ownerChanged();
+  }
   // A wider window brings older recordings into scope: fetch them now.
   if (patch.historyDays !== undefined && patch.historyDays > prev.historyDays && next.setupComplete) {
     void poller.trigger();
