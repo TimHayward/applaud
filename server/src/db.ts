@@ -76,6 +76,7 @@ const MIGRATIONS: Migration[] = [
     name: "on-demand download of recordings outside the history window",
     up: (d) => addColumn(d, "recordings", "download_requested_at", "INTEGER"),
   },
+  { version: 5, name: "speaker identification", up: migrateSpeakers },
 ];
 
 /** Schema version this build writes. */
@@ -134,6 +135,82 @@ function migrateRelativePaths(d: Database.Database): void {
   for (const col of ["audio_path", "transcript_path", "summary_path", "metadata_path"]) {
     d.exec(`ALTER TABLE recordings DROP COLUMN ${col}`);
   }
+}
+
+/**
+ * v5: speaker identification (docs/plans/speaker-identification.md, section 8).
+ * Plaud labels are `original_speaker`; segment keys are `segment_uid`, or
+ * `t<start ms>` for a segment without one.
+ */
+function migrateSpeakers(d: Database.Database): void {
+  d.exec(`
+    CREATE TABLE speakers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      is_owner INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    -- Voiceprints: only from confirmed labels or the owner's label.
+    CREATE TABLE speaker_embeddings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      speaker_id INTEGER NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
+      recording_id TEXT NOT NULL,
+      plaud_label TEXT NOT NULL,
+      segment_keys TEXT NOT NULL,
+      scene TEXT,
+      is_anchor INTEGER NOT NULL DEFAULT 0,
+      model_id TEXT NOT NULL,
+      vector BLOB NOT NULL,
+      speech_ms INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      low_resemblance INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      UNIQUE (speaker_id, recording_id, plaud_label)
+    );
+    CREATE INDEX idx_speaker_embeddings_recording ON speaker_embeddings(recording_id);
+
+    -- Per recording, per Plaud label: who it is. The centroid and its source
+    -- segments are kept so a later confirmation needs no re-embedding.
+    CREATE TABLE recording_speakers (
+      recording_id TEXT NOT NULL,
+      plaud_label TEXT NOT NULL,
+      plaud_name TEXT,
+      speaker_id INTEGER REFERENCES speakers(id) ON DELETE SET NULL,
+      status TEXT NOT NULL,
+      confidence REAL,
+      margin REAL,
+      speech_ms INTEGER,
+      segment_keys TEXT,
+      centroid BLOB,
+      model_id TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (recording_id, plaud_label)
+    );
+
+    CREATE TABLE segment_overrides (
+      recording_id TEXT NOT NULL,
+      segment_key TEXT NOT NULL,
+      speaker_id INTEGER REFERENCES speakers(id) ON DELETE CASCADE,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (recording_id, segment_key)
+    );
+
+    CREATE TABLE speaker_jobs (
+      kind TEXT NOT NULL,
+      recording_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at INTEGER,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (kind, recording_id)
+    );
+    CREATE INDEX idx_speaker_jobs_due ON speaker_jobs(status, next_attempt_at);
+  `);
+  addColumn(d, "recordings", "speakers_processed_at", "INTEGER");
 }
 
 /**

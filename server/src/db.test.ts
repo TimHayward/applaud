@@ -72,6 +72,35 @@ describe("database migrations", () => {
     expect(cols).not.toContain("transcript_path");
   });
 
+  it("creates the speaker tables", () => {
+    const d = new Database(":memory:");
+    runMigrations(d);
+    const tables = (d.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(
+      (t) => t.name,
+    );
+    expect(tables).toEqual(
+      expect.arrayContaining(["speakers", "speaker_embeddings", "recording_speakers", "segment_overrides", "speaker_jobs"]),
+    );
+    expect(columns(d)).toContain("speakers_processed_at");
+  });
+
+  it("deletes a person's voiceprints with them and keeps their labels as unassigned", () => {
+    const d = new Database(":memory:");
+    d.pragma("foreign_keys = ON");
+    runMigrations(d);
+    d.prepare("INSERT INTO speakers (id, name, created_at, updated_at) VALUES (1, 'Ann', 0, 0)").run();
+    d.prepare(
+      `INSERT INTO speaker_embeddings (speaker_id, recording_id, plaud_label, segment_keys, model_id, vector, speech_ms, source, created_at)
+       VALUES (1, 'r', 'Speaker 1', '[]', 'm', x'00', 1, 'confirmed', 0)`,
+    ).run();
+    d.prepare(
+      "INSERT INTO recording_speakers (recording_id, plaud_label, speaker_id, status, updated_at) VALUES ('r', 'Speaker 1', 1, 'confirmed', 0)",
+    ).run();
+    d.prepare("DELETE FROM speakers WHERE id = 1").run();
+    expect(d.prepare("SELECT COUNT(*) AS n FROM speaker_embeddings").get()).toEqual({ n: 0 });
+    expect(d.prepare("SELECT speaker_id FROM recording_speakers").get()).toEqual({ speaker_id: null });
+  });
+
   it("is a no-op when run again", () => {
     const d = new Database(":memory:");
     runMigrations(d);
