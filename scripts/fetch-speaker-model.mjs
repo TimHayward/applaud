@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global process, console, fetch */
+/* global process, console, fetch, Buffer */
 // Downloads the speaker model (docs/plans/speaker-identification.md, D10) and
 // verifies its SHA-256. The Docker build runs this; for development run
 // `node scripts/fetch-speaker-model.mjs` once to fill <repo>/models.
