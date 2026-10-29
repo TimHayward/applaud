@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { SpeakerSettingsPatch, SpeakerStatusResponse } from "@applaud/shared";
+import {
+  DEFAULT_SPEAKER_CONFIG,
+  type SpeakerSettingsPatch,
+  type SpeakerStatusResponse,
+  type SpeakerThresholds,
+} from "@applaud/shared";
 import { api } from "../api.js";
 import { useToast } from "./Toast.js";
 import { formatRelative } from "../lib/format.js";
@@ -54,6 +59,130 @@ function StatusLine({ s, onRetry, retrying }: { s: SpeakerStatusResponse; onRetr
         {retrying ? "Checking…" : "Check again"}
       </button>
     </div>
+  );
+}
+
+const THRESHOLD_FIELDS: { key: keyof SpeakerThresholds; label: string; help: string; step: number; min: number; max: number }[] = [
+  {
+    key: "autoThreshold",
+    label: "Name automatically at",
+    help: "Similarity (0 to 1) a speaker needs to be named without asking.",
+    step: 0.01,
+    min: 0,
+    max: 1,
+  },
+  {
+    key: "autoMargin",
+    label: "Lead over the next person",
+    help: "How far ahead of the second-best match the best one must be.",
+    step: 0.01,
+    min: 0,
+    max: 1,
+  },
+  {
+    key: "minSpeechSec",
+    label: "Speech needed (seconds)",
+    help: "Less than this is only ever suggested, and doesn't become a voiceprint.",
+    step: 1,
+    min: 5,
+    max: 300,
+  },
+  {
+    key: "suggestThreshold",
+    label: "Suggest at",
+    help: "Similarity at which a name is offered for you to confirm.",
+    step: 0.01,
+    min: 0,
+    max: 1,
+  },
+];
+
+/** The matching bands, behind a disclosure: the defaults come from calibration and rarely need changing. */
+function ThresholdSettings({
+  saved,
+  busy,
+  onSave,
+}: {
+  saved: SpeakerThresholds;
+  busy: boolean;
+  onSave: (patch: SpeakerSettingsPatch) => Promise<void>;
+}): JSX.Element {
+  const [draft, setDraft] = useState<Record<keyof SpeakerThresholds, string>>(() => ({
+    autoThreshold: String(saved.autoThreshold),
+    autoMargin: String(saved.autoMargin),
+    minSpeechSec: String(saved.minSpeechSec),
+    suggestThreshold: String(saved.suggestThreshold),
+  }));
+  const values: SpeakerThresholds = {
+    autoThreshold: Number(draft.autoThreshold),
+    autoMargin: Number(draft.autoMargin),
+    minSpeechSec: Number(draft.minSpeechSec),
+    suggestThreshold: Number(draft.suggestThreshold),
+  };
+  const invalid = THRESHOLD_FIELDS.some(
+    (f) => draft[f.key].trim() === "" || !Number.isFinite(values[f.key]) || values[f.key] < f.min || values[f.key] > f.max,
+  );
+  const inverted = !invalid && values.suggestThreshold > values.autoThreshold;
+  const dirty = THRESHOLD_FIELDS.some((f) => values[f.key] !== saved[f.key]);
+  const defaults: SpeakerThresholds = {
+    autoThreshold: DEFAULT_SPEAKER_CONFIG.autoThreshold,
+    autoMargin: DEFAULT_SPEAKER_CONFIG.autoMargin,
+    minSpeechSec: DEFAULT_SPEAKER_CONFIG.minSpeechSec,
+    suggestThreshold: DEFAULT_SPEAKER_CONFIG.suggestThreshold,
+  };
+  const isDefault = THRESHOLD_FIELDS.every((f) => saved[f.key] === defaults[f.key]);
+
+  return (
+    <details className="group">
+      <summary className="cursor-pointer text-sm font-semibold text-on-surface select-none">
+        Matching thresholds{isDefault ? "" : " (changed)"}
+      </summary>
+      <div className="mt-4 space-y-4">
+        <p className="text-xs text-on-surface-variant max-w-prose">
+          The defaults were calibrated on real recordings. Changing them re-checks every recording straight away;
+          names you confirmed are never changed.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {THRESHOLD_FIELDS.map((f) => (
+            <label key={f.key} className="block space-y-1">
+              <span className="block text-sm font-semibold text-on-surface">{f.label}</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step={f.step}
+                min={f.min}
+                max={f.max}
+                className="w-32 bg-surface-container-highest/50 border-0 rounded-lg p-2 text-sm text-on-surface focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                value={draft[f.key]}
+                disabled={busy}
+                onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+              />
+              <span className="block text-xs text-on-surface-variant">{f.help}</span>
+            </label>
+          ))}
+        </div>
+        {invalid && <p className="text-sm text-error">Each value must be within its range.</p>}
+        {inverted && <p className="text-sm text-error">&ldquo;Suggest at&rdquo; can&apos;t be above &ldquo;Name automatically at&rdquo;.</p>}
+        <div className="flex gap-3">
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={busy || invalid || inverted || !dirty}
+            onClick={() => void onSave(values)}
+          >
+            Save thresholds
+          </button>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-lg border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/10 transition-colors disabled:opacity-50"
+            disabled={busy || isDefault}
+            onClick={() => void onSave(defaults)}
+          >
+            Restore defaults
+          </button>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -152,6 +281,8 @@ export function SpeakerSettings(): JSX.Element {
               ))}
             </select>
           </div>
+
+          <ThresholdSettings key={JSON.stringify(s.thresholds)} saved={s.thresholds} busy={busy} onSave={save} />
         </>
       )}
     </section>

@@ -21,7 +21,7 @@ vi.mock("../logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 const { runner } = vi.hoisted(() => ({
-  runner: { start: vi.fn(), stop: vi.fn(), ownerChanged: vi.fn(async () => {}) },
+  runner: { start: vi.fn(), stop: vi.fn(), ownerChanged: vi.fn(async () => {}), refresh: vi.fn() },
 }));
 vi.mock("../speakers/service.js", () => ({ speakerRunner: () => runner }));
 
@@ -115,6 +115,24 @@ describe("configRouter", () => {
 
     it("rejects unknown types", async () => {
       expect((await post("", { speakers: { enabled: "yes" } })).status).toBe(400);
+    });
+
+    it("saves thresholds and re-matches", async () => {
+      runner.refresh.mockClear();
+      loadConfig.mockReturnValue({ ...baseConfig, speakers: { enabled: true } });
+      expect((await post("", { speakers: { autoThreshold: 0.8, minSpeechSec: 30 } })).status).toBe(200);
+      expect(updateConfig).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          speakers: expect.objectContaining({ autoThreshold: 0.8, minSpeechSec: 30, suggestThreshold: 0.55 }),
+        }),
+      );
+      expect(runner.refresh).toHaveBeenCalledOnce();
+    });
+
+    it("rejects thresholds out of range or a suggestion threshold above the automatic one", async () => {
+      expect((await post("", { speakers: { autoThreshold: 1.5 } })).status).toBe(400);
+      expect((await post("", { speakers: { suggestThreshold: 0.9 } })).status).toBe(400);
+      expect(updateConfig).not.toHaveBeenCalled();
     });
   });
 

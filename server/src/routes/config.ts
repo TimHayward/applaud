@@ -84,9 +84,16 @@ const PatchSchema = z.object({
       enabled: z.boolean().optional(),
       /** The Plaud speaker name that is the owner; "" or null falls back to the Plaud nickname. */
       ownerName: z.string().trim().max(200).nullable().optional(),
+      /** Matching bands (section 7 of the plan): raw cosine scores. */
+      autoThreshold: z.number().min(0).max(1).optional(),
+      autoMargin: z.number().min(0).max(1).optional(),
+      minSpeechSec: z.number().int().min(5).max(300).optional(),
+      suggestThreshold: z.number().min(0).max(1).optional(),
     })
     .optional(),
 });
+
+const THRESHOLD_KEYS = ["autoThreshold", "autoMargin", "minSpeechSec", "suggestThreshold"] as const;
 
 configRouter.post("/", (req, res) => {
   const parsed = PatchSchema.safeParse(req.body);
@@ -117,6 +124,13 @@ configRouter.post("/", (req, res) => {
         : Date.now()
       : undefined;
   const { speakers: speakersPatch, ...rest } = patch;
+  const thresholds = Object.fromEntries(
+    THRESHOLD_KEYS.filter((k) => speakersPatch?.[k] !== undefined).map((k) => [k, speakersPatch![k]]),
+  );
+  if ((thresholds.suggestThreshold ?? prevSpeakers.suggestThreshold) > (thresholds.autoThreshold ?? prevSpeakers.autoThreshold)) {
+    res.status(400).json({ error: "the suggestion threshold can't be above the automatic one" });
+    return;
+  }
   const normalized = {
     ...rest,
     webhook: patch.webhook
@@ -137,6 +151,7 @@ configRouter.post("/", (req, res) => {
             ...prevSpeakers,
             ...(speakersPatch.enabled !== undefined ? { enabled: speakersPatch.enabled } : {}),
             ...(speakersPatch.ownerName !== undefined ? { ownerName: speakersPatch.ownerName || null } : {}),
+            ...thresholds,
           },
         }
       : {}),
@@ -148,6 +163,8 @@ configRouter.post("/", (req, res) => {
     else speakerRunner().stop();
   } else if (nextSpeakers.enabled && nextSpeakers.ownerName !== prevSpeakers.ownerName) {
     void speakerRunner().ownerChanged();
+  } else if (nextSpeakers.enabled && THRESHOLD_KEYS.some((k) => nextSpeakers[k] !== prevSpeakers[k])) {
+    speakerRunner().refresh();
   }
   // A wider window brings older recordings into scope: fetch them now.
   if (patch.historyDays !== undefined && patch.historyDays > prev.historyDays && next.setupComplete) {
