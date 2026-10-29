@@ -152,6 +152,9 @@ When you turn it on, Applaud:
 1. **Checks the host** by loading the speaker model and analysing a second of silence. The card then shows **Available**, or **Not supported on this host** with the reason (see requirements below). Applaud itself carries on either way.
 2. **Analyses every downloaded recording once**, one at a time in the background, then each new recording as its transcript arrives. Sync is never delayed by this. Recordings shown as *details only* are analysed once you download them.
 3. **Learns your voice** from the recordings where Plaud tagged you. Choose your name under **Which name is you in Plaud's transcripts?**; until you do, Applaud uses your Plaud account name if Plaud tags you with it.
+4. **Names speakers it recognises.** Once you have confirmed who someone is, their voice is matched in other recordings: named automatically when the match is clear, offered as a suggestion when it is close. Each analysed recording's folder gets `transcript-Applaud.json` and `transcript-Applaud.txt`, Plaud's transcript with these names applied; they are rewritten whenever a name changes. Plaud's own `transcript.json` and `transcript.txt` are never modified.
+
+The bands for automatic names and suggestions are under **Matching thresholds** on the same card. The defaults come from calibration on real recordings; changing them re-checks every recording at once and never alters a name you confirmed.
 
 **Requirements and resources**
 

@@ -2,7 +2,7 @@
 
 |               |                                                                                                                                                                                                                                          |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**    | Phase 0 complete (GO). Phase 1 built on branch `plan/single-container-speakers` and verified on the Portainer host (section 10, Phase 1 record).                                                                                          |
+| **Status**    | Phase 0 complete (GO). Phase 1 verified on the Portainer host (PR #3). Phase 2 built on `speakers/phase-2`; awaiting verification on the host (section 10).                                                                                   |
 | **Updated**   | 2026-10-29                                                                                                                                                                                                                               |
 | **Owner**     | Tim Hayward                                                                                                                                                                                                                              |
 | **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A). The calibration tool lived on branch `claude/nice-noether-fmry57`, which no longer exists; see section 13.                                                                       |
@@ -306,10 +306,10 @@ The active embedding model id is stored with the speaker settings and compared w
 
 | Output                    | Content                                                                                                       | When                                                        |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `transcript-Applaud.json` | Plaud segments plus `segment_key`, `plaud_speaker` (`original_speaker`), `speaker`, `speaker_id`, `label_status`, `confidence` | After analysis; rewritten atomically whenever labels change |
+| `transcript-Applaud.json` | An array of segments: `segment_key`, `start_time` and `end_time` (milliseconds), `content`, `speaker` (Applaud's name), `speaker_id`, `plaud_speaker` (Plaud's `speaker`), `original_speaker`, `label_status`, `confidence`; plus `suggested_speaker` on suggestions and `segment_override` on segments assigned on their own | After analysis; rewritten atomically whenever labels, names or thresholds change, and only when the content differs |
 | `transcript-Applaud.txt`  | Same line format as `transcript.txt`, with Applaud names                                                      | As above                                                    |
 
-Both files are served by `/media` like the other recording files, so existing webhook consumers can fetch them by path. New webhook events are deferred with the summary (section 11).
+`speaker` is the person's name for confirmed and automatic labels and for segment overrides; otherwise it is Plaud's name, so a suggestion never reads as fact. Both files are served by `/media` like the other recording files and appear under the recording's attachments, so existing webhook consumers can fetch them by path. New webhook events are deferred with the summary (section 11).
 
 ## 10. Phases
 
@@ -363,11 +363,27 @@ Differences from the plan above:
 ### Phase 2: Matching and `-Applaud` transcript (M)
 
 - Matcher (section 7) with unit tests for best-of-N scoring, banding, margin, minimum speech and one-to-one assignment.
-- Library hygiene (section 7.1) with unit tests for anchor, cap and eviction, near-duplicate skip and the low-resemblance flag.
 - `transcript-Applaud.json` / `.txt` (section 9).
 - API: `GET /api/recordings/:id/speakers`, `PUT /api/recordings/:id/speakers/:label`, `PUT /api/recordings/:id/segments/:segmentKey/speaker`, `POST /api/recordings/:id/speakers/reanalyse`.
 
 **Done when:** the owner is auto-labelled on new recordings; a confirmed person is suggested or auto-labelled in their next recording; outputs regenerate on every label change.
+
+**Phase 2 record (2026-10-29).** Built on branch `speakers/phase-2`, stacked on Phase 1; 582 tests pass. Not yet run on the Portainer host.
+
+| Item | State |
+| --- | --- |
+| Matcher: best of N, bands, margin (against zero when only one person is known), minimum speech, one-to-one, and no automatic label for a person already confirmed in the recording | Done, with unit tests |
+| Re-matching from stored centroids, with no model run, after each analysis, label change, owner change, threshold change and model activation; only labels the user or Plaud's owner tag have not decided are touched | Done |
+| `transcript-Applaud.json` / `.txt`, written for every analysed recording on start (covering those analysed in Phase 1) | Done |
+| API: `GET /api/recordings/:id/speakers` (labels with their top three candidates, overrides, people; never vectors), `PUT …/speakers/:label` (`confirmed` with a person id or name, `ignored`, `unknown` to hand back to matching), `PUT …/segments/:segmentKey/speaker`, `GET /api/speakers/people` | Done, with route tests |
+| Thresholds editable in Settings, validated (each in range, suggestion not above automatic), with Restore defaults | Done |
+
+Differences from the plan above:
+
+- **Library hygiene** was built in Phase 1 (see its record). Phase 2 adds anchor promotion: when a person's anchor voiceprint is removed (its label relabelled, ignored or reset), their oldest remaining voiceprint becomes the anchor.
+- **Re-matching is global and synchronous.** Every analysed recording is re-matched when the library changes. This is fast at personal scale (stored 192-dimension centroids, at most 12 voiceprints per person). If it ever shows up in response times, it can move onto the job queue.
+- **Resetting a label Plaud tagged as the owner** hands it back to the owner tag, not to the matcher. Ignoring it keeps it out of both.
+- **Per-segment overrides** never create voiceprints (D6, D12).
 
 ### Phase 3: Labelling UI and people management (L)
 
