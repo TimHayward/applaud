@@ -2,10 +2,10 @@
 
 |               |                                                                                                                                                                                                                                          |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**    | Phase 0 complete (GO). Revised for a single container; Phase 1 ready to start.                                                                                                                                                           |
+| **Status**    | Phase 0 complete (GO). Phase 1 built on branch `plan/single-container-speakers`; awaiting verification on the Portainer host (section 10, Phase 1 record).                                                                               |
 | **Updated**   | 2026-10-29                                                                                                                                                                                                                               |
 | **Owner**     | Tim Hayward                                                                                                                                                                                                                              |
-| **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A); tool in [`spikes/speaker-calibration/`](https://github.com/TimHayward/applaud/tree/claude/nice-noether-fmry57/spikes/speaker-calibration) on branch `claude/nice-noether-fmry57` |
+| **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A). The calibration tool lived on branch `claude/nice-noether-fmry57`, which no longer exists; see section 13.                                                                       |
 | **Prior art** | [`mcowger/olive2`](https://github.com/mcowger/olive2) reviewed 2026-10-19 (Appendix B)                                                                                                                                                   |
 | **Revisions** | 2026-10-19: two-container design. 2026-10-29: single container (D9 replaced, D15, D16 added), segment fields checked on the deployment (section 6.3), owner from the Plaud nickname (D17), summary and write-back deferred (section 11). |
 
@@ -68,7 +68,7 @@ The feature is optional. On a host that cannot run the model (no AVX, too little
 | Process                    | Started by                                                | Role                                                                                       | State                                               | Resources                                                          |
 | -------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------ |
 | Applaud (`node server/dist/index.js`) | `tini`, as today                                 | Sync, UI, API, speaker library, matching, outputs, job queue, supervisor of the child     | Config dir and SQLite (voiceprints included); recordings folder | Unchanged: about 110 MB RAM                               |
-| Speaker process            | Applaud, with `child_process.fork`, when a job is waiting | Decode audio with ffmpeg, embed requested windows, return vectors over IPC                  | **None.** Temp audio in an ephemeral directory, deleted per request | About 300 to 400 MB RAM while running; `NUM_THREADS` CPU threads (default 2) |
+| Speaker process            | Applaud, with `child_process.fork`, when a job is waiting | Decode audio with ffmpeg, embed requested windows, return vectors over IPC                  | **None.** ffmpeg decodes into memory and only the requested windows are kept; nothing is written to disk | About 200 MB measured on Windows with the model loaded (up to 400 MB allowed for); `APPLAUD_SPEAKER_THREADS` CPU threads (default 2) |
 
 Why a child process rather than Applaud's own process or a `worker_thread`:
 
@@ -177,7 +177,7 @@ Implementations: `LocalEmbedder` (the supervisor and child process below) and `F
 - **Path guard.** The supervisor resolves `audioPath` and refuses anything outside the configured recordings directory. The child only reads the file it is given.
 - **Idle stop.** The child exits after `APPLAUD_SPEAKER_IDLE_SEC` with no request, and on Applaud shutdown (`SIGTERM` forwarded).
 - **Crash handling.** An exit during a request fails that request with the exit code or signal; the job is retried with back-off. A `SIGILL` or a failed native load marks the feature as not supported (section 4.3).
-- **No retention.** The child decodes into a per-request temp directory, deletes it afterwards, and never logs paths, titles or transcript content.
+- **No retention.** The child streams ffmpeg's decoded audio through memory, keeps only the requested windows, writes nothing to disk, and never logs paths, titles or transcript content. Job errors stored or logged by Applaud carry no file paths either (recording folder names contain titles).
 
 ### 6.3 Plaud segment fields
 
@@ -256,15 +256,19 @@ CREATE TABLE speaker_embeddings (
   UNIQUE (speaker_id, recording_id, plaud_label)
 );
 
--- Per recording, per Plaud label: who it is
+-- Per recording, per Plaud label: who it is. The centroid and its source
+-- segments are kept so a later confirmation needs no re-embedding.
 CREATE TABLE recording_speakers (
   recording_id TEXT NOT NULL,
   plaud_label TEXT NOT NULL,       -- Plaud original_speaker (D8)
+  plaud_name TEXT,                 -- Plaud speaker for most of the label's segments (D17)
   speaker_id INTEGER REFERENCES speakers(id) ON DELETE SET NULL,
   status TEXT NOT NULL,            -- 'auto' | 'suggested' | 'unknown' | 'confirmed' | 'ignored'
+  assigned_by TEXT,                -- provenance: 'plaud_owner' | 'user' | 'matcher'
   confidence REAL,
   margin REAL,
   speech_ms INTEGER,
+  segment_keys TEXT,               -- JSON array: the windows the centroid was built from
   centroid BLOB,
   model_id TEXT,
   updated_at INTEGER NOT NULL,
@@ -333,6 +337,26 @@ Model and thresholds selected on real recordings. See Appendix A. The host findi
 - Move the calibration tool from the spike branch to `tools/speaker-calibration/`, reading audio from a local recordings directory, so it can be rerun (Phase 3 exit check, future model changes).
 - `docs/portainer.md`: "Speaker identification" section (section 4.5).
 
+**Phase 1 record (2026-10-29).** Built and tested locally; not yet run in the container on the Portainer host.
+
+| Item | State |
+| --- | --- |
+| Segment fields; model licence (Apache-2.0, per ModelScope); `linux-arm64` build of `sherpa-onnx-node` (published) | Done |
+| Speaker process, supervisor, capability check, migration v5, job queue, owner enrolment, backfill, model-change re-embedding, generic-label helper, transcript normalisation | Done, with unit tests (552 tests pass) |
+| Image: ffmpeg, `sherpa-onnx-node` 1.12.28 with its native packages pinned to the same version, model baked in and SHA-256 checked | Written; the image has not been built yet (no Docker on the development machine) |
+| Settings card: on/off, status, Check again, owner name | Done |
+| End-to-end on the built server (Windows) with the real model: enable, analyse, owner enrolment, force-killing the speaker process and recovering | Done |
+| Image size before and after | Not measured |
+| Move the calibration tool to `tools/` | Not done: the spike branch was deleted (section 13) |
+
+Differences from the plan above:
+
+- **No temp files.** ffmpeg decodes straight into memory and only the windows are kept (section 6.2).
+- **Library hygiene moved forward from Phase 2.** Owner enrolment creates voiceprints in Phase 1, so the anchor, cap, near-duplicate and low-resemblance rules (section 7.1) were needed now.
+- **Owner choice in Settings.** It is not known whether Plaud tags the owner with the account nickname or with the name on their Plaud voice profile, so Settings lists the names Plaud has used, with recording counts, and the owner picks theirs (D17). Changing it relabels from stored centroids and undoes labels made from the previous name, without re-running the model.
+- **Threshold settings** are stored with their defaults but not yet editable in the UI; they first matter in Phase 2.
+- **Re-analysis** is triggered when a transcript is written, by a backfill after every sync (for audio that arrives after its transcript), and by `POST /api/recordings/:id/speakers/reanalyse`. The button for it is part of the Phase 3 panel.
+
 **Done when:** in one container on the Portainer host, a recording's labels are embedded and stored; killing the speaker process mid-job leaves Applaud serving requests and the job completes on retry; the idle child exits and its memory is released; a simulated model change re-embeds the library from source references; the capability check reports "not supported" when the native module cannot load (tested by pointing it at a missing module); the supervisor, process protocol and queue have unit tests.
 
 ### Phase 2: Matching and `-Applaud` transcript (M)
@@ -385,9 +409,9 @@ Kept here so the design is not lost. Neither is scheduled; each would be re-plan
 
 | Item                                                                                                       | Owner | Needed by          |
 | ---------------------------------------------------------------------------------------------------------- | ----- | ------------------ |
-| Confirm ERes2Net model card licence terms, including redistribution inside a public image                  | Dev   | Phase 1, first     |
-| Check whether `sherpa-onnx-node` publishes a `linux-arm64` build, so the arm64 image builds                | Dev   | Phase 1            |
-| Run the named-speaker scan over existing recordings, to seed people beyond the owner                       | User  | Phase 1 backfill   |
+| Build the image and run Phase 1's exit checks in the container on the Portainer host; record the image size  | User / Dev | Phase 1 sign-off |
+| Recreate the calibration tool in `tools/speaker-calibration/` (the spike branch holding it was deleted), reading audio and labels from a local recordings folder | Dev   | Phase 3 recalibration |
+| Run the named-speaker scan over existing recordings, to seed people beyond the owner                       | User  | Phase 3            |
 
 ## Appendix A: Phase 0 evidence (2026-10-15)
 

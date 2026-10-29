@@ -115,7 +115,7 @@ Applaud is safe to expose to your LAN (token required, hostname check) but shoul
 | `*.amazonaws.com` (for example `euc1-prod-plaud-content-storage.s3-accelerate.amazonaws.com`) | Audio, transcript and note downloads (Plaud's storage; the exact host depends on your account's region) |
 | Your webhook target | Only if you configure a webhook |
 
-**Outbound while building the image:** `registry-1.docker.io` (and Docker Hub's CDN) for the base image, `deb.debian.org`, `registry.npmjs.org`, and `github.com` for Portainer's clone.
+**Outbound while building the image:** `registry-1.docker.io` (and Docker Hub's CDN) for the base image, `deb.debian.org`, `registry.npmjs.org`, and `github.com` for Portainer's clone and the speaker model (served from GitHub's release download host, `release-assets.githubusercontent.com` or `objects.githubusercontent.com`).
 
 **The browser you sign in with** needs `web.plaud.ai` and `mcp.plaud.ai`, plus LAN access to Applaud.
 
@@ -140,6 +140,34 @@ Your settings, sign-in and recordings live in the volumes and survive both.
 - Most settings (history window, poll interval, webhook, LAN token) are in Applaud's **Settings** page.
 - Environment variables: **Stacks → applaud → Environment variables** → change → **Update the stack**. Remember that `APPLAUD_LAN_TOKEN` is only read on first start.
 - Compose-file changes (publishing on one IP, `APPLAUD_WEBHOOK_ALLOW_PRIVATE`) need to be in the repository the stack builds from. Commit them to the repository, or switch the stack to Portainer's **Web editor** with the same content if you want local-only changes (note that the web editor can't build from the repository, so this only works once there is a published image to use instead of `build:`).
+
+## Speaker identification
+
+Optional, and off until you turn it on in **Settings → Speaker identification**. Applaud then learns voices from your recordings and recognises speakers across them. Everything runs inside the Applaud container: audio and voiceprints never leave it, and no extra container or port is needed.
+
+When you turn it on, Applaud:
+
+1. **Checks the host** by loading the speaker model and analysing a second of silence. The card then shows **Available**, or **Not supported on this host** with the reason (see requirements below). Applaud itself carries on either way.
+2. **Analyses every downloaded recording once**, one at a time in the background, then each new recording as its transcript arrives. Sync is never delayed by this. Recordings shown as *details only* are analysed once you download them.
+3. **Learns your voice** from the recordings where Plaud tagged you. Choose your name under **Which name is you in Plaud's transcripts?**; until you do, Applaud uses your Plaud account name if Plaud tags you with it.
+
+**Requirements and resources**
+
+| | |
+| --- | --- |
+| CPU | x86-64 with AVX (any recent Intel or AMD), or arm64. Hosts without AVX, such as some Celeron and Atom NAS models, show *Not supported on this host*. |
+| Memory | The speaker model runs in a separate process that starts when there is work and exits after 5 minutes idle. It needs about 200 to 400 MB on top of Applaud while running. |
+| Memory limit | If you set one for the stack, allow at least 600 MB. Below that the speaker process is the one killed, and the card shows "killed, most likely for running out of memory". |
+| CPU time | The model took about 8 seconds per hour of audio on 2 threads in testing; decoding the recording adds to that. A large library takes a while to work through the first time. |
+
+**Optional environment variables**
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `APPLAUD_SPEAKER_THREADS` | `2` | CPU threads the model uses |
+| `APPLAUD_SPEAKER_IDLE_SEC` | `300` | Stop the speaker process after this long with no work |
+
+**Privacy.** Voiceprints are biometric data. They are stored only in the database in the `applaud_config` volume, never sent anywhere, and never included in webhooks or exports, so treat backups of that volume accordingly.
 
 ## Backups
 
