@@ -6,6 +6,11 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 
 WORKDIR /app
 
+# Speaker model, downloaded and hash-checked in its own layer so source
+# changes don't download it again. A hash mismatch fails the build.
+COPY scripts/fetch-speaker-model.mjs scripts/
+RUN node scripts/fetch-speaker-model.mjs /app/models
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY shared/ shared/
 COPY server/ server/
@@ -20,7 +25,8 @@ RUN pnpm prune --prod
 # --- Runtime stage ---
 FROM node:22-slim
 
-RUN apt-get update && apt-get install -y tini && rm -rf /var/lib/apt/lists/*
+# ffmpeg decodes recordings for speaker identification.
+RUN apt-get update && apt-get install -y --no-install-recommends tini ffmpeg && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -33,6 +39,8 @@ COPY --from=build /app/server/dist/ server/dist/
 COPY --from=build /app/server/package.json server/
 COPY --from=build /app/server/node_modules/ server/node_modules/
 COPY --from=build /app/web/dist/ web/dist/
+COPY --from=build /app/models/ models/
+COPY models/NOTICE models/
 
 # node:22-slim ships a non-root `node` user (uid 1000) — run as that instead
 # of root. Volume mount points must be owned by it before Docker seeds a

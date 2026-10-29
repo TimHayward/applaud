@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { speakerConfig } from "@applaud/shared";
+import { speakerConfig, type SpeakerStatusResponse } from "@applaud/shared";
 import { loadConfig } from "../config.js";
 import { getRecordingById } from "../sync/state.js";
 import { observedPlaudNames } from "../speakers/analyse.js";
@@ -8,7 +8,7 @@ import { speakerRunner } from "../speakers/service.js";
 /** Mounted at /api: speaker identification status, the capability check, re-analysis. */
 export const speakersRouter = Router();
 
-function statusBody(): Record<string, unknown> {
+function statusBody(): SpeakerStatusResponse {
   const cfg = loadConfig();
   const s = speakerConfig(cfg);
   return {

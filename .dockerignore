@@ -12,3 +12,4 @@ stitch
 .DS_Store
 .env
 .env.local
+models/*.onnx

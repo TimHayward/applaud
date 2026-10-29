@@ -106,6 +106,49 @@ export interface ConfigResponse {
   config: AppConfig;
 }
 
+/**
+ * `off`: switched off. `checking`: capability check running. `available`: jobs
+ * run. `unsupported`: this host can't run the model. `unavailable`: the check
+ * or the process failed; Retry runs the check again.
+ */
+export type SpeakerState = "off" | "checking" | "available" | "unsupported" | "unavailable";
+
+export interface SpeakerStatus {
+  state: SpeakerState;
+  reason: string | null;
+  modelId: string | null;
+  dim: number | null;
+  /** Model the voiceprint library is built with; differs from `modelId` while re-embedding. */
+  activeModelId: string | null;
+  queued: number;
+  failed: number;
+  reembedding: number;
+  /** Recording being analysed now. */
+  current: string | null;
+  lastRun: {
+    recordingId: string;
+    kind: "analyse" | "reembed";
+    at: number;
+    ok: boolean;
+    error: string | null;
+  } | null;
+}
+
+export interface SpeakerStatusResponse extends SpeakerStatus {
+  enabled: boolean;
+  ownerName: string | null;
+  plaudNickname: string | null;
+  /** Names Plaud has tagged speakers with, by number of recordings: candidates for the owner. */
+  plaudNames: { name: string; recordings: number }[];
+}
+
+/** `POST /api/config` body for speaker settings. */
+export interface SpeakerSettingsPatch {
+  enabled?: boolean;
+  /** "" or null falls back to the Plaud nickname. */
+  ownerName?: string | null;
+}
+
 export interface WebhookLogEntry {
   id: number;
   recordingId: string | null;

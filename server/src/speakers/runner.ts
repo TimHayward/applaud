@@ -1,3 +1,4 @@
+import type { SpeakerState, SpeakerStatus } from "@applaud/shared";
 import { logger } from "../logger.js";
 import { analyseRecording, enrolOwner, recordingsWithStaleVoiceprints, reembedRecording } from "./analyse.js";
 import { EmbedderError, type Embedder } from "./embedder.js";
@@ -14,28 +15,6 @@ import {
   type JobKind,
   type SpeakerJob,
 } from "./jobs.js";
-
-/**
- * `off`: switched off. `checking`: capability check running. `available`: jobs
- * run. `unsupported`: this host can't run the model. `unavailable`: the check
- * or the process failed; Retry runs the check again.
- */
-export type SpeakerState = "off" | "checking" | "available" | "unsupported" | "unavailable";
-
-export interface SpeakerStatus {
-  state: SpeakerState;
-  reason: string | null;
-  modelId: string | null;
-  dim: number | null;
-  /** Model the voiceprint library is built with; differs from `modelId` while re-embedding. */
-  activeModelId: string | null;
-  queued: number;
-  failed: number;
-  reembedding: number;
-  /** Recording being analysed now. */
-  current: string | null;
-  lastRun: { recordingId: string; kind: JobKind; at: number; ok: boolean; error: string | null } | null;
-}
 
 export interface RunnerSettings {
   enabled: boolean;

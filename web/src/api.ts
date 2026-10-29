@@ -17,6 +17,8 @@ import type {
   WebhookRedeliverResponse,
   RenameRecordingResponse,
   TicketResponse,
+  SpeakerSettingsPatch,
+  SpeakerStatusResponse,
 } from "@applaud/shared";
 
 export class ApiError extends Error {
@@ -181,6 +183,11 @@ export const api = {
     if (params.offset) qs.set("offset", String(params.offset));
     return jsonFetch<WebhookLogResponse>(`/api/webhooks/log?${qs.toString()}`);
   },
+  speakerStatus: () => jsonFetch<SpeakerStatusResponse>("/api/speakers/status"),
+  /** Re-run the capability check. */
+  speakerCheck: () => jsonFetch<SpeakerStatusResponse>("/api/speakers/check", { method: "POST", body: "{}" }),
+  updateSpeakerSettings: (patch: SpeakerSettingsPatch) =>
+    jsonFetch<ConfigResponse>("/api/config", { method: "POST", body: JSON.stringify({ speakers: patch }) }),
   webhookRedeliver: (recordingId: string, event: "audio_ready" | "transcript_ready") =>
     jsonFetch<WebhookRedeliverResponse>("/api/webhooks/redeliver", {
       method: "POST",
