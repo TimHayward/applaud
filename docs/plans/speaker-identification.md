@@ -1,24 +1,24 @@
-# Speaker identification, `-Applaud` outputs and Plaud write-back
+# Speaker identification and `-Applaud` transcripts
 
 |               |                                                                                                                                                                                                                                          |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**    | Phase 0 complete (GO). Phase 1 ready to start.                                                                                                                                                                                           |
-| **Updated**   | 2026-10-19                                                                                                                                                                                                                               |
+| **Status**    | Phase 0 complete (GO). Revised for a single container; Phase 1 ready to start.                                                                                                                                                           |
+| **Updated**   | 2026-10-29                                                                                                                                                                                                                               |
 | **Owner**     | Tim Hayward                                                                                                                                                                                                                              |
 | **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A); tool in [`spikes/speaker-calibration/`](https://github.com/TimHayward/applaud/tree/claude/nice-noether-fmry57/spikes/speaker-calibration) on branch `claude/nice-noether-fmry57` |
 | **Prior art** | [`mcowger/olive2`](https://github.com/mcowger/olive2) reviewed 2026-10-19 (Appendix B)                                                                                                                                                   |
+| **Revisions** | 2026-10-19: two-container design. 2026-10-29: single container (D9 replaced, D15 added), segment keys moved to the official API's fields (D8), summary and write-back deferred (section 11).                                             |
 
 ## 1. Summary
 
-Plaud no longer recognises speakers other than the account owner. Applaud will take this over:
+Plaud no longer recognises speakers other than the account owner. Applaud will take this over, inside its own container:
 
-1. A separate **speaker worker** container turns each Plaud speaker's audio into a voiceprint using a local model (ERes2Net). Audio never leaves the local network.
+1. A **speaker process** in the Applaud container turns each Plaud speaker's audio into a voiceprint using a local model (ERes2Net). Audio never leaves the container.
 2. **Applaud** keeps a library of named people and their voiceprints, matches each new recording's speakers against it, and labels them automatically when it is confident.
 3. A **labelling panel** on the recording page lets the user confirm, correct or name speakers by listening to short clips.
-4. Applaud writes a **`-Applaud` transcript** with the names applied and, once speakers are labelled, an alternative **`-Applaud` summary** via OpenRouter.
-5. Later, confirmed names are **written back to Plaud** so they appear in Ask Plaud and the Plaud app.
+4. Applaud writes a **`-Applaud` transcript** with the names applied.
 
-The two containers can run on the same host or on different hosts. In this deployment Applaud stays on the Synology NAS and the worker runs on the Portainer host.
+The feature is optional. On a host that cannot run the model (no AVX, too little memory, an unsupported architecture), Applaud detects this, hides the feature and runs exactly as it does today.
 
 ## 2. Scope
 
@@ -26,170 +26,165 @@ The two containers can run on the same host or on different hosts. In this deplo
 
 - Speaker identification across recordings, with automatic labels above a calibrated confidence and user confirmation below it.
 - Labelling and correction UI on the recording page; people management.
-- `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md` in each recording folder.
-- Webhook events for the new outputs, and an updated n8n template.
-- Guarded write-back of speaker names to Plaud (last phase).
+- `transcript-Applaud.json` and `transcript-Applaud.txt` in each recording folder.
+
+**Deferred** (designed, not scheduled; section 11)
+
+- An alternative `-Applaud` summary via OpenRouter, new webhook events and the n8n template.
+- Write-back of speaker names to Plaud.
 
 **Out of scope**
 
 - A second, independent transcription. Plaud's transcript and segmentation are trusted.
 - Speaker identification by an LLM. Language models cannot recognise voices.
-- Running speaker models on the NAS (see section 4).
+- A separate worker container (section 4.4).
 
 ## 3. Decisions
 
-| #   | Decision                                                                                                                                                                                                                                              | Basis                                                                                  |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| D1  | No second transcription. Plaud's transcript and speaker segmentation are the source.                                                                                                                                                                  | User decision                                                                          |
-| D2  | Speaker identity comes from **local voice embeddings**, never an LLM.                                                                                                                                                                                 | Technical constraint                                                                   |
-| D3  | Voiceprints are stored **only in Applaud's SQLite**. The worker is stateless. Recordings are private conversations.                                                                                                                                   | User constraint (privacy)                                                              |
-| D4  | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`, `summary-Applaud.md`.                                                                                                                                      | User decision                                                                          |
-| D5  | The `-Applaud` summary is generated via OpenRouter **only after speakers are labelled**, plus a manual **Regenerate**. Transcript text only is sent, never audio.                                                                                     | User decision                                                                          |
-| D6  | Only **confirmed** labels (and Plaud's owner tag) create voiceprints. Automatic matches never feed the library.                                                                                                                                       | Prevents compounding errors                                                            |
-| D7  | Write-back to Plaud is designed now and built last, off by default. It goes through Applaud (n8n can trigger it); the Plaud MCP is read-only.                                                                                                         | User decision; MCP has no write tools                                                  |
-| D8  | Labels are keyed by Plaud `segment_uid` and speaker label, with provenance, and stored outside `transcript.json`, so resyncs cannot destroy them and write-back needs no rework.                                                                      | Design                                                                                 |
-| D9  | **Two containers**: Applaud and a separate speaker worker, deployable on the same host or on different hosts. Applaud owns all state; the worker only computes.                                                                                       | NAS has no AVX and little free memory; user requirement to separate workloads          |
-| D10 | Embedding model: **3D-Speaker ERes2Net (English, VoxCeleb)**, 192-dim. Fallback: NeMo TitaNet-large.                                                                                                                                                  | Evidenced: Phase 0 (Appendix A)                                                        |
-| D11 | Each person keeps **up to 12 voiceprints**, one per confirmed recording (that label's centroid). A label's score for a person is the **best match** across them. The Plaud scene code is stored as metadata only.                                     | Evidenced: single-recording EER 0.022 (Appendix A); same pattern in Olive (Appendix B) |
-| D12 | Plaud's speaker labels are treated as one person per label. Per-segment correction stays available, but is a secondary tool.                                                                                                                          | Evidenced: 0 of 60 `Speaker N` labels scored like the owner                            |
-| D13 | **Library hygiene**: one anchor voiceprint per person that is never evicted, a cap with eviction, near-duplicate skip, a minimum speech length, and a warning when a confirmed voiceprint does not resemble the person's existing ones (section 7.1). | Adopted from Olive, made stricter by D6                                                |
-| D14 | Voiceprints store **source references** (recording, Plaud label, segment ids), never audio copies. A model change re-embeds every voiceprint from the original audio on the NAS.                                                                      | Privacy (D3); Olive keeps WAV clips instead, which we reject                           |
+| #   | Decision                                                                                                                                                                                                                                                       | Basis                                                                                  |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| D1  | No second transcription. Plaud's transcript and speaker segmentation are the source.                                                                                                                                                                           | User decision                                                                          |
+| D2  | Speaker identity comes from **local voice embeddings**, never an LLM.                                                                                                                                                                                          | Technical constraint                                                                   |
+| D3  | Voiceprints are stored **only in Applaud's SQLite**. Audio and voiceprints never leave the container. Recordings are private conversations.                                                                                                                    | User constraint (privacy)                                                              |
+| D4  | Outputs live in the recording folder: `transcript-Applaud.json`, `transcript-Applaud.txt`.                                                                                                                                                                     | User decision                                                                          |
+| D5  | _Deferred:_ the `-Applaud` summary via OpenRouter (section 11).                                                                                                                                                                                                | User decision 2026-10-29                                                               |
+| D6  | Only **confirmed** labels (and Plaud's owner tag) create voiceprints. Automatic matches never feed the library.                                                                                                                                                | Prevents compounding errors                                                            |
+| D7  | _Deferred:_ write-back to Plaud (section 11).                                                                                                                                                                                                                  | User decision 2026-10-29                                                               |
+| D8  | A recording's speaker is keyed by Plaud's **`original_speaker`** (the diarisation label, unchanged by renames in the Plaud app). A segment is keyed by its **`start_time`** in milliseconds. Labels are stored outside `transcript.json`, so resyncs cannot destroy them. | The official API's segments carry no `segment_uid` (section 6.3)                       |
+| D9  | **One container.** Applaud and the speaker model ship in the same image and run on the same host. There is no worker container, no worker API and no shared secret.                                                                                          | User decision 2026-10-29; the hosting moved from the NAS to a capable Portainer host   |
+| D10 | Embedding model: **3D-Speaker ERes2Net (English, VoxCeleb)**, 192-dim, run by `sherpa-onnx-node`. **Baked into the image**, pinned by SHA-256. Fallback: NeMo TitaNet-large.                                                                                   | Evidenced: Phase 0 (Appendix A); user decision on delivery                             |
+| D11 | Each person keeps **up to 12 voiceprints**, one per confirmed recording (that label's centroid). A label's score for a person is the **best match** across them. The Plaud scene code is stored as metadata only.                                              | Evidenced: single-recording EER 0.022 (Appendix A); same pattern in Olive (Appendix B) |
+| D12 | Plaud's speaker labels are treated as one person per label. Per-segment correction stays available, but is a secondary tool.                                                                                                                                   | Evidenced: 0 of 60 `Speaker N` labels scored like the owner                            |
+| D13 | **Library hygiene**: one anchor voiceprint per person that is never evicted, a cap with eviction, near-duplicate skip, a minimum speech length, and a warning when a confirmed voiceprint does not resemble the person's existing ones (section 7.1).          | Adopted from Olive, made stricter by D6                                                |
+| D14 | Voiceprints store **source references** (recording, Plaud label, segment start times), never audio copies. A model change re-embeds every voiceprint from the original audio.                                                                                  | Privacy (D3); Olive keeps WAV clips instead, which we reject                           |
+| D15 | The model runs in a **child process** of Applaud, started on demand and stopped when idle, never in Applaud's main process. A crash, an illegal instruction or an out-of-memory kill in native code takes down only the child.                                 | Crash isolation, responsiveness and memory (section 4.1)                               |
+| D16 | **Any host, feature optional.** One image for every host. A capability check decides whether speaker identification is available; where it is not, the feature is hidden and Applaud is unaffected.                                                          | User decision 2026-10-29                                                               |
 
-## 4. Deployment: two containers
+## 4. Deployment: one container
 
-### 4.1 Containers
+### 4.1 Processes
 
-| Container                | Image                                             | Role                                                                     | State                                                               | Resources                                                       |
-| ------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `applaud`                | `ghcr.io/timhayward/applaud` (existing)           | Sync, UI, API, speaker library, matching, outputs, summary, write-back   | Config dir and SQLite (voiceprints included); recordings folder     | Unchanged: about 110 MB RAM, negligible CPU from this feature   |
-| `applaud-speaker-worker` | `ghcr.io/timhayward/applaud-speaker-worker` (new) | Fetch audio, decode with ffmpeg, embed requested windows, return vectors | **None.** Temp audio in an ephemeral directory, deleted per request | About 300 to 400 MB RAM with ERes2Net; 2 CPU threads; needs AVX |
+| Process                    | Started by                                                | Role                                                                                       | State                                               | Resources                                                          |
+| -------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------ |
+| Applaud (`node server/dist/index.js`) | `tini`, as today                                 | Sync, UI, API, speaker library, matching, outputs, job queue, supervisor of the child     | Config dir and SQLite (voiceprints included); recordings folder | Unchanged: about 110 MB RAM                               |
+| Speaker process            | Applaud, with `child_process.fork`, when a job is waiting | Decode audio with ffmpeg, embed requested windows, return vectors over IPC                  | **None.** Temp audio in an ephemeral directory, deleted per request | About 300 to 400 MB RAM while running; `NUM_THREADS` CPU threads (default 2) |
 
-Both images are built from this repository and released with the same version tag. The worker lives in the monorepo as `worker/`.
+Why a child process rather than Applaud's own process or a `worker_thread`:
 
-### 4.2 Topologies
+- **Crash isolation.** ONNX Runtime is native code. On a CPU without AVX it can die with `SIGILL`, and under a container memory limit the kernel kills the largest process. In a thread either would take Applaud down; in a child only the child dies.
+- **Responsiveness.** Embedding is synchronous CPU work (about 8 s per hour of audio, Appendix A). It never blocks Applaud's request handling or sync.
+- **Memory.** The model's memory is returned to the host when the child exits after an idle period, so the container sits near today's footprint between jobs.
 
-| Topology                          | When to use                                               | Worker URL in Applaud                                                                |
-| --------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| **Split hosts** (this deployment) | Applaud host is small or lacks AVX (e.g. Synology DS920+) | `http://<worker-host>:8091`                                                          |
-| **Single host**                   | One capable Docker host runs everything                   | `http://applaud-speaker-worker:8091` on a private compose network, no published port |
-| **Worker absent**                 | Speaker features not wanted                               | Not set. Applaud runs exactly as today; speaker features are hidden                  |
+### 4.2 Image
 
-This deployment:
+Changes to the existing `Dockerfile` (still `node:22-slim`, Debian with glibc, which `sherpa-onnx-node`'s prebuilt binaries need):
 
-| Host                              | Container                | Measured                                                                               |
-| --------------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| Synology DS920+ (`192.168.0.117`) | `applaud`                | Celeron J4125, **no AVX**, 3.7 GB RAM with about 1 GB available and 2 GB swap in use   |
-| Portainer host `bluedckr01`       | `applaud-speaker-worker` | AVX, 6 cores, 16 GB RAM with about 6 GB available; always on; reaches the NAS on 44471 |
+- Install `ffmpeg` with `--no-install-recommends` in the runtime stage.
+- Add `sherpa-onnx-node` as a server dependency. Its native package is per platform; the build must succeed on `linux/arm64` even if the feature turns out to be unavailable there at runtime (section 4.3).
+- Download the ERes2Net `.onnx` file in the build stage, verify its SHA-256, and copy it to `/app/models/`. A hash mismatch fails the build.
+- Record the size increase in the Phase 1 PR. It has not been measured; expect tens of MB for the model plus ffmpeg's dependencies.
 
-### 4.3 Network flows
+The release workflow keeps building `linux/amd64` and `linux/arm64` from the same Dockerfile. There is no second image.
 
-| From    | To      | Purpose                                              | Port            |
-| ------- | ------- | ---------------------------------------------------- | --------------- |
-| Applaud | Worker  | `POST /v1/embed`, `GET /health`                      | 8091 (worker)   |
-| Worker  | Applaud | `GET /media/<folder>/<audio>` to fetch the recording | 44471 (Applaud) |
+### 4.3 Capability check
 
-Both directions stay on the LAN. Nothing is exposed to the internet.
+When speaker identification is switched on, and on each start while it is on, Applaud starts the speaker process and asks it to embed one second of silence.
 
-### 4.4 Security
+| Result                                          | Status shown in Settings → Speakers         | Effect                                            |
+| ----------------------------------------------- | ------------------------------------------- | ------------------------------------------------- |
+| Vector returned with the expected `modelId` and `dim` | **Available**, with model id and timing | Jobs run                                          |
+| Child exits with a signal (`SIGILL`, `SIGKILL`) | **Not supported on this host**, with the reason (CPU instruction set, memory) | Jobs stay queued; nothing else changes |
+| Native module fails to load                     | **Not supported on this host** (platform)   | As above                                          |
+| Timeout                                         | **Unavailable**, with a Retry button        | As above                                          |
 
-- **Shared secret.** `WORKER_SECRET` (at least 32 characters) is set on both containers. Every Applaud → worker request is signed with HMAC-SHA256 over `<timestamp>.<body>` (the existing webhook signing scheme, `server/src/webhook/sign.ts`), sent as `X-Applaud-Timestamp` and `X-Applaud-Signature`. The worker rejects bad signatures and timestamps more than 5 minutes off.
-- **Audio access.** When Applaud has a LAN token, it issues a short-lived, folder-scoped `/media` ticket (`issueTicket`, 15 minutes) for each request. The worker never holds the LAN token.
-- **SSRF guard.** The worker only fetches audio from `APPLAUD_BASE_URL`, configured on the worker. Any other host is refused.
-- **No retention.** The worker writes audio only to a temp directory, deletes it after each request, and never logs URLs, titles or transcript content.
-- **Health.** `GET /health` is unauthenticated and returns only status, version and model id.
+The check result is cached in memory for the process lifetime and re-run on **Retry** or a restart. Its outcome is never fatal to Applaud.
+
+### 4.4 Why not a separate worker container
+
+The two-container design (revision of 2026-10-19) existed because the NAS had no AVX and about 1 GB of free memory. Applaud now runs on a Portainer host with AVX and enough memory, so the separation bought complexity (an HTTP API, HMAC secret, SSRF guard, `/media` tickets, a second image and three compose files) without a need. The `Embedder` interface (section 6.1) keeps a remote implementation possible if a constrained host ever needs one again.
 
 ### 4.5 Configuration
 
-**Worker** (environment):
+**Environment** (optional):
 
-| Variable           | Default  | Purpose                                                            |
-| ------------------ | -------- | ------------------------------------------------------------------ |
-| `APPLAUD_BASE_URL` | required | Where audio may be fetched from, e.g. `http://192.168.0.117:44471` |
-| `WORKER_SECRET`    | required | Shared HMAC secret                                                 |
-| `PORT`             | `8091`   | Listen port                                                        |
-| `NUM_THREADS`      | `2`      | ONNX Runtime threads                                               |
-| `MAX_CONCURRENCY`  | `1`      | Parallel embed requests; extra requests get `429`                  |
+| Variable                   | Default | Purpose                                                    |
+| -------------------------- | ------- | ---------------------------------------------------------- |
+| `APPLAUD_SPEAKER_THREADS`  | `2`     | ONNX Runtime threads in the speaker process                |
+| `APPLAUD_SPEAKER_IDLE_SEC` | `300`   | Stop the speaker process after this long with no work      |
 
 **Applaud** (Settings → Speakers, stored in `settings.json`):
 
-| Setting                                  | Default            | Notes                                                   |
-| ---------------------------------------- | ------------------ | ------------------------------------------------------- |
-| Enable speaker identification            | Off                |                                                         |
-| Worker URL                               | empty              | **Test** button calls `/health` and a signed `/v1/ping` |
-| Worker secret                            | empty              | Redacted in the config API like other secrets           |
-| Auto threshold / margin / minimum speech | 0.75 / 0.10 / 20 s | Section 7                                               |
-| Suggest threshold                        | 0.55               | Section 7                                               |
+| Setting                                  | Default            | Notes                                       |
+| ---------------------------------------- | ------------------ | ------------------------------------------- |
+| Enable speaker identification            | Off                | Runs the capability check (section 4.3)     |
+| Status                                   | read only          | Available / not supported / unavailable, model id, last job |
+| Auto threshold / margin / minimum speech | 0.75 / 0.10 / 20 s | Section 7                                   |
+| Suggest threshold                        | 0.55               | Section 7                                   |
 
-### 4.6 Compose files (Phase 1 deliverables)
-
-- `docker-compose.yml`: Applaud only, unchanged.
-- `deploy/worker.compose.yml`: the worker on its own, for the second host (Portainer stack).
-- `deploy/single-host.compose.yml`: both containers with a private network.
+`docs/portainer.md` gains a "Speaker identification" section: memory headroom (about 400 MB more while jobs run), an optional `mem_limit` for the stack and what happens when it is too low, and the AVX requirement on x86.
 
 ## 5. Architecture
 
 ```
- NAS: applaud                                         Portainer host: applaud-speaker-worker
- ───────────────────────────────────────────          ─────────────────────────────────────
+ Applaud container
+ ──────────────────────────────────────────────────────────────────────────────
  Plaud sync → transcript.json + audio.*
         │
- speaker job queue (SQLite) ── POST /v1/embed ──────►  verify HMAC
-        │      (audio URL + windows)                   GET /media/... (ticket) ◄── fetch audio
-        │                                              ffmpeg → 16 kHz windows
-        │                                              ERes2Net → vectors
-        │  ◄────────────── vectors + model_id ──────── delete temp audio
+ speaker job queue (SQLite)
+        │
+ supervisor ── fork on demand ──► speaker process
+        │      IPC: { audioPath, windows }      ffmpeg → 16 kHz PCM (temp dir)
+        │                                       ERes2Net → vectors
+        │  ◄── IPC: { modelId, dim, vectors } ── delete temp audio; exit when idle
         ▼
  per-label centroid → matcher (library, thresholds, one-to-one)
         │
  recording_speakers: auto | suggested | unknown | confirmed
         │                         │
  labelling panel (confirm ⇒ voiceprint)   transcript-Applaud.{json,txt}
-                                          │
-                       summary-Applaud.md (OpenRouter, after labelling)
-                                          │
-              webhooks: applaud_transcript_ready / applaud_summary_ready
-                                          │
-                          (Phase 5) write-back to Plaud
 ```
 
-Jobs run one at a time, separate from the sync poller, so speaker analysis never delays sync. If the worker is unreachable, jobs wait and retry with back-off (the webhook re-drive pattern), and the recording page shows "speaker analysis pending".
+Jobs run one at a time, separate from the sync poller, so speaker analysis never delays sync. If the speaker process crashes, the job is retried with back-off (the webhook re-drive pattern); after three crashes in a row the capability check is re-run, and the recording page shows "speaker analysis pending".
 
-## 6. Worker API (v1)
+## 6. Speaker process
 
-**`GET /health`** → `200 { "ok": true, "version": "…", "modelId": "3dspeaker_eres2net_en_voxceleb_16k@c5915837", "dim": 192, "busy": false }`
+### 6.1 `Embedder` interface
 
-**`POST /v1/ping`** (signed) → `200 { "ok": true }`. Used by the Settings **Test** button to prove the secret matches.
-
-**`POST /v1/embed`** (signed)
-
-```json
-{
-  "requestId": "rec-7456…-1729000000",
-  "audioUrl": "http://192.168.0.117:44471/media/<folder>/audio.ogg?ticket=…",
-  "windows": [{ "id": "<segment_uid>", "startMs": 30, "endMs": 8270 }]
+```ts
+interface Embedder {
+  health(): Promise<{ ok: boolean; modelId: string; dim: number; reason?: string }>;
+  embed(req: {
+    audioPath: string;                                   // absolute, inside the recordings dir
+    windows: { id: string; startMs: number; endMs: number }[];
+  }): Promise<{
+    modelId: string;
+    dim: number;
+    audioSeconds: number;
+    elapsedMs: number;
+    vectors: { id: string; vector: Float32Array }[];
+    skipped: { id: string; reason: "too_short" | "out_of_range" }[];
+  }>;
 }
 ```
 
-Response `200`:
+Implementations: `LocalEmbedder` (the supervisor and child process below) and `FakeEmbedder` (deterministic vectors, for tests). Window ids are `<original_speaker>@<start_time>`.
 
-```json
-{
-  "modelId": "3dspeaker_eres2net_en_voxceleb_16k@c5915837",
-  "dim": 192,
-  "audioSeconds": 3612.4,
-  "elapsedMs": 9120,
-  "vectors": [{ "id": "<segment_uid>", "vector": "<base64 float32 LE>" }],
-  "skipped": [{ "id": "<segment_uid>", "reason": "too_short" }]
-}
-```
+### 6.2 Supervisor and IPC
 
-Errors: `400` invalid request, `401` bad signature or stale timestamp, `403` audio URL outside `APPLAUD_BASE_URL`, `422` audio fetch or decode failed (with a code), `429` busy (`Retry-After`), `500` unexpected.
+- **Start.** `child_process.fork("server/dist/speakers/embedder-process.js")` with `serialization: "advanced"` so `Float32Array` crosses IPC without base64. Environment is limited to what the child needs.
+- **Requests.** One in flight at a time, each with a request id. Timeout 10 minutes per request; on timeout the child is killed and the job retried.
+- **Path guard.** The supervisor resolves `audioPath` and refuses anything outside the configured recordings directory. The child only reads the file it is given.
+- **Idle stop.** The child exits after `APPLAUD_SPEAKER_IDLE_SEC` with no request, and on Applaud shutdown (`SIGTERM` forwarded).
+- **Crash handling.** An exit during a request fails that request with the exit code or signal; the job is retried with back-off. A `SIGILL` or a failed native load marks the feature as not supported (section 4.3).
+- **No retention.** The child decodes into a per-request temp directory, deletes it afterwards, and never logs paths, titles or transcript content.
 
-Behaviour:
+### 6.3 Plaud segment fields
 
-- The worker retries its own audio fetch up to 4 times with back-off. Applaud closes idle keep-alive connections after 5 s, which caused a failure in Phase 0.
-- Applaud's client timeout is 10 minutes per request and it retries `429`, `5xx` and network errors with back-off.
-- Applaud stores `modelId` with every vector and records the active model. When the worker reports a different `modelId`, Applaud queues a re-embed job for every voiceprint from its source references (D14) and pauses matching until it finishes, so vectors from different models are never compared.
+The official API's transcript segments (fixture in `server/src/sync/poller.test.ts`) carry `start_time`, `end_time`, `content`, `speaker` and `original_speaker`; there is no `segment_uid`. `speaker` reflects renames made in the Plaud app, `original_speaker` does not, so `original_speaker` is the stable label (D8). The first Phase 1 task confirms this on real `transcript.json` files from the Portainer deployment, including whether `start_time` is unique within a recording; if it is not, the segment key becomes `start_time` plus the segment's index among equal start times.
+
+### 6.4 Model change
+
+Applaud stores `modelId` with every vector and records the active model. When the speaker process reports a different `modelId` (a new image with a new model), Applaud queues a re-embed job for every voiceprint from its source references (D14) and pauses matching until it finishes, so vectors from different models are never compared.
 
 ## 7. Matching rules
 
@@ -237,8 +232,8 @@ CREATE TABLE speaker_embeddings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   speaker_id INTEGER NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
   recording_id TEXT NOT NULL,
-  plaud_label TEXT NOT NULL,
-  segment_uids TEXT NOT NULL,      -- JSON array: source references for re-embedding (D14)
+  plaud_label TEXT NOT NULL,       -- Plaud original_speaker (D8)
+  segment_starts TEXT NOT NULL,    -- JSON array of start_time ms: source references for re-embedding (D14)
   scene TEXT,                      -- Plaud scene code, metadata only
   is_anchor INTEGER NOT NULL DEFAULT 0,
   model_id TEXT NOT NULL,
@@ -253,7 +248,7 @@ CREATE TABLE speaker_embeddings (
 -- Per recording, per Plaud label: who it is
 CREATE TABLE recording_speakers (
   recording_id TEXT NOT NULL,
-  plaud_label TEXT NOT NULL,
+  plaud_label TEXT NOT NULL,       -- Plaud original_speaker (D8)
   speaker_id INTEGER REFERENCES speakers(id) ON DELETE SET NULL,
   status TEXT NOT NULL,            -- 'auto' | 'suggested' | 'unknown' | 'confirmed' | 'ignored'
   confidence REAL,
@@ -268,13 +263,13 @@ CREATE TABLE recording_speakers (
 -- Per-segment corrections
 CREATE TABLE segment_overrides (
   recording_id TEXT NOT NULL,
-  segment_uid TEXT NOT NULL,
+  segment_start INTEGER NOT NULL,  -- Plaud start_time ms (D8, section 6.3)
   speaker_id INTEGER REFERENCES speakers(id) ON DELETE CASCADE,
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY (recording_id, segment_uid)
+  PRIMARY KEY (recording_id, segment_start)
 );
 
--- Work queue for the worker; (kind, recording_id) is the de-duplication key
+-- Work queue for the speaker process; (kind, recording_id) is the de-duplication key
 CREATE TABLE speaker_jobs (
   kind TEXT NOT NULL,              -- 'analyse' | 'reembed'
   recording_id TEXT NOT NULL,
@@ -288,23 +283,18 @@ CREATE TABLE speaker_jobs (
 );
 
 ALTER TABLE recordings ADD COLUMN speakers_processed_at INTEGER;
-ALTER TABLE recordings ADD COLUMN applaud_summary_at INTEGER;
 ```
 
-The active embedding model id is stored with the speaker settings and compared with the worker's `modelId` (section 6). Voiceprints are never included in webhooks, exports or API responses. Deleting a person deletes their voiceprints.
+The active embedding model id is stored with the speaker settings and compared with the speaker process's `modelId` (section 6.4). Voiceprints are never included in webhooks, exports or API responses. Deleting a person deletes their voiceprints.
 
-## 9. Outputs and integration
+## 9. Outputs
 
-| Output                             | Content                                                                                                   | When                                                                  |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `transcript-Applaud.json`          | Plaud segments plus `segment_uid`, `plaud_speaker`, `speaker`, `speaker_id`, `label_status`, `confidence` | After analysis; rewritten atomically whenever labels change           |
-| `transcript-Applaud.txt`           | Same line format as `transcript.txt`, with Applaud names                                                  | As above                                                              |
-| `summary-Applaud.md`               | Alternative summary using speaker names, via OpenRouter                                                   | Only once no unknown or suggested labels remain, or on **Regenerate** |
-| Webhook `applaud_transcript_ready` | Existing payload shape plus the new files                                                                 | When the `-Applaud` transcript is first written or changes            |
-| Webhook `applaud_summary_ready`    | Existing payload shape plus the summary                                                                   | When the summary is written                                           |
-| n8n template                       | Writes `<Title> - Transcript-Applaud.md` and `<Title> - Summary-Applaud.md`                               | Phase 4                                                               |
+| Output                    | Content                                                                                                       | When                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `transcript-Applaud.json` | Plaud segments plus `plaud_speaker` (`original_speaker`), `speaker`, `speaker_id`, `label_status`, `confidence` | After analysis; rewritten atomically whenever labels change |
+| `transcript-Applaud.txt`  | Same line format as `transcript.txt`, with Applaud names                                                      | As above                                                    |
 
-OpenRouter receives transcript text only, routed to providers with no data retention or collection. The summary is off by default.
+Both files are served by `/media` like the other recording files, so existing webhook consumers can fetch them by path. New webhook events are deferred with the summary (section 11).
 
 ## 10. Phases
 
@@ -312,30 +302,32 @@ Sizes are relative (S / M / L), professional judgement rather than evidenced eff
 
 ### Phase 0: Spike and calibration (S) — complete
 
-Model, worker host and thresholds selected on real recordings. See Appendix A.
+Model and thresholds selected on real recordings. See Appendix A. The host findings that led to two containers no longer apply (D9).
 
-### Phase 1: Two-container foundation (M)
+### Phase 1: Single-container foundation (M)
 
-- `worker/` package: HTTP server, HMAC verification, SSRF guard, audio fetch with retries, ffmpeg decode, ERes2Net embedding, `/health`, `/v1/ping`, `/v1/embed`.
-- Worker Docker image with ERes2Net baked in and SHA-256 pinned; release workflow builds and publishes it alongside Applaud.
-- Compose files (section 4.6) and a Portainer section in the README.
-- Applaud: migration (section 8), `Embedder` interface with the HTTP worker client and a fake for tests, Speakers settings with **Test**.
-- Job queue: triggered after `transcript_ready` and by "Re-analyse speakers"; back-off when the worker is down.
-- Owner enrolment from Plaud-tagged segments, and a backfill over existing recordings.
-- Job de-duplication on `(kind, recording_id)`; a failed job keeps Plaud's labels untouched. Matching is skipped while the library holds only the owner, but label centroids are still stored so later matching needs no re-embedding.
+- **First:** confirm the segment fields on real `transcript.json` files (section 6.3), and the ERes2Net model card licence (section 12). Both can change the data model or the model choice.
+- Image changes (section 4.2): ffmpeg, `sherpa-onnx-node`, the model baked in and SHA-256 pinned; both release architectures still build. Record the image size before and after.
+- `server/src/speakers/embedder-process.ts`: IPC handler, ffmpeg decode to a temp dir, ERes2Net embedding, temp cleanup.
+- Supervisor and `LocalEmbedder` (section 6.2), `FakeEmbedder`, path guard, idle stop, crash handling.
+- Capability check and Settings → Speakers status (section 4.3, 4.5).
+- Migration (section 8).
+- Job queue: triggered after `transcript_ready` and by "Re-analyse speakers"; de-duplication on `(kind, recording_id)`; back-off on crashes; a failed job keeps Plaud's labels untouched. Matching is skipped while the library holds only the owner, but label centroids are still stored so later matching needs no re-embedding.
+- Owner enrolment from Plaud-tagged segments, and a backfill over existing recordings that have audio on disk. Recordings shown as _details only_ are skipped until their audio is downloaded.
 - Shared `isGenericSpeakerLabel` helper in `shared/` (section 7, rule 7), with tests for every placeholder form.
 - Plaud transcript normalisation before embedding, with tests: detect seconds vs milliseconds timings, map a missing speaker to `UU` (skipped), drop segments whose end is not after their start.
-- Model-change detection and the `reembed` job (D14).
-- Move the calibration tool from the spike branch to `tools/speaker-calibration/` so it can be rerun (Phase 3 exit check, future model changes).
+- Model-change detection and the `reembed` job (section 6.4).
+- Move the calibration tool from the spike branch to `tools/speaker-calibration/`, reading audio from a local recordings directory, so it can be rerun (Phase 3 exit check, future model changes).
+- `docs/portainer.md`: "Speaker identification" section (section 4.5).
 
-**Done when:** both containers run in the split topology; a recording's labels are embedded and stored; stopping the worker leaves Applaud unaffected and the job resumes when it returns; a simulated model change re-embeds the library from source references; worker and client have unit tests; the single-host compose also works.
+**Done when:** in one container on the Portainer host, a recording's labels are embedded and stored; killing the speaker process mid-job leaves Applaud serving requests and the job completes on retry; the idle child exits and its memory is released; a simulated model change re-embeds the library from source references; the capability check reports "not supported" when the native module cannot load (tested by pointing it at a missing module); the supervisor, process protocol and queue have unit tests.
 
 ### Phase 2: Matching and `-Applaud` transcript (M)
 
 - Matcher (section 7) with unit tests for best-of-N scoring, banding, margin, minimum speech and one-to-one assignment.
 - Library hygiene (section 7.1) with unit tests for anchor, cap and eviction, near-duplicate skip and the low-resemblance flag.
 - `transcript-Applaud.json` / `.txt` (section 9).
-- API: `GET /api/recordings/:id/speakers`, `PUT /api/recordings/:id/speakers/:label`, `PUT /api/recordings/:id/segments/:uid/speaker`, `POST /api/recordings/:id/speakers/reanalyse`.
+- API: `GET /api/recordings/:id/speakers`, `PUT /api/recordings/:id/speakers/:label`, `PUT /api/recordings/:id/segments/:startMs/speaker`, `POST /api/recordings/:id/speakers/reanalyse`.
 
 **Done when:** the owner is auto-labelled on new recordings; a confirmed person is suggested or auto-labelled in their next recording; outputs regenerate on every label change.
 
@@ -350,51 +342,43 @@ Model, worker host and thresholds selected on real recordings. See Appendix A.
 
 **Done when:** an unknown speaker can be named from clips in under a minute, and the name is applied to the transcript and library; the generalisation recalibration has run and its thresholds are applied.
 
-### Phase 4: Summary and integration (M)
+## 11. Deferred
 
-- OpenRouter settings (key redacted, model, prompt, off by default); Generate / Regenerate.
-- Webhook events and n8n template (section 9).
+Kept here so the design is not lost. Neither is scheduled; each would be re-planned against the code as it stands when picked up.
 
-**Done when:** the summary is produced only after labelling, uses names, and reaches the n8n flow.
+**`-Applaud` summary and integration** (previously Phase 4). A summary that uses speaker names, generated via OpenRouter only once no unknown or suggested labels remain, plus a manual Regenerate. Transcript text only, never audio, routed to providers with no data retention. Off by default; key redacted in the config API. New webhook events `applaud_transcript_ready` and `applaud_summary_ready`, and an n8n template writing `<Title> - Transcript-Applaud.md` and `<Title> - Summary-Applaud.md`. Would add `recordings.applaud_summary_at`.
 
-### Phase 5: Plaud write-back (M, depends on capture)
+**Write-back to Plaud** (previously Phase 5). Confirmed names pushed to Plaud so they appear in Ask Plaud and the Plaud app. Prerequisite: find whether Plaud's official developer API can rename speakers; failing that, capture the web app's rename request. Design: one isolated mutating call, dry run, undo log, off by default, and precondition guards (`expectedPlaudLabel`, `expectedName`) checked against a fresh read immediately before writing, so a label changed in Plaud is skipped rather than overwritten.
 
-- Prerequisite: capture the Plaud web app's speaker-rename request (browser DevTools, saved as HAR), and complete the Plaud developer API evaluation (section 12). Prefer a sanctioned endpoint if one exists.
-- `server/src/plaud/speakers.ts`: the single mutating call, isolated and tested against the captured fixture.
-- `POST /api/recordings/:id/speakers/push`, callable from n8n: confirmed labels plus auto labels above a stricter threshold, dry-run mode, an undo log, off by default, per-recording and bulk.
-- **Precondition guards.** Each change carries `expectedPlaudLabel` (the label Applaud last saw in Plaud) and `expectedName` (the Applaud name being written). Applaud re-reads the transcript from Plaud immediately before writing and skips, with a reason, any label whose current value no longer matches. The dry run reports the same checks.
-- Reconcile on resync: names Applaud wrote are treated as confirmed.
+## 12. Risks
 
-**Done when:** a dry run shows the planned changes, a push renames speakers in Plaud, a label changed in Plaud after Applaud read it is skipped rather than overwritten, and the log can reverse it.
+| Risk                                                     | Likelihood    | Impact | Mitigation                                                                                                     |
+| -------------------------------------------------------- | ------------- | ------ | -------------------------------------------------------------------------------------------------------------- |
+| Wrong auto-label                                         | Low to medium | Medium | Margin and minimum-speech rules, D6, confirmation UI                                                           |
+| Thresholds do not generalise beyond the owner            | Medium        | Medium | Suggested band with confirmation; generalisation recalibration is a Phase 3 exit check                        |
+| Native code crashes or is killed for memory              | Low           | Low    | Child process (D15); retry with back-off; capability re-check; Applaud unaffected                             |
+| Container memory limit too low for the model             | Low to medium | Low    | Child is the one killed; status shows the reason; `docs/portainer.md` gives the headroom                      |
+| `sherpa-onnx-node` has no working build for an architecture | Medium (arm64) | Low | Capability check hides the feature (D16); the build must not fail on that platform                           |
+| Image grows for users who never enable the feature       | Certain       | Low    | Size measured and stated in the Phase 1 PR; accepted for offline, reproducible model delivery (D10)          |
+| Plaud segment fields change or `start_time` is not unique | Low to medium | Medium | Field check is the first Phase 1 task; normalisation layer with tests; index tiebreak (section 6.3)          |
+| User confirms the wrong name                             | Low to medium | Medium | Low-resemblance flag (section 7.1); per-person voiceprint list with delete                                     |
+| Plaud merges two people into one label                   | Low to medium | Medium | Per-segment reassign; merge suggestions                                                                        |
+| Embedding model changed later                            | Low           | Medium | `modelId` on every vector; automatic re-embed from source references (D14)                                    |
+| Voiceprints are biometric data                           | Certain       | Medium | Applaud's SQLite only, never exported, per-person deletion                                                     |
+| Cold start: only the owner known                         | Certain       | Low    | Fast labelling; new people move from suggested to auto after one to three confirmations                        |
 
-## 11. Risks
+## 13. Open items
 
-| Risk                                               | Likelihood    | Impact         | Mitigation                                                                                                                                   |
-| -------------------------------------------------- | ------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wrong auto-label (and later written back to Plaud) | Low to medium | High           | Margin and minimum-speech rules, D6, stricter write-back threshold, dry run, undo log                                                        |
-| Thresholds do not generalise beyond the owner      | Medium        | Medium         | Suggested band with confirmation; generalisation recalibration is a Phase 3 exit check                                                       |
-| Worker host unavailable                            | Medium        | Low            | Jobs queue with back-off; Applaud unaffected; "pending" shown                                                                                |
-| Shared secret leaked or mismatched                 | Low           | Medium         | HMAC with timestamp; SSRF guard; LAN only; Test button                                                                                       |
-| Plaud changes its undocumented API (read or write) | Medium        | Medium to high | Isolated client modules, fixture tests, write-back off by default with precondition guards; evaluate the official developer API (section 12) |
-| User confirms the wrong name                       | Low to medium | Medium         | Low-resemblance flag (section 7.1); per-person voiceprint list with delete                                                                   |
-| Plaud merges two people into one label             | Low to medium | Medium         | Per-segment reassign; merge suggestions                                                                                                      |
-| Embedding model changed later                      | Low           | Medium         | `modelId` on every vector; automatic re-embed from source references (D14)                                                                   |
-| Voiceprints are biometric data                     | Certain       | Medium         | Applaud only, never exported, per-person deletion                                                                                            |
-| Cold start: only the owner known                   | Certain       | Low            | Fast labelling; new people move from suggested to auto after one to three confirmations                                                      |
-
-## 12. Open items
-
-| Item                                                                                                                                                                                                                    | Owner      | Needed by        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------- |
-| Confirm ERes2Net model card licence terms                                                                                                                                                                               | Dev        | Phase 1          |
-| Run the named-speaker scan over existing recordings, to seed people beyond the owner                                                                                                                                    | User       | Phase 1 backfill |
-| Confirm OpenRouter zero-data-retention routing parameters, and choose the default summary model                                                                                                                         | Dev / User | Phase 4          |
-| Evaluate the official Plaud developer API (OAuth with PKCE, `platform.plaud.ai/developer/api`): history limit (third parties report only the 20 most recent recordings; unverified), and whether it can rename speakers | Dev        | Before Phase 5   |
-| Capture the Plaud speaker-rename request (HAR)                                                                                                                                                                          | User       | Phase 5          |
+| Item                                                                                                       | Owner | Needed by          |
+| ---------------------------------------------------------------------------------------------------------- | ----- | ------------------ |
+| Confirm segment fields and `start_time` uniqueness on real `transcript.json` files (section 6.3)           | Dev   | Phase 1, first     |
+| Confirm ERes2Net model card licence terms, including redistribution inside a public image                  | Dev   | Phase 1, first     |
+| Check whether `sherpa-onnx-node` publishes a `linux-arm64` build, so the arm64 image builds                | Dev   | Phase 1            |
+| Run the named-speaker scan over existing recordings, to seed people beyond the owner                       | User  | Phase 1 backfill   |
 
 ## Appendix A: Phase 0 evidence (2026-10-15)
 
-**Environment.** The NAS has no AVX and about 1 GB of free memory with 2 GB of swap in use, so speaker models cannot run there (D9). `sherpa-onnx-node@1.12.28` runs on the Portainer host with prebuilt linux-x64 binaries.
+**Environment at the time.** The NAS had no AVX and about 1 GB of free memory with 2 GB of swap in use, so speaker models could not run there; this drove the earlier two-container design. Applaud now runs on the Portainer host, which has AVX (D9). `sherpa-onnx-node@1.12.28` runs on that host with prebuilt linux-x64 binaries.
 
 **Method.** The calibration spike fetched recordings from Applaud over the LAN, embedded up to 60 s of speech per Plaud label, and used the owner's Plaud tag as ground truth. The main test, "library profile", builds the owner's voiceprint from the other 29 recordings and scores each recording's labels against it, as the feature will work. Output was numbers only.
 
@@ -419,7 +403,7 @@ Model, worker host and thresholds selected on real recordings. See Appendix A.
 - Plaud `serial_number` is not a stable device id (25 values in 30 recordings).
 - Resources: ERes2Net embeds about 8 s per hour of audio on 2 threads; about 300 MB with one model loaded.
 
-**Limits.** 30 owner trials and 60 impostor labels, so 0.017 is a single error. Only the owner was tested as a target. The suggested band and user confirmation cover this uncertainty.
+**Limits.** 30 owner trials and 60 impostor labels, so 0.017 is a single error. Only the owner was tested as a target. The suggested band and user confirmation cover this uncertainty. Phase 0 ran against the legacy Plaud API, before the move to the official API; the audio is the same, so the model results stand, but segment keys are re-checked (section 6.3).
 
 ## Appendix B: Prior art, `mcowger/olive2` (reviewed 2026-10-19)
 
@@ -431,14 +415,15 @@ Model, worker host and thresholds selected on real recordings. See Appendix A.
 | ---------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | Several trusted voiceprints per person, best score wins                                        | D11                                                 |
 | Anchor, cap with eviction, near-duplicate skip, clip length limits                             | D13, section 7.1                                    |
-| Model tag stored; library rebuilt when the model changes                                       | D14, section 6                                      |
+| Model tag stored; library rebuilt when the model changes                                       | D14, section 6.4                                    |
 | Durable job with a per-recording de-duplication key; keep Plaud labels on failure              | Phase 1                                             |
 | Shared generic-label classifier: "an unidentified cluster is not a person"                     | Section 7 rule 7, Phase 1                           |
 | Plaud segment normalisation (seconds vs milliseconds, missing speaker, bad timings) with tests | Phase 1                                             |
 | Ranked, spread-out clip selection for enrolment                                                | Phase 3                                             |
-| Write tools off by default, dry run, `expected…` precondition guards                           | Phase 5                                             |
 | A committed evaluation harness whose results lock the defaults                                 | Phase 3 recalibration; `tools/speaker-calibration/` |
-| Use of Plaud's official developer API                                                          | Open item (section 12)                              |
+| Use of Plaud's official developer API                                                          | Done in Plaud 4.0; segment keys follow it (D8)      |
+| Single container                                                                               | D9 (since 2026-10-29), with the model in a child process (D15) and a much smaller model |
+| Write tools off by default, dry run, `expected…` precondition guards                           | Deferred write-back design (section 11)             |
 
 **Not adopted**
 
@@ -446,7 +431,7 @@ Model, worker host and thresholds selected on real recordings. See Appendix A.
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Thresholds 0.45 / margin 0.06                        | Specific to WeSpeaker ResNet293, set on 36 AMI headset utterances from 4 speakers; ours come from 30 Plaud recordings (Appendix A) |
 | Automatic voiceprint adoption with outlier rejection | D6 is stricter: only confirmed labels enrol                                                                                        |
-| Storing enrolment clips as WAV files                 | Keeps third-party audio in a second place; D14 re-embeds from the NAS audio instead                                                |
-| Single container with about 4.5 GB of models         | Does not fit the NAS; two containers (D9)                                                                                          |
+| Storing enrolment clips as WAV files                 | Keeps third-party audio in a second place; D14 re-embeds from the original audio instead                                          |
+| About 4.5 GB of models in the image                  | ERes2Net meets the bar at a small fraction of the size (D10)                                                                       |
 | WeSpeaker ResNet293                                  | Not needed while ERes2Net meets the bar; first alternative if accuracy for people other than the owner disappoints                 |
 | Speaker library export and import                    | Conflicts with D3 (voiceprints never exported)                                                                                     |
