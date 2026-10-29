@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { AppConfig } from "@applaud/shared";
+import { DEFAULT_SPEAKER_CONFIG, type AppConfig } from "@applaud/shared";
 import type { Request, Response } from "express";
 
 const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
@@ -27,6 +27,8 @@ const baseConfig: AppConfig = {
   historyDays: 30,
   installedAt: null,
   libraryIndexedAt: null,
+  plaudNickname: null,
+  speakers: DEFAULT_SPEAKER_CONFIG,
   recordingsDir: "/tmp/r",
   webhook: null,
   pollIntervalMinutes: 10,

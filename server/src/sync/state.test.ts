@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type Database from "better-sqlite3";
-import type { AppConfig } from "@applaud/shared";
+import { DEFAULT_SPEAKER_CONFIG, type AppConfig } from "@applaud/shared";
 
 // Hoisted mocks. Must be set up before importing state.ts.
 const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
@@ -64,6 +64,8 @@ const baseConfig: AppConfig = {
   historyDays: 3650,
   installedAt: null,
   libraryIndexedAt: null,
+  plaudNickname: null,
+  speakers: DEFAULT_SPEAKER_CONFIG,
 };
 
 function makePlaudItem(overrides: Partial<PlaudRecordingMeta> = {}): PlaudRecordingMeta {

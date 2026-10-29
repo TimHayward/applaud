@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
-import type { AppConfig } from "@applaud/shared";
+import { DEFAULT_SPEAKER_CONFIG, type AppConfig } from "@applaud/shared";
 import path from "node:path";
 import type { PlaudFileDetail, PlaudFileSummary } from "../plaud/client.js";
 
@@ -71,6 +71,8 @@ const baseConfig: AppConfig = {
   historyDays: 30,
   installedAt: NOW,
   libraryIndexedAt: null,
+  plaudNickname: null,
+  speakers: DEFAULT_SPEAKER_CONFIG,
 };
 
 /** Plaud's timestamp format: UTC without a zone suffix. */

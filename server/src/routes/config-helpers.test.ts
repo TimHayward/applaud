@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { AppConfig } from "@applaud/shared";
+import { DEFAULT_SPEAKER_CONFIG, type AppConfig } from "@applaud/shared";
 import { redactConfig, mergeWebhookSecret, SECRET_REDACTED } from "./config-helpers.js";
 
 const baseConfig: AppConfig = {
@@ -16,6 +16,8 @@ const baseConfig: AppConfig = {
   historyDays: 30,
   installedAt: null,
   libraryIndexedAt: null,
+  plaudNickname: null,
+  speakers: DEFAULT_SPEAKER_CONFIG,
   recordingsDir: "/tmp/recordings",
   webhook: null,
   pollIntervalMinutes: 10,
