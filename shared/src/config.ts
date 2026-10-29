@@ -16,6 +16,34 @@ export interface WebhookConfig {
   enabledAt?: number;
 }
 
+/** Speaker identification (docs/plans/speaker-identification.md). */
+export interface SpeakerConfig {
+  /** Off by default. Turning it on runs the capability check. */
+  enabled: boolean;
+  /**
+   * The Plaud speaker name that is the account owner. Null falls back to the
+   * Plaud account nickname, when Plaud has tagged speakers with it.
+   */
+  ownerName: string | null;
+  /** Matching bands (raw cosine) and the minimum speech for a voiceprint or an automatic label. */
+  autoThreshold: number;
+  autoMargin: number;
+  minSpeechSec: number;
+  suggestThreshold: number;
+  /** Model the voiceprint library was built with. Set by the server. */
+  activeModelId: string | null;
+}
+
+export const DEFAULT_SPEAKER_CONFIG: SpeakerConfig = {
+  enabled: false,
+  ownerName: null,
+  autoThreshold: 0.75,
+  autoMargin: 0.1,
+  minSpeechSec: 20,
+  suggestThreshold: 0.55,
+  activeModelId: null,
+};
+
 export interface AppConfig {
   version: number;
   setupComplete: boolean;
@@ -62,6 +90,15 @@ export interface AppConfig {
    * the first page with nothing new.
    */
   libraryIndexedAt: number | null;
+  /** The Plaud account's nickname, recorded at sign-in; used to recognise the owner's label. */
+  plaudNickname: string | null;
+  /** Partial in settings files written before it existed; read through `speakerConfig()`. */
+  speakers: SpeakerConfig;
+}
+
+/** Speaker settings with defaults filled in. */
+export function speakerConfig(cfg: Pick<AppConfig, "speakers"> | null | undefined): SpeakerConfig {
+  return { ...DEFAULT_SPEAKER_CONFIG, ...cfg?.speakers };
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -84,4 +121,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   historyDays: 30,
   installedAt: null,
   libraryIndexedAt: null,
+  plaudNickname: null,
+  speakers: DEFAULT_SPEAKER_CONFIG,
 };

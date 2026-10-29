@@ -179,6 +179,7 @@ function migrateSpeakers(d: Database.Database): void {
       plaud_name TEXT,
       speaker_id INTEGER REFERENCES speakers(id) ON DELETE SET NULL,
       status TEXT NOT NULL,
+      assigned_by TEXT,
       confidence REAL,
       margin REAL,
       speech_ms INTEGER,
