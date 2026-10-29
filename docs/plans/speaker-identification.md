@@ -7,7 +7,7 @@
 | **Owner**     | Tim Hayward                                                                                                                                                                                                                              |
 | **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A); tool in [`spikes/speaker-calibration/`](https://github.com/TimHayward/applaud/tree/claude/nice-noether-fmry57/spikes/speaker-calibration) on branch `claude/nice-noether-fmry57` |
 | **Prior art** | [`mcowger/olive2`](https://github.com/mcowger/olive2) reviewed 2026-10-19 (Appendix B)                                                                                                                                                   |
-| **Revisions** | 2026-10-19: two-container design. 2026-10-29: single container (D9 replaced, D15 added), segment keys moved to the official API's fields (D8), summary and write-back deferred (section 11).                                             |
+| **Revisions** | 2026-10-19: two-container design. 2026-10-29: single container (D9 replaced, D15, D16 added), segment fields checked on the deployment (section 6.3), owner from the Plaud nickname (D17), summary and write-back deferred (section 11). |
 
 ## 1. Summary
 
@@ -50,15 +50,16 @@ The feature is optional. On a host that cannot run the model (no AVX, too little
 | D5  | _Deferred:_ the `-Applaud` summary via OpenRouter (section 11).                                                                                                                                                                                                | User decision 2026-10-29                                                               |
 | D6  | Only **confirmed** labels (and Plaud's owner tag) create voiceprints. Automatic matches never feed the library.                                                                                                                                                | Prevents compounding errors                                                            |
 | D7  | _Deferred:_ write-back to Plaud (section 11).                                                                                                                                                                                                                  | User decision 2026-10-29                                                               |
-| D8  | A recording's speaker is keyed by Plaud's **`original_speaker`** (the diarisation label, unchanged by renames in the Plaud app). A segment is keyed by its **`start_time`** in milliseconds. Labels are stored outside `transcript.json`, so resyncs cannot destroy them. | The official API's segments carry no `segment_uid` (section 6.3)                       |
+| D8  | A recording's speaker is keyed by Plaud's **`original_speaker`** (the diarisation label, unchanged by renames in the Plaud app). A segment is keyed by its **`segment_uid`**, falling back to `t<start_time>` for a segment without one. Labels are stored outside `transcript.json`, so resyncs cannot destroy them. | Evidenced on the deployment (section 6.3)                                              |
 | D9  | **One container.** Applaud and the speaker model ship in the same image and run on the same host. There is no worker container, no worker API and no shared secret.                                                                                          | User decision 2026-10-29; the hosting moved from the NAS to a capable Portainer host   |
 | D10 | Embedding model: **3D-Speaker ERes2Net (English, VoxCeleb)**, 192-dim, run by `sherpa-onnx-node`. **Baked into the image**, pinned by SHA-256. Fallback: NeMo TitaNet-large.                                                                                   | Evidenced: Phase 0 (Appendix A); user decision on delivery                             |
 | D11 | Each person keeps **up to 12 voiceprints**, one per confirmed recording (that label's centroid). A label's score for a person is the **best match** across them. The Plaud scene code is stored as metadata only.                                              | Evidenced: single-recording EER 0.022 (Appendix A); same pattern in Olive (Appendix B) |
 | D12 | Plaud's speaker labels are treated as one person per label. Per-segment correction stays available, but is a secondary tool.                                                                                                                                   | Evidenced: 0 of 60 `Speaker N` labels scored like the owner                            |
 | D13 | **Library hygiene**: one anchor voiceprint per person that is never evicted, a cap with eviction, near-duplicate skip, a minimum speech length, and a warning when a confirmed voiceprint does not resemble the person's existing ones (section 7.1).          | Adopted from Olive, made stricter by D6                                                |
-| D14 | Voiceprints store **source references** (recording, Plaud label, segment start times), never audio copies. A model change re-embeds every voiceprint from the original audio.                                                                                  | Privacy (D3); Olive keeps WAV clips instead, which we reject                           |
+| D14 | Voiceprints store **source references** (recording, Plaud label, segment keys), never audio copies. A model change re-embeds every voiceprint from the original audio.                                                                                  | Privacy (D3); Olive keeps WAV clips instead, which we reject                           |
 | D15 | The model runs in a **child process** of Applaud, started on demand and stopped when idle, never in Applaud's main process. A crash, an illegal instruction or an out-of-memory kill in native code takes down only the child.                                 | Crash isolation, responsiveness and memory (section 4.1)                               |
 | D16 | **Any host, feature optional.** One image for every host. A capability check decides whether speaker identification is available; where it is not, the feature is hidden and Applaud is unaffected.                                                          | User decision 2026-10-29                                                               |
+| D17 | The **owner** is the label whose `speaker` equals the Plaud account's `nickname`, overridable in Settings → Speakers by choosing from the non-generic `speaker` values seen. `original_speaker` never names the owner.                                         | Evidenced: all 87 `original_speaker` values are generic (section 6.3)                  |
 
 ## 4. Deployment: one container
 
@@ -167,7 +168,7 @@ interface Embedder {
 }
 ```
 
-Implementations: `LocalEmbedder` (the supervisor and child process below) and `FakeEmbedder` (deterministic vectors, for tests). Window ids are `<original_speaker>@<start_time>`.
+Implementations: `LocalEmbedder` (the supervisor and child process below) and `FakeEmbedder` (deterministic vectors, for tests). Window ids are segment keys (D8).
 
 ### 6.2 Supervisor and IPC
 
@@ -180,7 +181,17 @@ Implementations: `LocalEmbedder` (the supervisor and child process below) and `F
 
 ### 6.3 Plaud segment fields
 
-The official API's transcript segments (fixture in `server/src/sync/poller.test.ts`) carry `start_time`, `end_time`, `content`, `speaker` and `original_speaker`; there is no `segment_uid`. `speaker` reflects renames made in the Plaud app, `original_speaker` does not, so `original_speaker` is the stable label (D8). The first Phase 1 task confirms this on real `transcript.json` files from the Portainer deployment, including whether `start_time` is unique within a recording; if it is not, the segment key becomes `start_time` plus the segment's index among equal start times.
+Checked on 2026-10-29 with a read-only, counts-only scan of every `transcript.json` on the Portainer deployment (25 recordings, 6,297 segments):
+
+| Finding                                                                                     | Consequence                                            |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Every segment has `segment_uid`, `start_time`, `end_time`, `content`, `speaker`, `original_speaker` | `segment_uid` is the segment key (D8). The test fixture in `server/src/sync/poller.test.ts` omits it and is updated in Phase 1 |
+| `start_time` is a number and unique within every recording (0 duplicates)                   | `t<start_time>` is a safe fallback key                 |
+| Latest segment end per recording ranges from 31,950 to 6,044,400                            | Timings are milliseconds (32 s to 101 min)             |
+| All 87 distinct `original_speaker` values are generic (`Speaker N`); none are names         | `original_speaker` is the stable label (D8)            |
+| `speaker` differs from `original_speaker` in 1,828 segments                                 | Renames (the owner tag and any manual renames in Plaud) show only in `speaker`; the owner comes from it (D17) |
+
+The scan cannot tell which files were written through the official API and which through the legacy API before Plaud 4.0, so normalisation keeps the fallback key rather than assuming `segment_uid` is always present.
 
 ### 6.4 Model change
 
@@ -202,7 +213,7 @@ Applaud stores `modelId` with every vector and records the active model. When th
 
    Basis (Appendix A): owner vs own profile min 0.806, p05 0.839; other people p95 0.645, max 0.823; single-recording enrolment same-speaker p05 0.705. New people therefore start as "suggested" and become "auto" as confirmed voiceprints accumulate.
 
-6. **Owner.** Plaud's owner tag is accepted as confirmed (`source = 'plaud_owner'`), overridable by the user.
+6. **Owner.** The owner's label (D17) is accepted as confirmed (`source = 'plaud_owner'`), overridable by the user.
 7. **Placeholders are not people.** A single shared helper decides whether a label is generic (`Speaker 1`, `SPEAKER_00`, `S1`, `Unknown`, `UU`, empty). Generic labels are never stored as people or offered as match targets.
 
 ### 7.1 Library hygiene (D6, D13)
@@ -233,7 +244,7 @@ CREATE TABLE speaker_embeddings (
   speaker_id INTEGER NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
   recording_id TEXT NOT NULL,
   plaud_label TEXT NOT NULL,       -- Plaud original_speaker (D8)
-  segment_starts TEXT NOT NULL,    -- JSON array of start_time ms: source references for re-embedding (D14)
+  segment_keys TEXT NOT NULL,      -- JSON array of segment keys (D8): source references for re-embedding (D14)
   scene TEXT,                      -- Plaud scene code, metadata only
   is_anchor INTEGER NOT NULL DEFAULT 0,
   model_id TEXT NOT NULL,
@@ -263,10 +274,10 @@ CREATE TABLE recording_speakers (
 -- Per-segment corrections
 CREATE TABLE segment_overrides (
   recording_id TEXT NOT NULL,
-  segment_start INTEGER NOT NULL,  -- Plaud start_time ms (D8, section 6.3)
+  segment_key TEXT NOT NULL,       -- segment_uid, or t<start_time> (D8)
   speaker_id INTEGER REFERENCES speakers(id) ON DELETE CASCADE,
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY (recording_id, segment_start)
+  PRIMARY KEY (recording_id, segment_key)
 );
 
 -- Work queue for the speaker process; (kind, recording_id) is the de-duplication key
@@ -291,7 +302,7 @@ The active embedding model id is stored with the speaker settings and compared w
 
 | Output                    | Content                                                                                                       | When                                                        |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `transcript-Applaud.json` | Plaud segments plus `plaud_speaker` (`original_speaker`), `speaker`, `speaker_id`, `label_status`, `confidence` | After analysis; rewritten atomically whenever labels change |
+| `transcript-Applaud.json` | Plaud segments plus `segment_key`, `plaud_speaker` (`original_speaker`), `speaker`, `speaker_id`, `label_status`, `confidence` | After analysis; rewritten atomically whenever labels change |
 | `transcript-Applaud.txt`  | Same line format as `transcript.txt`, with Applaud names                                                      | As above                                                    |
 
 Both files are served by `/media` like the other recording files, so existing webhook consumers can fetch them by path. New webhook events are deferred with the summary (section 11).
@@ -306,7 +317,9 @@ Model and thresholds selected on real recordings. See Appendix A. The host findi
 
 ### Phase 1: Single-container foundation (M)
 
-- **First:** confirm the segment fields on real `transcript.json` files (section 6.3), and the ERes2Net model card licence (section 12). Both can change the data model or the model choice.
+- **First:** confirm the ERes2Net model card licence (section 13); it can change the model choice. (Segment fields: done, section 6.3.)
+- Add `segment_uid` to `TranscriptSegment` and the poller test fixture.
+- Owner detection from the Plaud `nickname`, with the Settings override (D17).
 - Image changes (section 4.2): ffmpeg, `sherpa-onnx-node`, the model baked in and SHA-256 pinned; both release architectures still build. Record the image size before and after.
 - `server/src/speakers/embedder-process.ts`: IPC handler, ffmpeg decode to a temp dir, ERes2Net embedding, temp cleanup.
 - Supervisor and `LocalEmbedder` (section 6.2), `FakeEmbedder`, path guard, idle stop, crash handling.
@@ -327,7 +340,7 @@ Model and thresholds selected on real recordings. See Appendix A. The host findi
 - Matcher (section 7) with unit tests for best-of-N scoring, banding, margin, minimum speech and one-to-one assignment.
 - Library hygiene (section 7.1) with unit tests for anchor, cap and eviction, near-duplicate skip and the low-resemblance flag.
 - `transcript-Applaud.json` / `.txt` (section 9).
-- API: `GET /api/recordings/:id/speakers`, `PUT /api/recordings/:id/speakers/:label`, `PUT /api/recordings/:id/segments/:startMs/speaker`, `POST /api/recordings/:id/speakers/reanalyse`.
+- API: `GET /api/recordings/:id/speakers`, `PUT /api/recordings/:id/speakers/:label`, `PUT /api/recordings/:id/segments/:segmentKey/speaker`, `POST /api/recordings/:id/speakers/reanalyse`.
 
 **Done when:** the owner is auto-labelled on new recordings; a confirmed person is suggested or auto-labelled in their next recording; outputs regenerate on every label change.
 
@@ -360,7 +373,8 @@ Kept here so the design is not lost. Neither is scheduled; each would be re-plan
 | Container memory limit too low for the model             | Low to medium | Low    | Child is the one killed; status shows the reason; `docs/portainer.md` gives the headroom                      |
 | `sherpa-onnx-node` has no working build for an architecture | Medium (arm64) | Low | Capability check hides the feature (D16); the build must not fail on that platform                           |
 | Image grows for users who never enable the feature       | Certain       | Low    | Size measured and stated in the Phase 1 PR; accepted for offline, reproducible model delivery (D10)          |
-| Plaud segment fields change or `start_time` is not unique | Low to medium | Medium | Field check is the first Phase 1 task; normalisation layer with tests; index tiebreak (section 6.3)          |
+| Plaud segment fields change                              | Low to medium | Medium | Checked on the deployment (section 6.3); normalisation layer with tests; `t<start_time>` fallback key         |
+| Owner's Plaud nickname differs from the name Plaud tags them with | Low   | Low    | Settings override (D17)                                                                                        |
 | User confirms the wrong name                             | Low to medium | Medium | Low-resemblance flag (section 7.1); per-person voiceprint list with delete                                     |
 | Plaud merges two people into one label                   | Low to medium | Medium | Per-segment reassign; merge suggestions                                                                        |
 | Embedding model changed later                            | Low           | Medium | `modelId` on every vector; automatic re-embed from source references (D14)                                    |
@@ -371,7 +385,6 @@ Kept here so the design is not lost. Neither is scheduled; each would be re-plan
 
 | Item                                                                                                       | Owner | Needed by          |
 | ---------------------------------------------------------------------------------------------------------- | ----- | ------------------ |
-| Confirm segment fields and `start_time` uniqueness on real `transcript.json` files (section 6.3)           | Dev   | Phase 1, first     |
 | Confirm ERes2Net model card licence terms, including redistribution inside a public image                  | Dev   | Phase 1, first     |
 | Check whether `sherpa-onnx-node` publishes a `linux-arm64` build, so the arm64 image builds                | Dev   | Phase 1            |
 | Run the named-speaker scan over existing recordings, to seed people beyond the owner                       | User  | Phase 1 backfill   |
@@ -403,7 +416,7 @@ Kept here so the design is not lost. Neither is scheduled; each would be re-plan
 - Plaud `serial_number` is not a stable device id (25 values in 30 recordings).
 - Resources: ERes2Net embeds about 8 s per hour of audio on 2 threads; about 300 MB with one model loaded.
 
-**Limits.** 30 owner trials and 60 impostor labels, so 0.017 is a single error. Only the owner was tested as a target. The suggested band and user confirmation cover this uncertainty. Phase 0 ran against the legacy Plaud API, before the move to the official API; the audio is the same, so the model results stand, but segment keys are re-checked (section 6.3).
+**Limits.** 30 owner trials and 60 impostor labels, so 0.017 is a single error. Only the owner was tested as a target. The suggested band and user confirmation cover this uncertainty. Phase 0 ran against the legacy Plaud API, before the move to the official API; the audio is the same, so the model results stand. Segment fields were re-checked on 2026-10-29 (section 6.3).
 
 ## Appendix B: Prior art, `mcowger/olive2` (reviewed 2026-10-19)
 
