@@ -89,3 +89,28 @@ export function addVoiceprint(v: NewVoiceprint, minSpeechMs: number, now = Date.
     return "added";
   })();
 }
+
+/**
+ * Remove the voiceprints made from one recording's label (it was relabelled,
+ * ignored or reset), except `keepSpeakerId`'s. A person who loses their
+ * anchor gets their oldest remaining voiceprint as the new one.
+ */
+export function removeLabelVoiceprints(recordingId: string, plaudLabel: string, keepSpeakerId: number | null = null): number {
+  const d = getDb();
+  return d.transaction(() => {
+    const gone = d
+      .prepare(
+        `DELETE FROM speaker_embeddings WHERE recording_id = ? AND plaud_label = ? AND (? IS NULL OR speaker_id != ?)
+         RETURNING speaker_id, is_anchor`,
+      )
+      .all(recordingId, plaudLabel, keepSpeakerId, keepSpeakerId) as { speaker_id: number; is_anchor: number }[];
+    for (const g of gone) {
+      if (!g.is_anchor) continue;
+      d.prepare(
+        `UPDATE speaker_embeddings SET is_anchor = 1 WHERE id = (
+           SELECT id FROM speaker_embeddings WHERE speaker_id = ? ORDER BY created_at ASC, id ASC LIMIT 1)`,
+      ).run(g.speaker_id);
+    }
+    return gone.length;
+  })();
+}
