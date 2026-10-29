@@ -131,6 +131,8 @@ Until a versioned image is published, updates come from rebuilding the stack fro
 2. Check **Images → `applaud:local`**: its *Created* time should be the time of the redeploy.
 3. If it wasn't rebuilt, stop the stack, delete the `applaud:local` image under **Images**, and start the stack again; Portainer then has to build it.
 
+If a redeploy fails with `pull access denied for applaud`, the stack is building from a commit older than the `pull_policy: build` line in `docker-compose.yml`, and Portainer's re-pull option is asking Docker Hub for the local image. Redeploy once with re-pull turned off; later redeploys work either way.
+
 Your settings, sign-in and recordings live in the volumes and survive both.
 
 > These Portainer steps have not been tested against a specific Portainer version from this repository. If your version's button names differ, the principle is the same: re-clone, rebuild, recreate the container, keep the volumes.

@@ -10,6 +10,9 @@ services:
   applaud:
     build: .
     image: applaud:local
+    # Built here, never pulled: without this, Portainer's "re-pull image"
+    # asks Docker Hub for applaud:local and the redeploy fails.
+    pull_policy: build
     container_name: applaud
     restart: unless-stopped
     ports:
