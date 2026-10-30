@@ -153,12 +153,13 @@ async function completeSignIn(params: {
       plaudConnectedAt: Date.now(),
     });
     let email: string | null = null;
+    let nickname: string | null = null;
     try {
-      email = (await getCurrentUser()).email;
+      ({ email, nickname } = await getCurrentUser());
     } catch (err) {
       logger.warn({ err }, "signed in, but the Plaud account lookup failed");
     }
-    updateConfig({ tokenEmail: email });
+    updateConfig({ tokenEmail: email, plaudNickname: nickname });
     logger.info("Plaud account connected");
     // After setup this is a reconnect: sync now rather than at the next tick.
     if (loadConfig().setupComplete) void poller.trigger();

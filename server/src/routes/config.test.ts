@@ -20,6 +20,10 @@ vi.mock("../sync/state.js", () => ({ clearSyncIgnore: vi.fn(() => 0) }));
 vi.mock("../logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
+const { runner } = vi.hoisted(() => ({
+  runner: { start: vi.fn(), stop: vi.fn(), ownerChanged: vi.fn(async () => {}), refresh: vi.fn() },
+}));
+vi.mock("../speakers/service.js", () => ({ speakerRunner: () => runner }));
 
 import { configRouter } from "./config.js";
 
@@ -70,6 +74,66 @@ describe("configRouter", () => {
   afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe("POST / — speakers", () => {
+    beforeEach(() => {
+      runner.start.mockReset();
+      runner.stop.mockReset();
+      runner.ownerChanged.mockClear();
+    });
+
+    it("switching on merges with the defaults and starts the runner", async () => {
+      const res = await post("", { speakers: { enabled: true } });
+      expect(res.status).toBe(200);
+      expect(updateConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          speakers: expect.objectContaining({ enabled: true, ownerName: null, autoThreshold: 0.75 }),
+        }),
+      );
+      expect(runner.start).toHaveBeenCalledOnce();
+    });
+
+    it("switching off stops the runner", async () => {
+      loadConfig.mockReturnValue({ ...baseConfig, speakers: { enabled: true } });
+      await post("", { speakers: { enabled: false } });
+      expect(runner.stop).toHaveBeenCalledOnce();
+    });
+
+    it("an owner name change relabels; an empty name clears it", async () => {
+      loadConfig.mockReturnValue({ ...baseConfig, speakers: { enabled: true, ownerName: "Old" } });
+      await post("", { speakers: { ownerName: "  Tim Hayward " } });
+      expect(updateConfig).toHaveBeenLastCalledWith(
+        expect.objectContaining({ speakers: expect.objectContaining({ ownerName: "Tim Hayward" }) }),
+      );
+      expect(runner.ownerChanged).toHaveBeenCalledOnce();
+      await post("", { speakers: { ownerName: "" } });
+      expect(updateConfig).toHaveBeenLastCalledWith(
+        expect.objectContaining({ speakers: expect.objectContaining({ ownerName: null }) }),
+      );
+    });
+
+    it("rejects unknown types", async () => {
+      expect((await post("", { speakers: { enabled: "yes" } })).status).toBe(400);
+    });
+
+    it("saves thresholds and re-matches", async () => {
+      runner.refresh.mockClear();
+      loadConfig.mockReturnValue({ ...baseConfig, speakers: { enabled: true } });
+      expect((await post("", { speakers: { autoThreshold: 0.8, minSpeechSec: 30 } })).status).toBe(200);
+      expect(updateConfig).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          speakers: expect.objectContaining({ autoThreshold: 0.8, minSpeechSec: 30, suggestThreshold: 0.55 }),
+        }),
+      );
+      expect(runner.refresh).toHaveBeenCalledOnce();
+    });
+
+    it("rejects thresholds out of range or a suggestion threshold above the automatic one", async () => {
+      expect((await post("", { speakers: { autoThreshold: 1.5 } })).status).toBe(400);
+      expect((await post("", { speakers: { suggestThreshold: 0.9 } })).status).toBe(400);
+      expect(updateConfig).not.toHaveBeenCalled();
+    });
   });
 
   describe("POST / — lanToken policy", () => {

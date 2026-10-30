@@ -1,7 +1,12 @@
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, useMemo } from "react";
-import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
+import { useEffect, useRef, useState, useMemo } from "react";
+import {
+  sanitizePlaudSummaryMarkdown,
+  type RecordingSpeakersResponse,
+  type SetSpeakerLabelRequest,
+  type SpeakerClip,
+} from "@applaud/shared";
 import { api, ApiError } from "../api.js";
 import { useMediaUrl } from "../hooks/useMediaUrl.js";
 import { useToast } from "../components/Toast.js";
@@ -10,6 +15,7 @@ import { AudioPlayer } from "../components/AudioPlayer.js";
 import { TranscriptCard } from "../components/TranscriptCard.js";
 import { SummaryPanel } from "../components/SummaryPanel.js";
 import { AttachmentsCard } from "../components/AttachmentsCard.js";
+import { SpeakersPanel } from "../components/SpeakersPanel.js";
 import { formatDurationVerbose, formatDateTime, formatBytes } from "../lib/format.js";
 
 /**
@@ -42,6 +48,88 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
     queryFn: () => api.recordingDetail(id),
     enabled: !!id,
   });
+  const speakersQuery = useQuery({
+    queryKey: ["recording-speakers", id],
+    queryFn: () => api.recordingSpeakers(id),
+    enabled: !!id,
+    // Wait for the background analysis; nothing changes on its own after that.
+    refetchInterval: (query) => (query.state.data?.enabled && !query.state.data.analysed ? 10_000 : false),
+  });
+  const [speakersBusy, setSpeakersBusy] = useState(false);
+  const [playingClip, setPlayingClip] = useState<string | null>(null);
+  const clipEndRef = useRef<number | null>(null);
+
+  // Stop at the end of a clip played from the Speakers panel.
+  useEffect(() => {
+    const end = clipEndRef.current;
+    if (end === null || currentTime < end) return;
+    audioRef.current?.pause();
+    clipEndRef.current = null;
+    setPlayingClip(null);
+  }, [currentTime]);
+
+  const playClip = (clip: SpeakerClip): void => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playingClip === clip.segmentKey) {
+      audio.pause();
+      clipEndRef.current = null;
+      setPlayingClip(null);
+      return;
+    }
+    audio.currentTime = clip.startMs / 1000;
+    clipEndRef.current = clip.endMs / 1000;
+    setPlayingClip(clip.segmentKey);
+    void audio.play();
+  };
+
+  const speakersChanged = (data: RecordingSpeakersResponse): void => {
+    qc.setQueryData(["recording-speakers", id], data);
+    void qc.invalidateQueries({ queryKey: ["speaker-review"] });
+    void qc.invalidateQueries({ queryKey: ["speaker-people"] });
+  };
+
+  const setSpeakerLabel = async (label: string, body: SetSpeakerLabelRequest): Promise<boolean> => {
+    setSpeakersBusy(true);
+    try {
+      const res = await api.setSpeakerLabel(id, label, body);
+      speakersChanged(res);
+      if (res.voiceprint === "too_short") {
+        toast.success("Saved. There is too little speech here to learn their voice from this recording.");
+      }
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+      return false;
+    } finally {
+      setSpeakersBusy(false);
+    }
+  };
+
+  const assignSegment = async (segmentKey: string, speakerId: number | null): Promise<void> => {
+    setSpeakersBusy(true);
+    try {
+      speakersChanged(await api.setSegmentSpeaker(id, segmentKey, speakerId === null ? null : { speakerId }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSpeakersBusy(false);
+    }
+  };
+
+  const reanalyseSpeakers = async (): Promise<void> => {
+    setSpeakersBusy(true);
+    try {
+      await api.reanalyseSpeakers(id);
+      toast.success("Queued for analysis. Names update when it finishes.");
+      // Analysis finishes in the background; look again shortly.
+      setTimeout(() => void speakersQuery.refetch(), 15_000);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSpeakersBusy(false);
+    }
+  };
 
   const summaryMarkdownDisplay = useMemo(() => {
     const raw = q.data?.recording.summaryMarkdown;
@@ -85,6 +173,7 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
   }
 
   const { recording: r, mediaBase } = q.data;
+  const speakers = speakersQuery.data;
 
   const del = async (): Promise<void> => {
     if (await actions.moveToTrash(r.id)) navigate("/trash");
@@ -314,11 +403,35 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
             />
           )}
 
+          {speakers?.enabled && r.transcriptDownloadedAt && !r.userDeletedAt && (
+            <SpeakersPanel
+              data={speakers}
+              busy={speakersBusy}
+              playingKey={playingClip}
+              onPlay={playClip}
+              onSet={setSpeakerLabel}
+              onReanalyse={() => void reanalyseSpeakers()}
+            />
+          )}
+
           {r.transcriptText ? (
             <TranscriptCard
               text={r.transcriptText}
               currentTime={currentTime}
-              onSeek={(sec) => { if (audioRef.current) { audioRef.current.currentTime = sec; void audioRef.current.play(); } }}
+              onSeek={(sec) => {
+                clipEndRef.current = null;
+                setPlayingClip(null);
+                if (audioRef.current) { audioRef.current.currentTime = sec; void audioRef.current.play(); }
+              }}
+              {...(speakers?.enabled && speakers.segments.length > 0
+                ? {
+                    named: {
+                      segments: speakers.segments,
+                      people: speakers.people,
+                      onAssign: (key: string, speakerId: number | null) => void assignSegment(key, speakerId),
+                    },
+                  }
+                : {})}
             />
           ) : r.status === "metadata_only" ? (
             <section className="card p-6">

@@ -1,5 +1,45 @@
 import { describe, it, expect } from "vitest";
-import { parseTranscript, parseTimestamp, formatTimeCompact } from "./transcript.js";
+import type { SpeakerTranscriptSegment } from "@applaud/shared";
+import {
+  blocksFromSegments,
+  blocksToText,
+  formatTranscriptTimestamp,
+  parseTranscript,
+  parseTimestamp,
+  formatTimeCompact,
+} from "./transcript.js";
+
+describe("blocks from named segments", () => {
+  const seg = (key: string, startMs: number, speaker: string): SpeakerTranscriptSegment => ({
+    key,
+    startMs,
+    endMs: startMs + 1_000,
+    text: `text ${key}`,
+    speaker,
+    speakerId: null,
+    plaudSpeaker: "Speaker 1",
+    plaudLabel: "Speaker 1",
+    status: "unknown",
+    suggestedSpeaker: null,
+    override: false,
+  });
+
+  it("formats timestamps like transcript.txt", () => {
+    expect(formatTranscriptTimestamp(65_400)).toBe("01:05");
+    expect(formatTranscriptTimestamp(3_723_000)).toBe("1:02:03");
+  });
+
+  it("round-trips through the transcript text format", () => {
+    const blocks = blocksFromSegments([seg("a", 0, "Ann"), seg("b", 65_000, "Bob")]);
+    expect(blocks.map((b) => [b.timestamp, b.seconds, b.speaker])).toEqual([
+      ["00:00", 0, "Ann"],
+      ["01:05", 65, "Bob"],
+    ]);
+    const text = blocksToText(blocks);
+    expect(text).toBe("[00:00] Ann: text a\n\n[01:05] Bob: text b");
+    expect(parseTranscript(text).map((b) => b.speaker)).toEqual(["Ann", "Bob"]);
+  });
+});
 
 describe("parseTimestamp", () => {
   it("parses MM:SS", () => {

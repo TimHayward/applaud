@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
-import type { AppConfig } from "@applaud/shared";
+import { DEFAULT_SPEAKER_CONFIG, type AppConfig } from "@applaud/shared";
 import path from "node:path";
 import type { PlaudFileDetail, PlaudFileSummary } from "../plaud/client.js";
 
@@ -71,6 +71,8 @@ const baseConfig: AppConfig = {
   historyDays: 30,
   installedAt: NOW,
   libraryIndexedAt: null,
+  plaudNickname: null,
+  speakers: DEFAULT_SPEAKER_CONFIG,
 };
 
 /** Plaud's timestamp format: UTC without a zone suffix. */
@@ -91,7 +93,7 @@ function listed(id: string, startMs: number, over: Partial<PlaudFileSummary> = {
 }
 
 const SEGMENTS = JSON.stringify([
-  { start_time: 0, end_time: 1000, content: "Hello.", speaker: "Speaker 1", original_speaker: "Speaker 1" },
+  { segment_uid: "seg-1", start_time: 0, end_time: 1000, content: "Hello.", speaker: "Speaker 1", original_speaker: "Speaker 1" },
 ]);
 
 function detail(id: string, startMs: number, over: Partial<PlaudFileDetail> = {}): PlaudFileDetail {

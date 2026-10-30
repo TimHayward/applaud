@@ -1,8 +1,37 @@
+import type { SpeakerTranscriptSegment } from "@applaud/shared";
+
 export interface TranscriptBlock {
   timestamp: string;
   seconds: number;
   speaker: string;
   text: string;
+  /** Set on blocks built from Applaud's named segments. */
+  segment?: SpeakerTranscriptSegment;
+}
+
+/** `transcript.txt`'s timestamp format: `mm:ss`, or `h:mm:ss` from an hour on. */
+export function formatTranscriptTimestamp(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/** Blocks for the transcript card from Applaud's named segments. */
+export function blocksFromSegments(segments: SpeakerTranscriptSegment[]): TranscriptBlock[] {
+  return segments.map((s) => ({
+    timestamp: formatTranscriptTimestamp(s.startMs),
+    seconds: Math.floor(s.startMs / 1000),
+    speaker: s.speaker,
+    text: s.text,
+    segment: s,
+  }));
+}
+
+/** Plain text in `transcript.txt`'s format, for copying. */
+export function blocksToText(blocks: TranscriptBlock[]): string {
+  return blocks.map((b) => `[${b.timestamp}] ${b.speaker}: ${b.text}`).join("\n\n");
 }
 
 export function parseTimestamp(ts: string): number {

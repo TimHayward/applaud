@@ -17,6 +17,15 @@ import type {
   WebhookRedeliverResponse,
   RenameRecordingResponse,
   TicketResponse,
+  SpeakerSettingsPatch,
+  SpeakerStatusResponse,
+  RecordingSpeakersResponse,
+  SetSpeakerLabelRequest,
+  SetSpeakerLabelResponse,
+  SpeakerPersonRef,
+  SpeakerReviewResponse,
+  SpeakerPeopleResponse,
+  SpeakerVoiceprint,
 } from "@applaud/shared";
 
 export class ApiError extends Error {
@@ -181,6 +190,39 @@ export const api = {
     if (params.offset) qs.set("offset", String(params.offset));
     return jsonFetch<WebhookLogResponse>(`/api/webhooks/log?${qs.toString()}`);
   },
+  speakerStatus: () => jsonFetch<SpeakerStatusResponse>("/api/speakers/status"),
+  /** Re-run the capability check. */
+  speakerCheck: () => jsonFetch<SpeakerStatusResponse>("/api/speakers/check", { method: "POST", body: "{}" }),
+  updateSpeakerSettings: (patch: SpeakerSettingsPatch) =>
+    jsonFetch<ConfigResponse>("/api/config", { method: "POST", body: JSON.stringify({ speakers: patch }) }),
+  recordingSpeakers: (id: string) => jsonFetch<RecordingSpeakersResponse>(`/api/recordings/${id}/speakers`),
+  setSpeakerLabel: (id: string, label: string, body: SetSpeakerLabelRequest) =>
+    jsonFetch<SetSpeakerLabelResponse>(`/api/recordings/${id}/speakers/${encodeURIComponent(label)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  /** `person: null` clears the segment's override. */
+  setSegmentSpeaker: (id: string, segmentKey: string, person: SpeakerPersonRef | null) =>
+    jsonFetch<RecordingSpeakersResponse>(`/api/recordings/${id}/segments/${encodeURIComponent(segmentKey)}/speaker`, {
+      method: "PUT",
+      body: JSON.stringify({ person }),
+    }),
+  reanalyseSpeakers: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/recordings/${id}/speakers/reanalyse`, { method: "POST", body: "{}" }),
+  speakerReview: () => jsonFetch<SpeakerReviewResponse>("/api/speakers/review"),
+  speakerPeople: () => jsonFetch<SpeakerPeopleResponse>("/api/speakers/people"),
+  renamePerson: (id: number, name: string) =>
+    jsonFetch<SpeakerPeopleResponse>(`/api/speakers/people/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  mergePerson: (id: number, intoId: number) =>
+    jsonFetch<SpeakerPeopleResponse>(`/api/speakers/people/${id}/merge`, {
+      method: "POST",
+      body: JSON.stringify({ intoId }),
+    }),
+  deletePerson: (id: number) => jsonFetch<SpeakerPeopleResponse>(`/api/speakers/people/${id}`, { method: "DELETE" }),
+  personVoiceprints: (id: number) =>
+    jsonFetch<{ voiceprints: SpeakerVoiceprint[] }>(`/api/speakers/people/${id}/voiceprints`),
+  deleteVoiceprint: (id: number) =>
+    jsonFetch<SpeakerPeopleResponse>(`/api/speakers/voiceprints/${id}`, { method: "DELETE" }),
   webhookRedeliver: (recordingId: string, event: "audio_ready" | "transcript_ready") =>
     jsonFetch<WebhookRedeliverResponse>("/api/webhooks/redeliver", {
       method: "POST",
