@@ -2,8 +2,8 @@
 
 |               |                                                                                                                                                                                                                                          |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**    | Phase 0 complete (GO). Phase 1 verified on the Portainer host (PR #3). Phases 2 and 3 built on `speakers/phase-2`; awaiting verification on the host (section 10).                                                                            |
-| **Updated**   | 2026-10-29                                                                                                                                                                                                                               |
+| **Status**    | Phase 0 complete (GO). Phases 1, 2 and 3 built and verified on the Portainer host (section 10). Phases 4 and 5 deferred.                                                                                                                                      |
+| **Updated**   | 2026-10-30                                                                                                                                                                                                                               |
 | **Owner**     | Tim Hayward                                                                                                                                                                                                                              |
 | **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A). The calibration tool lived on branch `claude/nice-noether-fmry57`, which no longer exists; see section 13.                                                                       |
 | **Prior art** | [`mcowger/olive2`](https://github.com/mcowger/olive2) reviewed 2026-10-19 (Appendix B)                                                                                                                                                   |
@@ -368,7 +368,7 @@ Differences from the plan above:
 
 **Done when:** the owner is auto-labelled on new recordings; a confirmed person is suggested or auto-labelled in their next recording; outputs regenerate on every label change.
 
-**Phase 2 record (2026-10-29).** Built on branch `speakers/phase-2`, stacked on Phase 1; 582 tests pass. Not yet run on the Portainer host.
+**Phase 2 record (2026-10-29).** Built on branch `speakers/phase-2`, stacked on Phase 1; 582 tests pass. Tested by the owner on the Portainer host on 2026-10-30, with Phase 3; all checks passed.
 
 | Item | State |
 | --- | --- |
@@ -396,7 +396,7 @@ Differences from the plan above:
 
 **Done when:** an unknown speaker can be named from clips in under a minute, and the name is applied to the transcript and library; the generalisation recalibration has run and its thresholds are applied.
 
-**Phase 3 record (2026-10-30).** Built on `speakers/phase-2` with Phase 2; 596 tests pass. Checked locally on the built server with the real model and three seeded recordings: naming a label on one recording named it automatically on the other two and rewrote their `-Applaud` transcripts; a per-segment override and a rename applied to the transcript; the recording page rendered as intended in a headless browser. Not yet run on the Portainer host.
+**Phase 3 record (2026-10-30).** Built on `speakers/phase-2` with Phase 2; 596 tests pass. Checked locally on the built server with the real model and three seeded recordings: naming a label on one recording named it automatically on the other two and rewrote their `-Applaud` transcripts; a per-segment override and a rename applied to the transcript; the recording page rendered as intended in a headless browser. Tested by the owner on the Portainer host on 2026-10-30; all checks passed.
 
 | Item | State |
 | --- | --- |
@@ -444,7 +444,7 @@ Kept here so the design is not lost. Neither is scheduled; each would be re-plan
 
 | Item                                                                                                       | Owner | Needed by          |
 | ---------------------------------------------------------------------------------------------------------- | ----- | ------------------ |
-| Record the image size on the Portainer host (Phase 1's other container checks passed, section 10)           | User  | Phase 1 PR        |
+| Record the image size on the Portainer host (Phase 1's other container checks passed, section 10)           | User  | Not scheduled     |
 | Recreate the calibration tool in `tools/speaker-calibration/` (the spike branch holding it was deleted), reading audio and labels from a local recordings folder | Dev   | Phase 3 recalibration |
 | Run the named-speaker scan over existing recordings, to seed people beyond the owner                       | User  | Phase 3            |
 
