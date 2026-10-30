@@ -154,6 +154,8 @@ When you turn it on, Applaud:
 3. **Learns your voice** from the recordings where Plaud tagged you. Choose your name under **Which name is you in Plaud's transcripts?**; until you do, Applaud uses your Plaud account name if Plaud tags you with it.
 4. **Names speakers it recognises.** Once you have confirmed who someone is, their voice is matched in other recordings: named automatically when the match is clear, offered as a suggestion when it is close. Each analysed recording's folder gets `transcript-Applaud.json` and `transcript-Applaud.txt`, Plaud's transcript with these names applied; they are rewritten whenever a name changes. Plaud's own `transcript.json` and `transcript.txt` are never modified.
 
+Name people on a recording's page, in the **Speakers** panel: play a clip, then confirm the suggestion, pick someone, type a new name, or ignore the label. The transcript there can show Applaud's or Plaud's names, and a single line can be assigned to someone else. **Settings → People and voiceprints** lists everyone, with rename, merge and delete, and each person's voiceprints. Recordings with speakers still to name are marked on the Recordings list.
+
 The bands for automatic names and suggestions are under **Matching thresholds** on the same card. The defaults come from calibration on real recordings; changing them re-checks every recording at once and never alters a name you confirmed.
 
 **Requirements and resources**

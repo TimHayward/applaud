@@ -2,7 +2,7 @@
 
 |               |                                                                                                                                                                                                                                          |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**    | Phase 0 complete (GO). Phase 1 verified on the Portainer host (PR #3). Phase 2 built on `speakers/phase-2`; awaiting verification on the host (section 10).                                                                                   |
+| **Status**    | Phase 0 complete (GO). Phase 1 verified on the Portainer host (PR #3). Phases 2 and 3 built on `speakers/phase-2`; awaiting verification on the host (section 10).                                                                            |
 | **Updated**   | 2026-10-29                                                                                                                                                                                                                               |
 | **Owner**     | Tim Hayward                                                                                                                                                                                                                              |
 | **Evidence**  | Phase 0 calibration on 30 real recordings (Appendix A). The calibration tool lived on branch `claude/nice-noether-fmry57`, which no longer exists; see section 13.                                                                       |
@@ -395,6 +395,24 @@ Differences from the plan above:
 - **Generalisation recalibration.** Extend the calibration tool to read confirmed labels from Applaud and treat every confirmed person, not just the owner, as a target. Run it once at least 10 people beyond the owner have two or more confirmed recordings each. Confirm or adjust the thresholds in section 7 and record the result in Appendix A.
 
 **Done when:** an unknown speaker can be named from clips in under a minute, and the name is applied to the transcript and library; the generalisation recalibration has run and its thresholds are applied.
+
+**Phase 3 record (2026-10-30).** Built on `speakers/phase-2` with Phase 2; 596 tests pass. Checked locally on the built server with the real model and three seeded recordings: naming a label on one recording named it automatically on the other two and rewrote their `-Applaud` transcripts; a per-segment override and a rename applied to the transcript; the recording page rendered as intended in a headless browser. Not yet run on the Portainer host.
+
+| Item | State |
+| --- | --- |
+| Speakers panel: one card per label, ordered suggestions, unknown, automatic, confirmed, ignored; clips played through the page's player and stopped at the clip's end; "Yes, it's …" for a suggestion or automatic name; the top candidates as one-click choices; a name field with the known people offered; Ignore; Reset for a user's decision; Re-analyse | Done |
+| Transcript toggle between Applaud and Plaud names (remembered per browser); per-line "Assign to…" and back to the speaker's name; suggestions shown as "Name?" under Plaud's name | Done |
+| People page (Settings → People and voiceprints): counts, rename, merge, delete, each person's voiceprints with their recording, anchor and low-resemblance flag, and per-voiceprint delete | Done, with unit and route tests |
+| "N speakers to name" on dashboard rows | Done |
+| Clip selection (section 10, as specified; long segments judged and played as their first 12 s) | Done, with unit tests |
+| Generalisation recalibration | Not done: it needs at least 10 confirmed people and the recreated calibration tool (section 13) |
+
+Differences from the plan above:
+
+- **No "Not sure" button.** Leaving a card as it is does the same thing; Reset hands a decision back to automatic matching.
+- **"Merge with…" on a recording** is giving two labels the same name: both are confirmed as that person, and the one-to-one rule only limits automatic names. Merging two *people* is on the People page.
+- **The owner can't be renamed, merged away or deleted** on the People page; their name follows the Settings choice (D17).
+- **"Needs labelling" counts every unknown or suggested label**, however little it speaks. Ignore takes a label off the count.
 
 ## 11. Deferred
 
