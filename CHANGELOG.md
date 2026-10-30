@@ -4,7 +4,9 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
-Plaud 4.0 moved accounts to a new web platform, and the browser-session sign-in Applaud relied on stopped working. This release moves Applaud to Plaud's official developer API. Start from a fresh install: existing libraries and settings are not carried over.
+## [0.6.0] - 2026-10-30
+
+Plaud 4.0 moved accounts to a new web platform, and the browser-session sign-in Applaud relied on stopped working. This release moves Applaud to Plaud's official developer API and adds optional speaker identification. Start from a fresh install: libraries and settings from 0.5.x are not carried over.
 
 ### Changed
 - **Sign-in is now OAuth.** **Sign in with Plaud** opens Plaud's own sign-in page; Applaud never sees your password and no longer reads browser cookies or Local Storage. Applaud registers itself with the authorisation server Plaud runs for its MCP integration (`mcp.plaud.ai`, dynamic client registration with PKCE) and renews its access token automatically. Works the same on Windows, macOS, Linux and Docker. If the browser can't reach the address Plaud sends it back to, paste that address into the sign-in step instead.
@@ -14,11 +16,16 @@ Plaud 4.0 moved accounts to a new web platform, and the browser-session sign-in 
 - Content is only downloaded over https from Plaud's storage hosts (`APPLAUD_PLAUD_CONTENT_HOSTS` extends the list).
 
 ### Added
+- **Speaker identification** (optional, off by default; **Settings → Speaker identification**). Applaud learns voices from your recordings and recognises speakers across them. It runs inside the Docker image; audio and voiceprints never leave the host. Other installs need to fetch the model first (see the README).
+  - Your voice is learned from recordings where Plaud tagged you. Once you confirm who someone is, they are named automatically on other recordings when the match is clear, and suggested when it is close. The matching thresholds are editable.
+  - The recording page gains a **Speakers** panel with audio clips, a transcript toggle between Applaud's and Plaud's names, and per-line assignment.
+  - **Settings → People and voiceprints** offers rename, merge and delete, and the Recordings list marks recordings with speakers to name.
+  - Each analysed recording gets `transcript-Applaud.json` and `transcript-Applaud.txt`. Plaud's own transcript files are never modified.
 - **History window** (setup wizard and **Settings → History window**, default 30 days): only recordings from that many days before setup onwards are downloaded in full, plus everything recorded afterwards. Older recordings are listed with their details only.
 - **Download** on a details-only recording (dashboard row or detail page, `POST /api/recordings/:id/download`) fetches that one recording in full.
 - `GET /api/auth/status`, `POST /api/auth/plaud/start`, `GET /api/auth/plaud/callback`, `POST /api/auth/plaud/complete`, `POST /api/auth/disconnect`.
 
-- **Docker / Portainer:** `docker-compose.yml` builds from the repository and takes `APPLAUD_PORT`, `APPLAUD_ALLOWED_HOSTS` and `APPLAUD_LAN_TOKEN` as variables; its volumes are now `config` and `recordings`. New guide: [`docs/portainer.md`](docs/portainer.md).
+- **Docker / Portainer:** `docker-compose.yml` builds from the repository and takes `APPLAUD_PORT`, `APPLAUD_ALLOWED_HOSTS` and `APPLAUD_LAN_TOKEN` as variables; its volumes are now `config` and `recordings`. `pull_policy: build` stops Portainer's re-pull option asking Docker Hub for the local image. New guide: [`docs/portainer.md`](docs/portainer.md).
 
 ### Fixed
 - In a container, an empty `APPLAUD_LAN_TOKEN` (for example a blank stack variable) was stored as the token, which left `/api` and `/media` unauthenticated. An empty value is now treated as unset and a token is generated.
@@ -33,6 +40,7 @@ Plaud 4.0 moved accounts to a new web platform, and the browser-session sign-in 
 - Plaud documents its MCP authorisation server for AI assistants. If Plaud restricts it to those, sign-in will stop working until Plaud offers app registration.
 - Plaud's access token lasts 24 hours and its refresh token 7 days; each renewal issues a fresh 7-day refresh token (measured 2026-10-26). Applaud stays signed in as long as it runs at least once a week.
 - Plaud's authorisation server has no revocation endpoint, so **Disconnect** clears the session in Applaud only.
+- Speaker identification has been run on linux-x64 only. The arm64 image includes it but has not been run on arm64.
 
 ## [0.5.12] - 2026-10-13
 

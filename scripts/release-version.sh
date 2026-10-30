@@ -109,6 +109,6 @@ CI is now running. Watch progress with:
   gh run watch
 
 When it finishes:
-  - Docker image: ghcr.io/rsteckler/applaud:$NEW (and :latest)
-  - GitHub Release: https://github.com/rsteckler/applaud/releases/tag/$NEW
+  - Docker image: ghcr.io/timhayward/applaud:$NEW (and :latest)
+  - GitHub Release: https://github.com/TimHayward/applaud/releases/tag/$NEW
 EOF

@@ -125,7 +125,7 @@ Plaud's access token lasts 24 hours and its refresh token 7 days; Applaud renews
 
 ## Updating
 
-Until a versioned image is published, updates come from rebuilding the stack from `main`:
+A stack built from the repository updates by rebuilding from `main`:
 
 1. **Stacks → applaud → Pull and redeploy** (on Portainer versions with Git stacks, the button is on the stack's page; confirm when asked).
 2. Check **Images → `applaud:local`**: its *Created* time should be the time of the redeploy.
@@ -207,6 +207,6 @@ Files are served by Applaud itself (player, downloads, webhook URLs). On the Doc
 | A recording shows *details only* | It's older than the history window. Click **Download**, or raise **Settings → History window**. |
 | Recordings folder errors in the wizard | Use `/data/recordings`, the volume's path inside the container. |
 
-## Later: switching to a released image
+## Switching to a released image
 
-When a release is tagged, GitHub builds a multi-architecture image (`ghcr.io/timhayward/applaud:<version>`). To switch, replace `build: .` and `image: applaud:local` in the stack with `image: ghcr.io/timhayward/applaud:<version>` and redeploy. The volumes, and therefore your sign-in and library, carry over.
+Each tagged release publishes a multi-architecture image, for example `ghcr.io/timhayward/applaud:v0.6.0`. To switch, replace `build: .`, `image: applaud:local` and `pull_policy: build` in the stack with `image: ghcr.io/timhayward/applaud:v0.6.0` and redeploy. The volumes, and therefore your sign-in and library, carry over.

@@ -60,6 +60,28 @@ After setup, a completed sign-in starts a sync immediately.
 | POST | `/api/recordings/:id/resync` | Re-fetch transcript/summary/assets and re-fire the webhook. |
 | POST | `/api/recordings/:id/rename` | Set a local title override. Body: `{ displayName: string \| null }` (`null` clears it). Cleared automatically on the recording's next resync — Plaud's filename is always authoritative once re-pulled from source. |
 
+## Speakers
+
+Speaker identification is optional; `/api/speakers/status` reports whether it is on and available. Turn it on, and change the owner name and matching thresholds, through `POST /api/config` with a `speakers` object.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/speakers/status` | Enabled state, capability check result, queue, model id, owner name and thresholds. |
+| POST | `/api/speakers/check` | Re-run the capability check. |
+| GET | `/api/speakers/review` | Labels still to name, per recording. |
+| GET | `/api/speakers/people` | Everyone known, with voiceprint and recording counts. |
+| PATCH | `/api/speakers/people/:id` | Rename a person. |
+| POST | `/api/speakers/people/:id/merge` | Merge into another person. Body: `{ intoId }`. |
+| DELETE | `/api/speakers/people/:id` | Delete a person and their voiceprints; their labels go back to unknown. |
+| GET | `/api/speakers/people/:id/voiceprints` | A person's voiceprints. |
+| DELETE | `/api/speakers/voiceprints/:id` | Delete one voiceprint. |
+| GET | `/api/recordings/:id/speakers` | Labels with candidates and clips, overrides, people and the named transcript segments. |
+| PUT | `/api/recordings/:id/speakers/:label` | Confirm, ignore or reset a Plaud label. |
+| PUT | `/api/recordings/:id/segments/:segmentKey/speaker` | Assign a single transcript segment to someone, or clear the assignment. |
+| POST | `/api/recordings/:id/speakers/reanalyse` | Analyse the recording again. |
+
+The request and response types are in [`shared/src/api.ts`](../shared/src/api.ts).
+
 ## Sync
 
 | Method | Path | Description |

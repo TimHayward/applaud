@@ -12,6 +12,7 @@ A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recording
 - **Full-text search** — search recordings by filename or transcript content
 - **Audio player** — custom player with waveform visualization, play/pause, skip -10s/+30s, click-to-seek
 - **Transcript viewer** — speaker-labeled, timestamped, color-coded blocks with auto-scroll during playback, click-to-seek, and full-text search within transcripts
+- **Speaker identification** — optional and off by default: recognises people by voice across recordings, with names you confirm applied to a separate `-Applaud` transcript. Runs entirely on your host (Docker image; see [Speaker identification](#speaker-identification))
 - **AI summaries** — rendered markdown with expandable full-screen modal for long summaries
 - **Webhooks** — POST JSON payloads on `audio_ready` and `transcript_ready` events for n8n, Zapier, or custom integrations
 - **Dark & light mode** — toggle between themes, defaults to system preference
@@ -84,6 +85,8 @@ Each recording gets its own folder under your chosen recordings directory:
     summary.md                 # Plaud's AI summary (when available)
     <Tab_name>__<type>__<id>.md  # any other note tab (templates, saved Ask Plaud answers)
     metadata.json              # the recording's record from Plaud, without its signed links
+    transcript-Applaud.json    # Plaud's transcript with Applaud's speaker names (speaker identification only)
+    transcript-Applaud.txt     # the same, as plaintext
 ```
 
 ## Webhook payload
@@ -202,7 +205,7 @@ The `n8n/` folder contains importable n8n workflow templates. To use one, open n
 
 > **Portainer:** see [`docs/portainer.md`](docs/portainer.md) for a step-by-step guide (stack built from this repository, LAN-only access, network requirements, updates and backups).
 
-The published image (`ghcr.io/timhayward/applaud:latest`) is still **v0.5.12**, which predates the Plaud 4.0 sign-in. Until the next release, build from source:
+Each release publishes an image for linux/amd64 and linux/arm64 as `ghcr.io/timhayward/applaud:v0.6.0` and `:latest`. To build from source instead:
 
 ```bash
 git clone https://github.com/TimHayward/applaud.git
@@ -237,6 +240,12 @@ Open `http://<host>:44471/?token=<token>` once per browser (it's saved in local 
 - Serving it on a real hostname through that proxy? Add it to `APPLAUD_ALLOWED_HOSTS` (see the table below) — requests arriving under an unknown hostname are rejected as DNS rebinding.
 
 A local (non-Docker) install still binds `127.0.0.1` and stays unauthenticated by default; set a token only if you open it to your LAN.
+
+## Speaker identification
+
+Turn it on in **Settings → Speaker identification**. Applaud analyses each downloaded recording once in the background and learns your voice from recordings where Plaud tagged you. Name other people in the **Speakers** panel on a recording's page; from then on they are named automatically when the match is clear, and suggested when it is close. Plaud's own transcript files are never modified.
+
+The speaker model ships in the Docker image and runs inside the container, so audio and voiceprints never leave your host. Voiceprints are biometric data: they stay in Applaud's database and are not included in webhooks. A non-Docker install has no model by default; run `node scripts/fetch-speaker-model.mjs models` from the install folder to fetch it. Requirements, resource use and tuning are in the [Portainer guide](docs/portainer.md#speaker-identification), and they apply to any Docker host.
 
 ## Running in the background
 
