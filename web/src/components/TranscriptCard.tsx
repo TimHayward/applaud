@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
-import { parseTranscript, type TranscriptBlock } from "../lib/transcript.js";
+import type { SpeakerPerson, SpeakerTranscriptSegment } from "@applaud/shared";
+import { blocksFromSegments, blocksToText, parseTranscript, type TranscriptBlock } from "../lib/transcript.js";
 import { useFocusReturn } from "../hooks/useFocusReturn.js";
 import { useToast } from "./Toast.js";
 
@@ -85,19 +86,53 @@ function HighlightedText({
 
 // --- Transcript card with search, click-to-seek, and playback follow ---
 
+/** Applaud's names for the transcript, when speaker identification has analysed the recording. */
+export interface NamedTranscript {
+  segments: SpeakerTranscriptSegment[];
+  people: SpeakerPerson[];
+  /** Assign one segment to a person, or `null` to go back to its label's name. */
+  onAssign: (segmentKey: string, speakerId: number | null) => void;
+}
+
+type NameSource = "applaud" | "plaud";
+const NAME_SOURCE_KEY = "applaud-transcript-names";
+
+function storedNameSource(): NameSource {
+  try {
+    return localStorage.getItem(NAME_SOURCE_KEY) === "plaud" ? "plaud" : "applaud";
+  } catch {
+    return "applaud";
+  }
+}
+
 export function TranscriptCard({
   text,
   currentTime,
   onSeek,
+  named,
 }: {
   text: string;
   currentTime: number;
   onSeek: (seconds: number) => void;
+  named?: NamedTranscript;
 }): JSX.Element {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const blockRefs = useRef<Map<number, HTMLElement>>(new Map());
   const toast = useToast();
-  const blocks = useMemo(() => parseTranscript(text), [text]);
+  const [nameSource, setNameSourceState] = useState<NameSource>(storedNameSource);
+  const showNamed = nameSource === "applaud" && !!named && named.segments.length > 0;
+  const setNameSource = (next: NameSource): void => {
+    setNameSourceState(next);
+    try {
+      localStorage.setItem(NAME_SOURCE_KEY, next);
+    } catch {
+      /* storage unavailable: the choice lasts for this page only */
+    }
+  };
+  const blocks = useMemo(
+    () => (showNamed ? blocksFromSegments(named.segments) : parseTranscript(text)),
+    [showNamed, named?.segments, text],
+  );
   const speakerMap = useMemo(() => new Map<string, string>(), []);
 
   const [searchOpen, setSearchOpen] = useState(false);
@@ -171,7 +206,7 @@ export function TranscriptCard({
 
   const copyTranscript = async (): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(showNamed ? blocksToText(blocks) : text);
       toast.success("Transcript copied to clipboard.");
     } catch {
       toast.error("Couldn't copy to clipboard.");
@@ -292,6 +327,24 @@ export function TranscriptCard({
           </div>
         ) : (
           <div className="flex items-center gap-1">
+            {named && named.segments.length > 0 && (
+              <div className="flex rounded-lg border border-outline-variant/40 p-0.5 mr-1" role="group" aria-label="Speaker names">
+                {(["applaud", "plaud"] as const).map((src) => (
+                  <button
+                    key={src}
+                    type="button"
+                    aria-pressed={nameSource === src}
+                    className={`px-2 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      nameSource === src ? "bg-primary/15 text-primary" : "text-on-surface-variant hover:text-on-surface"
+                    }`}
+                    title={src === "applaud" ? "Names from speaker identification" : "Names as Plaud has them"}
+                    onClick={() => setNameSource(src)}
+                  >
+                    {src === "applaud" ? "Applaud" : "Plaud"}
+                  </button>
+                ))}
+              </div>
+            )}
             {copyButton}
             <button
               onClick={openSearch}
@@ -309,9 +362,11 @@ export function TranscriptCard({
       <div ref={transcriptRef} className="flex-1 overflow-y-auto p-6 space-y-6">
         {blocks.map((block, i) => {
           const isActive = i === activeIndex;
-          const color = speakerColor(block.speaker, speakerMap);
+          const seg = block.segment;
+          // Suggestions keep Plaud's name in the colour of an unnamed speaker.
+          const color = seg && seg.status === "suggested" ? UNKNOWN_COLOR : speakerColor(block.speaker, speakerMap);
           const bm = blockMatchMap.get(i);
-          return (
+          const seekButton = (
             // A <button>, not a <div onClick>: click-to-seek has to be
             // reachable with Enter/Space and announced as an action, and the
             // browser's own button semantics beat a hand-rolled role/tabIndex.
@@ -330,6 +385,10 @@ export function TranscriptCard({
               <span className="w-20 shrink-0 text-right">
                 <span className="block text-[10px] font-label text-on-surface-variant/60 leading-tight">{block.timestamp}</span>
                 <span className="block text-xs font-bold tracking-tight mt-1 uppercase" style={{ color }}>{block.speaker}</span>
+                {seg?.suggestedSpeaker && (
+                  <span className="block text-[10px] text-on-surface-variant mt-0.5">{seg.suggestedSpeaker}?</span>
+                )}
+                {seg?.override && <span className="block text-[10px] text-on-surface-variant mt-0.5">this line only</span>}
               </span>
               <span className="flex-1">
                 <span className={`block text-on-surface leading-relaxed text-base ${isActive && !searchQuery ? "font-medium" : ""}`}>
@@ -341,6 +400,32 @@ export function TranscriptCard({
                 </span>
               </span>
             </button>
+          );
+          if (!seg || !named) return seekButton;
+          return (
+            <div key={i} className="flex items-start gap-2 group/segment">
+              <div className="flex-1 min-w-0">{seekButton}</div>
+              <select
+                className="shrink-0 mt-1 max-w-[9rem] bg-transparent border-0 rounded-md text-xs text-on-surface-variant opacity-60 md:opacity-0 md:group-hover/segment:opacity-100 focus:opacity-100 focus:ring-2 focus:ring-primary/40 cursor-pointer"
+                aria-label={`Assign the line at ${block.timestamp} to a person`}
+                value=""
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "label") named.onAssign(seg.key, null);
+                  else if (v) named.onAssign(seg.key, Number(v));
+                }}
+              >
+                <option value="">Assign to…</option>
+                {seg.override && <option value="label">Use the speaker&apos;s name</option>}
+                {named.people
+                  .filter((p) => p.id !== seg.speakerId)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
           );
         })}
       </div>

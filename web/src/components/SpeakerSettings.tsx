@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DEFAULT_SPEAKER_CONFIG,
@@ -281,6 +282,10 @@ export function SpeakerSettings(): JSX.Element {
               ))}
             </select>
           </div>
+
+          <Link to="/settings/people" className="inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline">
+            People and voiceprints →
+          </Link>
 
           <ThresholdSettings key={JSON.stringify(s.thresholds)} saved={s.thresholds} busy={busy} onSave={save} />
         </>

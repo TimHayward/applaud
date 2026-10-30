@@ -153,6 +153,8 @@ export function Dashboard(): JSX.Element {
     // keystroke and page turn. `isPlaceholderData` dims them meanwhile.
     placeholderData: keepPreviousData,
   });
+  // Speaker identification: recordings with speakers still to name (empty while it's off).
+  const review = useQuery({ queryKey: ["speaker-review"], queryFn: api.speakerReview, staleTime: 30_000 });
 
   const resyncRecording = async (id: string, e: MouseEvent): Promise<void> => {
     e.preventDefault();
@@ -462,6 +464,14 @@ export function Dashboard(): JSX.Element {
                         <span>{formatBytes(r.filesizeBytes)}</span>
                       </>
                     )}
+                    {review.data?.recordings[r.id] ? (
+                      <>
+                        <span className="w-1 h-1 rounded-full bg-outline-variant" />
+                        <span className="text-tertiary normal-case tracking-normal font-semibold">
+                          {review.data.recordings[r.id]} speaker{review.data.recordings[r.id] === 1 ? "" : "s"} to name
+                        </span>
+                      </>
+                    ) : null}
                   </div>
                   {resyncErrors[r.id] && (
                     <p className="mt-1 text-xs text-error">
