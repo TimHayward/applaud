@@ -2,7 +2,7 @@
 # applaud installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/TimHayward/applaud/v0.5.12/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/TimHayward/applaud/v0.6.0/install.sh | sh
 #
 # What it does:
 #   1. Installs pnpm (via the official installer) if not already present.
@@ -13,7 +13,7 @@
 set -eu
 
 REPO_URL="${APPLAUD_REPO:-https://github.com/TimHayward/applaud.git}"
-REPO_REF="${APPLAUD_REF:-v0.5.12}"
+REPO_REF="${APPLAUD_REF:-v0.6.0}"
 INSTALL_DIR="${APPLAUD_DIR:-$PWD/applaud}"
 MIN_NODE_MAJOR=22
 

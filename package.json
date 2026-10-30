@@ -1,6 +1,6 @@
 {
   "name": "applaud",
-  "version": "0.5.12",
+  "version": "0.6.0",
   "private": true,
   "description": "Self-hosted server that mirrors Plaud recordings to local disk and triggers webhooks on new uploads.",
   "type": "module",

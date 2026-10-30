@@ -1,7 +1,7 @@
 # applaud installer for Windows
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/TimHayward/applaud/v0.5.12/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/TimHayward/applaud/v0.6.0/install.ps1 | iex
 #
 # What it does:
 #   1. Ensures git is available.
@@ -14,7 +14,7 @@
 $ErrorActionPreference = 'Stop'
 
 $RepoUrl    = if ($env:APPLAUD_REPO) { $env:APPLAUD_REPO } else { 'https://github.com/TimHayward/applaud.git' }
-$RepoRef    = if ($env:APPLAUD_REF)  { $env:APPLAUD_REF }  else { 'v0.5.12' }
+$RepoRef    = if ($env:APPLAUD_REF)  { $env:APPLAUD_REF }  else { 'v0.6.0' }
 $InstallDir = if ($env:APPLAUD_DIR)  { $env:APPLAUD_DIR }  else { Join-Path $PWD 'applaud' }
 $MinNodeMajor = 22
 
