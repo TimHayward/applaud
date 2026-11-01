@@ -186,13 +186,13 @@ First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker
 | Anti-bot or anti-forgery measures                             | None seen: no signature, nonce, CAPTCHA or challenge request. `x-request-id` is a random UUID. |
 | Speaker addressed by                                          | Not addressed at all by the server: the client edits `speaker` values in the documents. |
 | UI scope options offered                                      | To be recorded. |
-| `original_speaker` unchanged after rename                     | **Yes.** `original_speaker` stays `Speaker 2`, so Applaud's key (D8) maps directly. |
+| `original_speaker` unchanged after rename                     | **Yes**, in the PATCH bodies and in Applaud's next sync: `transcript.json` and `transcript_polished.json` both show `original_speaker` `Speaker 2` with the new `speaker`, and `summary.md` carries the name. Applaud's key (D8) maps directly. |
 | How Plaud AI reads transcripts                                | Ask Plaud's retriever returns transcript chunks formatted `[start-end] [Speaker name]` followed by the text (`contextos-dproxy/v4/context/resource`). Whether those chunks are rebuilt after a rename is the open question below. |
-| Plaud AI uses the new name: new chat (and delay)              | Pending. |
-| Plaud AI uses the new name: existing chat (and delay)         | Pending. |
-| Replay from page console accepted                             | Reported as passed. Which `origin_version` was sent on replay is to be confirmed. |
+| Plaud AI uses the new name: new chat (and delay)              | Not separately tested; the existing-chat result makes a failure unlikely. |
+| Plaud AI uses the new name: existing chat (and delay)         | **Yes.** Before the rename it answered with `Speaker 2`; within minutes afterwards, the same question in the same chat answered with the name (and inferred a pronoun). |
+| Replay from page console accepted                             | Reported as passed. Whether a **stale** `origin_version` is refused is unresolved: Applaud's files hold no version data. Test A.10 settles it. |
 | Terms of service position                                     | Pending. |
-| **Decision:** continue to extension-context test, or stop     | Pending the Plaud AI result. |
+| **Decision:** continue to extension-context test, or stop     | **Continue.** The P1 stop criterion (Plaud AI ignores the name) is not met. Remaining before planning: A.10 and the terms of service. |
 
 ### A.9 Consequences for the design (provisional)
 
@@ -201,3 +201,13 @@ First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker
 - **Run requests from the Plaud page, not the service worker.** The token is a bearer token held by the page, and CORS admits only `web.plaud.ai`. A content script that runs the edit in the page's context avoids handling the token in the extension's own storage (P7), at the cost of needing a Plaud tab open (consistent with P4).
 - **The summary replacement is naive.** A whole-word match is needed so `Speaker 2` does not also match `Speaker 20`, and pronouns stay as Plaud wrote them.
 - **The write is three requests, not one.** A failure part-way leaves Plaud inconsistent; the undo log must hold all three previous documents and their versions.
+
+### A.10 Stale-version test
+
+Settles whether `origin_version` can serve as the precondition guard (P5). It sends content identical to what Plaud already holds, so it cannot change the recording whatever the outcome.
+
+1. In the Plaud tab, open the recording and capture a fresh rename-free baseline: DevTools → Network, then reload the page.
+2. From the earlier capture, take the **transcript** PATCH (the first of the three) as copied fetch. Its body carries the `origin_version` from *before* the rename, which is now stale. The `content` already contains the name, so it matches Plaud's current transcript.
+3. Run it in the Console and record the HTTP status and the response JSON (`status`, any message).
+4. **Refused** (non-zero `status` or an HTTP error mentioning a version or conflict): Plaud enforces it, and it becomes the P5 guard.
+   **Accepted:** Plaud does not enforce it. The extension must do its own fresh read and comparison immediately before each write, and the race window, though small, cannot be closed.
