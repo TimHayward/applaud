@@ -1,16 +1,17 @@
 /**
  * Content script on https://web.plaud.ai (plan W8). Runs Plaud requests in the
  * page's origin with the page's own session. The token is read when needed
- * and never stored or passed on. Phase 2: read only.
+ * and never stored or passed on. It writes only documents Applaud planned.
  */
 import type { ContentRequest, Reply } from "./messages.js";
-import { diagnose, readDocuments, type PageContext } from "./plaud.js";
+import { diagnose, readDocuments, writeDocuments, type PageContext } from "./plaud.js";
 
 const ctx: PageContext = {
   storage: localStorage,
   resourceUrls: () => performance.getEntriesByType("resource").map((e) => e.name),
   fetch: (...args) => fetch(...args),
   language: navigator.language || "en",
+  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 };
 
 chrome.runtime.onMessage.addListener((msg: ContentRequest, sender, sendResponse) => {
@@ -20,6 +21,8 @@ chrome.runtime.onMessage.addListener((msg: ContentRequest, sender, sendResponse)
     switch (msg.type) {
       case "plaud.read":
         return readDocuments(ctx, msg.fileId);
+      case "plaud.write":
+        return writeDocuments(ctx, msg.fileId, msg.writes);
       case "plaud.diagnose":
         return diagnose(ctx);
       default:

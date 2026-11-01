@@ -93,7 +93,8 @@ These routes accept the LAN token as usual, or a paired extension's own token as
 | GET | `/api/plaud-writeback/status` | both | Protocol, whether writing is on, whether the caller is a paired extension. |
 | GET | `/api/plaud-writeback/pending` | both | Recordings Plaud is missing names for: the changes, by label or by segment, and the state (`to_send`, `sent`, `partial`, `stale`). |
 | GET | `/api/plaud-writeback/recordings/:id` | both | One recording's changes and its write history. |
-| POST | `/api/plaud-writeback/plan` | extension | Body: `{ recordingId, documents }`, Plaud's current transcript, polished transcript and summary with their versions. Returns the documents to write, in order, each with the `originVersion` to send, or `stale` when Plaud changed since Applaud last synced. 409 while writing is off. |
+| GET | `/api/plaud-writeback/undoable` | both | Recordings whose most recent send can still be undone (30 days). |
+| POST | `/api/plaud-writeback/plan` | extension | Body: `{ recordingId, documents, dryRun? }`, Plaud's current transcript, polished transcript and summary with their versions. With `dryRun: true` nothing is recorded and `planId` is null. Returns the documents to write, in order, each with the `originVersion` to send, or `stale` when Plaud changed since Applaud last synced. 409 while writing is off. |
 | POST | `/api/plaud-writeback/results` | extension | Body: `{ planId, results }`: per document `applied` (with Plaud's new version), `conflict` or `failed`. Documents not reported are recorded as abandoned. |
 | POST | `/api/plaud-writeback/undo/:id` | extension | The documents that restore the last write still in force, each guarded by the version Plaud gave that write. |
 | POST | `/api/plaud-writeback/pairing-code` | web UI | A single-use pairing code, valid for 10 minutes. |

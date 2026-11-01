@@ -1,9 +1,9 @@
 /**
- * Service worker: holds the pairing with Applaud and runs the dry run
- * (plan section 3, steps 2 to 4). Plaud is only ever reached through the
- * content script in a Plaud tab. Phase 2: read only.
+ * Service worker: holds the pairing with Applaud and runs dry runs, sends and
+ * undos (plan section 3). Plaud is only ever reached through the content
+ * script in a Plaud tab. One recording at a time (Phase 3).
  */
-import { PLAUD_WRITEBACK_PROTOCOL } from "@applaud/shared";
+import { PLAUD_WRITEBACK_PROTOCOL, type PlaudWritebackResult } from "@applaud/shared";
 import { ApplaudClient, ApplaudError, normaliseApplaudUrl } from "./applaud.js";
 import type {
   ContentReplies,
@@ -13,10 +13,74 @@ import type {
   Reply,
   StatusReply,
 } from "./messages.js";
+import { send, undo, type SendDeps } from "./send.js";
 
 interface Stored {
   applaudUrl?: string;
   token?: string;
+}
+
+/** Results Plaud accepted that Applaud hasn't recorded yet (it was unreachable). */
+interface Unreported {
+  applaudUrl: string;
+  planId: string;
+  results: PlaudWritebackResult[];
+}
+
+async function unreported(): Promise<Unreported[]> {
+  const v = (await chrome.storage.local.get("unreported")) as { unreported?: Unreported[] };
+  return Array.isArray(v.unreported) ? v.unreported : [];
+}
+
+async function keepUnreported(planId: string, results: PlaudWritebackResult[]): Promise<void> {
+  const s = await stored();
+  if (!s.applaudUrl) return;
+  const list = await unreported();
+  list.push({ applaudUrl: s.applaudUrl, planId, results });
+  await chrome.storage.local.set({ unreported: list });
+}
+
+/** Tell Applaud about earlier results it missed; keep the ones that still fail. */
+async function flushUnreported(): Promise<number> {
+  const list = await unreported();
+  if (list.length === 0) return 0;
+  const s = await stored();
+  const keep: Unreported[] = [];
+  for (const u of list) {
+    if (!s.token || u.applaudUrl !== s.applaudUrl) continue; // paired elsewhere since: drop
+    try {
+      await new ApplaudClient(u.applaudUrl, s.token).results(u.planId, u.results);
+    } catch (err) {
+      // 404/409: Applaud already has them or dropped the plan; nothing more to do.
+      if (!(err instanceof ApplaudError) || err.status === 0 || err.status >= 500) keep.push(u);
+    }
+  }
+  await chrome.storage.local.set({ unreported: keep });
+  return keep.length;
+}
+
+let busy = false;
+
+async function exclusive<T>(run: () => Promise<T>): Promise<T> {
+  if (busy) throw new Error("A send is already running. Wait for it to finish");
+  busy = true;
+  try {
+    return await run();
+  } finally {
+    busy = false;
+  }
+}
+
+async function sendDeps(): Promise<SendDeps> {
+  const app = await client();
+  return {
+    readPlaud: (fileId) => askPlaud({ type: "plaud.read", fileId }),
+    writePlaud: (fileId, writes) => askPlaud({ type: "plaud.write", fileId, writes }),
+    plan: (id, docs) => app.plan(id, docs),
+    undo: (id) => app.undo(id),
+    report: (planId, results) => app.results(planId, results),
+    keepUnreported,
+  };
 }
 
 async function stored(): Promise<Stored> {
@@ -58,9 +122,11 @@ async function status(): Promise<StatusReply> {
     applaudUrl: s.applaudUrl ?? null,
     applaud: null,
     plaudTab: (await plaudTab()) !== null,
+    unreported: 0,
     error: null,
   };
   if (!base.paired) return base;
+  base.unreported = await flushUnreported().catch(() => base.unreported);
   try {
     const st = await (await client()).status();
     if (st.protocol !== PLAUD_WRITEBACK_PROTOCOL) {
@@ -113,6 +179,16 @@ async function handle(msg: PopupRequest): Promise<PopupReplies[PopupRequest["typ
       const read = await askPlaud({ type: "plaud.read", fileId: msg.recordingId });
       const plan = await app.dryRun(msg.recordingId, read.documents);
       return { plan, warnings: read.warnings };
+    }
+    case "undoable":
+      return (await (await client()).undoable()).recordings;
+    case "apply": {
+      const deps = await sendDeps();
+      return exclusive(() => send(deps, msg.recordingId));
+    }
+    case "undo": {
+      const deps = await sendDeps();
+      return exclusive(() => undo(deps, msg.recordingId));
     }
     case "diagnose":
       return askPlaud({ type: "plaud.diagnose" });

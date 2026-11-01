@@ -5,9 +5,14 @@ import {
   parseDetail,
   PlaudError,
   readDocuments,
+  readDeviceId,
   readToken,
+  readWorkspaceId,
+  VERSION_CONFLICT,
+  writeDocuments,
   type PageContext,
 } from "./plaud.js";
+import type { PlaudDocumentWrite } from "@applaud/shared";
 
 const TOKEN = `bearer ${"x".repeat(40)}`;
 
@@ -94,6 +99,8 @@ describe("page context", () => {
     expect(d).toEqual({
       signedIn: true,
       apiOrigin: null,
+      deviceId: false,
+      workspace: false,
       relevantKeys: ["deviceId", "pld_tokenstr"],
     });
     expect(JSON.stringify(d)).not.toContain("secret");
@@ -182,5 +189,155 @@ describe("readDocuments", () => {
       readDocuments(ctx({}, { [api]: detail([object("SUMMARY", 1)]) }), "f_1"),
     ).rejects.toThrow(/no transcript/);
     await expect(readDocuments(ctx(), "../x")).rejects.toThrow(/invalid/);
+  });
+});
+
+describe("the tab's own settings (seen on Plaud in Phase 2)", () => {
+  it("takes the API host from pld_plaud_user_api_domain, with or without a scheme", () => {
+    const at = (v: string) =>
+      findApiOrigin({ storage: storage({ pld_plaud_user_api_domain: v }), resourceUrls: () => [] });
+    expect(at("https://api-euc1.plaud.ai")).toBe("https://api-euc1.plaud.ai");
+    expect(at('"api-euc1.plaud.ai"')).toBe("https://api-euc1.plaud.ai");
+    expect(at("evil-api.plaud.ai")).toBeNull();
+    expect(at("api.plaud.ai.evil.example")).toBeNull();
+  });
+
+  it("reads the device and workspace ids", () => {
+    const st = storage({
+      pld_DEVICE_ID: '"0a1b2c3d4e5f6789"',
+      "pld_session.workspace": '{"id":"ws_AbC123xyz","name":"Personal"}',
+    });
+    expect(readDeviceId(st)).toBe("0a1b2c3d4e5f6789");
+    expect(readWorkspaceId(st)).toBe("ws_AbC123xyz");
+    expect(readDeviceId(storage({ pld_DEVICE_ID: "<script>" }))).toBeNull();
+    expect(readWorkspaceId(storage({}))).toBeNull();
+  });
+});
+
+describe("writeDocuments", () => {
+  const API = "https://api-euc1.plaud.ai";
+  const writes: PlaudDocumentWrite[] = [
+    { kind: "transcript", objectId: "o_1", contentId: "c_1", originVersion: 1001, content: "[1]" },
+    { kind: "summary", objectId: "o_2", contentId: "c_2", originVersion: 1002, content: "# S" },
+  ];
+  const detailNow = (over: Record<string, unknown> = {}) =>
+    detail([
+      object("TRANSCRIPT", 1),
+      { ...object("SUMMARY", 2), relation_content_ids: ["c_rel"], ...over },
+    ]);
+
+  /** A tab whose Plaud answers each PATCH from `answers`, in order. */
+  function tab(answers: (Response | Error)[], detailBody: unknown = detailNow()) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/files/detail/"))
+        return new Response(JSON.stringify(detailBody), { status: 200 });
+      const next = answers.shift();
+      if (next instanceof Error) throw next;
+      return next ?? new Response("", { status: 500 });
+    });
+    const c: PageContext = {
+      storage: storage({
+        pld_tokenstr: TOKEN,
+        pld_plaud_user_api_domain: API,
+        pld_DEVICE_ID: "0a1b2c3d4e5f6789",
+        "pld_session.workspace": '{"id":"ws_AbC123xyz"}',
+      }),
+      resourceUrls: () => [],
+      fetch: fetchImpl as unknown as typeof fetch,
+      language: "en-GB",
+      timeZone: "Europe/London",
+      requestId: () => "req-1",
+      sleep: async () => {},
+    };
+    return { c, calls };
+  }
+  const ok = (v: number) =>
+    new Response(JSON.stringify({ status: 0, data: { file_id: "f_1", version_ms: v } }), {
+      status: 200,
+    });
+
+  it("sends what the web app sends, in order, with each document's version", async () => {
+    const { c, calls } = tab([ok(2001), ok(2002)]);
+    expect(await writeDocuments(c, "f_1", writes)).toEqual([
+      { kind: "transcript", outcome: "applied", newVersion: 2001 },
+      { kind: "summary", outcome: "applied", newVersion: 2002 },
+    ]);
+    const patches = calls.filter((x) => x.init.method === "PATCH");
+    expect(patches.map((x) => x.url)).toEqual([
+      `${API}/file-app/v4/files/update/content/f_1`,
+      `${API}/file-app/v4/files/update/content/f_1`,
+    ]);
+    expect(JSON.parse(String(patches[0]!.init.body))).toEqual({
+      object_id: "o_1",
+      content_id: "c_1",
+      content: "[1]",
+      origin_version: 1001,
+    });
+    expect(JSON.parse(String(patches[1]!.init.body))).toEqual({
+      object_id: "o_2",
+      content_id: "c_2",
+      content: "# S",
+      origin_version: 1002,
+      relation_content_ids: ["c_rel"],
+    });
+    expect(patches[0]!.init.headers).toEqual({
+      authorization: TOKEN,
+      "app-platform": "web",
+      "edit-from": "web",
+      "app-language": "en",
+      "x-device-id": "0a1b2c3d4e5f6789",
+      "x-scope-id": "ws_AbC123xyz",
+      "x-scope-type": "workspace",
+      "content-type": "application/json",
+      "x-request-id": "req-1",
+      "x-timezone-iana": "Europe/London",
+    });
+  });
+
+  it("does not write when Plaud's version moved since the plan, and stops there", async () => {
+    const { c, calls } = tab(
+      [ok(2001)],
+      detail([{ ...object("TRANSCRIPT", 1), version_ms: 9999 }, object("SUMMARY", 2)]),
+    );
+    expect(await writeDocuments(c, "f_1", writes)).toEqual([
+      {
+        kind: "transcript",
+        outcome: "conflict",
+        error: "Plaud's document changed since it was read",
+      },
+    ]);
+    expect(calls.some((x) => x.init.method === "PATCH")).toBe(false);
+  });
+
+  it("stops at Plaud's version conflict and treats a non-zero status as failure even on HTTP 200", async () => {
+    const conflict = new Response(
+      JSON.stringify({ status: VERSION_CONFLICT, msg: "version conflict, re-fetch and retry" }),
+      { status: 200 },
+    );
+    expect(await writeDocuments(tab([conflict]).c, "f_1", writes)).toEqual([
+      {
+        kind: "transcript",
+        outcome: "conflict",
+        error: "Plaud: version conflict, re-fetch and retry",
+      },
+    ]);
+    const odd = new Response(JSON.stringify({ status: -1, msg: "nope" }), { status: 200 });
+    expect(await writeDocuments(tab([ok(2001), odd]).c, "f_1", writes)).toEqual([
+      { kind: "transcript", outcome: "applied", newVersion: 2001 },
+      { kind: "summary", outcome: "failed", error: "Plaud: nope" },
+    ]);
+  });
+
+  it("reports a lost reply as failed, not applied", async () => {
+    expect(await writeDocuments(tab([new TypeError("network")]).c, "f_1", writes)).toEqual([
+      {
+        kind: "transcript",
+        outcome: "failed",
+        error: "no reply from Plaud; it may have been written",
+      },
+    ]);
   });
 });

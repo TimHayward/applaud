@@ -9,6 +9,8 @@ import {
   type PlaudWritebackPairResponse,
   type PlaudWritebackPendingResponse,
   type PlaudWritebackPlanResponse,
+  type PlaudWritebackResult,
+  type PlaudWritebackUndoable,
 } from "@applaud/shared";
 
 export class ApplaudError extends Error {
@@ -93,8 +95,25 @@ export class ApplaudClient {
     return this.call("GET", "/pending");
   }
 
-  /** Phase 2: always a dry run. Applaud records nothing and returns no plan id. */
+  /** What would change; Applaud records nothing and returns no plan id. */
   dryRun(recordingId: string, documents: PlaudDocument[]): Promise<PlaudWritebackPlanResponse> {
     return this.call("POST", "/plan", { recordingId, documents, dryRun: true });
+  }
+
+  /** The documents to write, recorded by Applaud as planned with their previous content (W11). */
+  plan(recordingId: string, documents: PlaudDocument[]): Promise<PlaudWritebackPlanResponse> {
+    return this.call("POST", "/plan", { recordingId, documents });
+  }
+
+  results(planId: string, results: PlaudWritebackResult[]): Promise<{ ok: boolean }> {
+    return this.call("POST", "/results", { planId, results });
+  }
+
+  undo(recordingId: string): Promise<PlaudWritebackPlanResponse> {
+    return this.call("POST", `/undo/${encodeURIComponent(recordingId)}`, {});
+  }
+
+  undoable(): Promise<{ recordings: PlaudWritebackUndoable[] }> {
+    return this.call("GET", "/undoable");
   }
 }

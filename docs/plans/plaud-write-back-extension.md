@@ -2,7 +2,7 @@
 
 |             |                                                                                                                                                                                                                                                          |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**  | Spike complete (GO, Appendix A). Phases 1 and 2 built, not yet verified on the Portainer host or in Edge against Plaud; Phases 3 and 4 not started. |
+| **Status**  | Spike complete (GO, Appendix A). Phases 1 and 2 verified by the owner on the Portainer host and in Edge against Plaud. Phase 3 built, not yet verified against Plaud; Phase 4 not started. |
 | **Updated** | 2026-11-01                                                                                                                                                                                                                                               |
 | **Owner**   | Tim Hayward                                                                                                                                                                                                                                              |
 | **Context** | Picks up "Write-back to Plaud" from [speaker-identification.md](speaker-identification.md) section 11. Automated server-side write-back was rejected; a browser extension acting in the user's own signed-in Plaud session is the option being explored. |
@@ -187,7 +187,7 @@ Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
 | Transform (W2 to W5) in `server/src/plaud-writeback/transform.ts` | Done, with unit tests on synthetic documents |
 | Routes, extension-token guard, protocol check, kill switch, pairing and revoking | Done, with route tests |
 | Settings toggle and pairing; recording panel with copy buttons and history; dashboard mark | Done; checked in a browser against a seeded install |
-| Exit check: the panel's list matches what a manual rename in Plaud needs, for three real recordings | **Open**: to run on the Portainer host |
+| Exit check: the panel's list matches what a manual rename in Plaud needs, for three real recordings | Passed (owner, 2026-11-01) |
 
 Differences from the plan above:
 
@@ -208,7 +208,7 @@ Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
 | Dry run: `POST /api/plaud-writeback/plan` with `dryRun: true`, which records nothing and returns no plan id | Done, with a route test |
 | No write code in the extension | Done; a test fails if `PATCH`, `update/content` or `origin_version` appears in its source |
 | End to end in Chromium: built extension, real Applaud server, mock Plaud site shaped like the capture | Done: pairing, pending list, dry run, the tab check; the token went only to the API host, storage links carried no credentials, and Applaud recorded nothing |
-| Exit checks on Edge against real Plaud: three recordings, after sign-out and sign-in, refusal while Applaud's setting is off | **Open** |
+| Exit checks on Edge against real Plaud: three recordings, after sign-out and sign-in, refusal while Applaud's setting is off | Passed (owner, 2026-11-01) |
 
 Open questions, as far as Phase 2 can take them:
 
@@ -220,6 +220,29 @@ Differences from the plan above:
 
 - **No fixed extension `key`.** The extension reaches Applaud through a host permission (W9), so its id does not need to be stable; this can be added when the extension is published.
 - **The build is not part of `pnpm build`**, so the Docker image is unchanged. `pnpm build:extension` builds it.
+
+### 6.3 Phase 3 record
+
+Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
+
+**Q1 answered on real Plaud (Phase 2):** reads work with `authorization`, `app-platform`, `edit-from` and `app-language` alone. The tab's storage holds `pld_plaud_user_api_domain`, `pld_DEVICE_ID` and `pld_session.workspace`. The extension now takes the API host from the first, and sends `x-device-id`, `x-scope-id` and `x-scope-type: workspace` from the other two, as the web app does (A.8). Writes have not yet been tried without them.
+
+| Item | State |
+| ---- | ----- |
+| `writeDocuments` in `extension/src/plaud.ts`: the web app's `PATCH`, one document at a time in order, with a pause, `relation_content_ids` carried over for the summary | Done, with unit tests |
+| Version checked against a fresh `files/detail` before each write, as well as by Plaud on the write (W6) | Done, with unit tests |
+| Success only on `status: 0` with a new version; Plaud's conflict and any other status stop the run; a lost reply is reported as failed, never applied | Done, with unit tests |
+| Send and undo sequence (`extension/src/send.ts`), results reported to Applaud, kept and retried when Applaud can't be reached | Done, with unit tests |
+| Popup: **Send to Plaud** after a dry run, **Undo** with a second confirmation, **Recently sent** list (`GET /api/plaud-writeback/undoable`) | Done |
+| One recording per send; a second send while one runs is refused | Done |
+| The only `PATCH` in the extension is in `plaud.ts` | Enforced by a test |
+| End to end in Chromium against a mock Plaud that enforces `origin_version`: send, undo (all three documents restored byte for byte), partial write then a second send that writes only what was missing | Done |
+| Exit checks on Edge against real Plaud: apply, conflict (edit in Plaud between dry run and send), partial then re-run, undo; Plaud AI uses the names; Applaud's sync confirms | **Open** |
+
+Differences from the plan above:
+
+- **Undo walks back one send at a time.** Each undo restores the most recent send still in force; after a partial send and its completion, two undos restore the original.
+- **A lost reply is reported as failed.** Plaud may have applied it; the next send reads Plaud afresh, so the work completes either way, but that one write is missing from the undo log.
 
 ## 7. Testing
 

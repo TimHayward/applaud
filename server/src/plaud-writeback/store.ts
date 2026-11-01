@@ -10,6 +10,7 @@ import type {
   PlaudWritebackRecording,
   PlaudWritebackResult,
   PlaudWritebackState,
+  PlaudWritebackUndoable,
 } from "@applaud/shared";
 import { getDb } from "../db.js";
 import { applaudSegments, loadSegments } from "../speakers/outputs.js";
@@ -126,6 +127,32 @@ export function history(recordingId: string, limit = 30): PlaudWritebackHistoryE
     error: r.error,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+  }));
+}
+
+/**
+ * Recordings whose most recent send can still be undone (W11): the newest
+ * plan with an applied write not yet undone, within the log's 30 days.
+ */
+export function undoable(): PlaudWritebackUndoable[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT l.recording_id, MAX(l.updated_at) AS sent_at, r.filename, r.display_name
+       FROM plaud_writeback_log l JOIN recordings r ON r.id = l.recording_id
+       WHERE l.outcome = 'applied' AND l.undo_of IS NULL AND l.undone_at IS NULL
+         AND l.new_version IS NOT NULL AND r.user_deleted_at IS NULL
+       GROUP BY l.recording_id ORDER BY sent_at DESC LIMIT 50`,
+    )
+    .all() as {
+    recording_id: string;
+    sent_at: number;
+    filename: string;
+    display_name: string | null;
+  }[];
+  return rows.map((r) => ({
+    recordingId: r.recording_id,
+    title: r.display_name || r.filename,
+    sentAt: r.sent_at,
   }));
 }
 

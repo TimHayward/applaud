@@ -62,12 +62,14 @@ describe("ApplaudClient", () => {
   });
 });
 
-describe("Phase 2 is read only", () => {
-  it("has no code that writes to Plaud", () => {
+describe("writes to Plaud", () => {
+  it("happen only in plaud.ts, in writeOne", () => {
     const dir = path.dirname(fileURLToPath(import.meta.url));
     for (const f of readdirSync(dir).filter((n) => n.endsWith(".ts") && !n.endsWith(".test.ts"))) {
       const src = readFileSync(path.join(dir, f), "utf8");
-      expect(src, f).not.toMatch(/PATCH|update\/content|origin_version/);
+      const writes = src.match(/method: "PATCH"/g) ?? [];
+      expect(writes.length, f).toBe(f === "plaud.ts" ? 1 : 0);
+      if (f !== "plaud.ts") expect(src, f).not.toMatch(/update\/content/);
     }
   });
 });

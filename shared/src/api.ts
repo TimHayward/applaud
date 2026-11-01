@@ -470,6 +470,13 @@ export interface PlaudWritebackResultsRequest {
   results: PlaudWritebackResult[];
 }
 
+/** `GET /api/plaud-writeback/undoable`: recordings whose last send can be undone. */
+export interface PlaudWritebackUndoable {
+  recordingId: string;
+  title: string;
+  sentAt: number;
+}
+
 /** A browser extension paired with this Applaud. */
 export interface PlaudWritebackClient {
   id: number;

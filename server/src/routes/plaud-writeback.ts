@@ -21,6 +21,7 @@ import {
   revokeClient,
 } from "../plaud-writeback/clients.js";
 import {
+  undoable,
   createPlan,
   createUndo,
   getRecording,
@@ -157,6 +158,11 @@ plaudWritebackRouter.get("/pending", (_req, res) => {
     recordings: s.enabled ? listPending() : [],
   };
   res.json(body);
+});
+
+plaudWritebackRouter.get("/undoable", (_req, res) => {
+  const s = speakerConfig(loadConfig());
+  res.json({ recordings: s.enabled ? undoable() : [] });
 });
 
 plaudWritebackRouter.get("/recordings/:id", (req, res) => {

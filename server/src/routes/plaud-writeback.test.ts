@@ -363,6 +363,10 @@ describe("plaudWritebackRouter", () => {
       },
     });
 
+    const before = (await (await call("GET", "/undoable", { token })).json()) as {
+      recordings: { recordingId: string }[];
+    };
+    expect(before.recordings.map((r) => r.recordingId)).toEqual(["f_1"]);
     const undo = (await (
       await call("POST", "/undo/f_1", { token })
     ).json()) as PlaudWritebackPlanResponse;
@@ -385,5 +389,9 @@ describe("plaudWritebackRouter", () => {
     ).json()) as PlaudWritebackRecordingResponse;
     expect(rec.history.filter((h) => !h.undo).every((h) => h.undone)).toBe(true);
     expect((await call("POST", "/undo/f_1", { token })).status).toBe(404);
+    const after = (await (await call("GET", "/undoable", { token })).json()) as {
+      recordings: unknown[];
+    };
+    expect(after.recordings).toEqual([]);
   });
 });

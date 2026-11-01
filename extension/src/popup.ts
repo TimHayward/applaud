@@ -3,9 +3,20 @@
  * and a dry run of each (plan section 5). Phase 2: nothing is written.
  * Every value is set as text, never as HTML.
  */
-import type { PlaudWritebackChange, PlaudWritebackRecording } from "@applaud/shared";
+import type {
+  PlaudWritebackChange,
+  PlaudWritebackRecording,
+  PlaudWritebackUndoable,
+} from "@applaud/shared";
 import { normaliseApplaudUrl } from "./applaud.js";
-import type { DryRunReply, PopupReplies, PopupRequest, Reply, StatusReply } from "./messages.js";
+import type {
+  ApplyReply,
+  DryRunReply,
+  PopupReplies,
+  PopupRequest,
+  Reply,
+  StatusReply,
+} from "./messages.js";
 
 async function send<K extends PopupRequest["type"]>(
   req: Extract<PopupRequest, { type: K }>,
@@ -113,7 +124,93 @@ function changeLine(c: PlaudWritebackChange): HTMLElement {
   return el("li", { text: `${where}${c.from} → ${c.to}${count}` });
 }
 
-function renderDryRun(target: HTMLElement, r: DryRunReply): void {
+const KIND_NAME = { transcript: "transcript", polished: "polished transcript", summary: "summary" };
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** A button that asks once more before it acts. */
+function confirmButton(
+  text: string,
+  confirmText: string,
+  act: (b: HTMLButtonElement) => void,
+): HTMLButtonElement {
+  let armed = false;
+  const b = button(text, () => {
+    if (!armed) {
+      armed = true;
+      b.textContent = confirmText;
+      return;
+    }
+    act(b);
+  });
+  return b;
+}
+
+function renderUndo(target: HTMLElement, recordingId: string): HTMLButtonElement {
+  return confirmButton("Undo", "Confirm undo", (b) => {
+    b.disabled = true;
+    target.replaceChildren(
+      el("p", { className: "muted", text: "Restoring Plaud's previous version…" }),
+    );
+    send({ type: "undo", recordingId }).then(
+      (reply) => renderApply(target, reply, recordingId, true),
+      (err: unknown) => target.replaceChildren(errorLine(message(err))),
+    );
+  });
+}
+
+function renderApply(
+  target: HTMLElement,
+  r: ApplyReply,
+  recordingId: string,
+  isUndo = false,
+): void {
+  const parts: Node[] = [];
+  if (r.status === "applied") {
+    parts.push(
+      el("p", {
+        className: "ok",
+        text: isUndo
+          ? "Plaud is back as it was before the last send. Applaud will list these names again after its next sync."
+          : `Sent: ${r.results.map((x) => KIND_NAME[x.kind]).join(", ")}. Applaud's next sync confirms it in Plaud.`,
+      }),
+    );
+  } else if (r.status === "nothing") {
+    parts.push(el("p", { className: "ok", text: r.reason ?? "Plaud already has these names." }));
+  } else if (r.status === "stale") {
+    parts.push(
+      errorLine(
+        `Nothing was written: ${r.reason ?? "Plaud changed since Applaud last synced"}. Try again after Applaud's next sync.`,
+      ),
+    );
+  } else {
+    const done = r.results.filter((x) => x.outcome === "applied").map((x) => KIND_NAME[x.kind]);
+    parts.push(
+      errorLine(
+        `${r.status === "partial" ? `Stopped part-way after the ${done.join(", ")}` : "Nothing was written"}${r.reason ? `: ${r.reason}` : ""}. ${isUndo ? "Undo again to finish." : "Sending again completes it."}`,
+      ),
+    );
+  }
+  if (!r.reported) {
+    parts.push(
+      errorLine(
+        "Applaud couldn't be told about this. The extension keeps the result and tells Applaud next time it can.",
+      ),
+    );
+  }
+  if (!isUndo && (r.status === "applied" || r.status === "partial"))
+    parts.push(renderUndo(target, recordingId));
+  target.replaceChildren(...parts);
+}
+
+function renderDryRun(
+  target: HTMLElement,
+  r: DryRunReply,
+  recordingId: string,
+  canWrite: boolean,
+): void {
   const { plan, warnings } = r;
   const parts: Node[] = [];
   if (plan.status === "stale") {
@@ -140,12 +237,31 @@ function renderDryRun(target: HTMLElement, r: DryRunReply): void {
       }),
       el("ul", {}, ...plan.changes.map(changeLine)),
     );
+    if (canWrite) {
+      const go = button(
+        "Send to Plaud",
+        () => {
+          go.disabled = true;
+          target.replaceChildren(el("p", { className: "muted", text: "Sending to Plaud…" }));
+          send({ type: "apply", recordingId }).then(
+            (reply) => renderApply(target, reply, recordingId),
+            (err: unknown) => target.replaceChildren(errorLine(message(err))),
+          );
+        },
+        "btn primary",
+      );
+      parts.push(go);
+    }
   }
   for (const w of warnings) parts.push(el("p", { className: "muted", text: w }));
   target.replaceChildren(...parts);
 }
 
-function recordingItem(r: PlaudWritebackRecording, plaudTab: boolean): HTMLElement {
+function recordingItem(
+  r: PlaudWritebackRecording,
+  plaudTab: boolean,
+  canWrite: boolean,
+): HTMLElement {
   const result = el("div", { className: "result" });
   const run = button("Dry run", () => {
     run.disabled = true;
@@ -153,7 +269,7 @@ function recordingItem(r: PlaudWritebackRecording, plaudTab: boolean): HTMLEleme
     send({ type: "dryRun", recordingId: r.recordingId }).then(
       (reply) => {
         run.disabled = false;
-        renderDryRun(result, reply);
+        renderDryRun(result, reply, r.recordingId, canWrite);
       },
       (err: unknown) => {
         run.disabled = false;
@@ -231,7 +347,7 @@ function renderMain(st: StatusReply): void {
           diagnosis.replaceChildren(
             el("p", {
               className: "muted",
-              text: `Signed in: ${d.signedIn ? "yes" : "no"} · API: ${d.apiOrigin ?? "not found"}`,
+              text: `Signed in: ${d.signedIn ? "yes" : "no"} · API: ${d.apiOrigin ?? "not found"} · device id: ${d.deviceId ? "found" : "not found"} · workspace: ${d.workspace ? "found" : "not found"}`,
             }),
             el("p", {
               className: "muted",
@@ -251,14 +367,23 @@ function renderMain(st: StatusReply): void {
     { className: "recordings" },
     el("li", { className: "muted", text: "Loading…" }),
   );
+  if (st.unreported > 0) {
+    facts.push(
+      errorLine(
+        `${st.unreported} earlier result${st.unreported === 1 ? "" : "s"} still to be recorded in Applaud.`,
+      ),
+    );
+  }
+  const recent = el("div");
   show(
     header,
     ...facts,
     list,
     el("p", {
       className: "muted small",
-      text: "Read only: this version shows what would change and never changes anything in Plaud.",
+      text: "Dry run shows exactly what would change. Nothing is written to Plaud until you choose Send to Plaud, one recording at a time.",
     }),
+    recent,
     check,
     diagnosis,
   );
@@ -271,10 +396,52 @@ function renderMain(st: StatusReply): void {
       list.replaceChildren(
         ...(recordings.length === 0
           ? [el("li", { className: "muted", text: "Plaud has every name you have confirmed." })]
-          : recordings.map((r) => recordingItem(r, st.plaudTab && st.applaud?.enabled === true))),
+          : recordings.map((r) =>
+              recordingItem(r, st.plaudTab, st.plaudTab && st.applaud?.enabled === true),
+            )),
       ),
     (err: unknown) =>
       list.replaceChildren(errorLine(err instanceof Error ? err.message : String(err))),
+  );
+  send({ type: "undoable" }).then(
+    (items) => renderRecent(recent, items, st.plaudTab && st.applaud?.enabled === true),
+    () => recent.replaceChildren(),
+  );
+}
+
+function renderRecent(
+  target: HTMLElement,
+  items: PlaudWritebackUndoable[],
+  canWrite: boolean,
+): void {
+  if (items.length === 0 || !canWrite) {
+    target.replaceChildren();
+    return;
+  }
+  target.replaceChildren(
+    el(
+      "details",
+      {},
+      el("summary", { text: `Recently sent (${items.length})` }),
+      el(
+        "ul",
+        { className: "recordings" },
+        ...items.map((u) => {
+          const result = el("div", { className: "result" });
+          return el(
+            "li",
+            { className: "recording" },
+            el(
+              "div",
+              { className: "row" },
+              el("span", { text: `${u.title} · ${new Date(u.sentAt).toLocaleString()}` }),
+              renderUndo(result, u.recordingId),
+            ),
+            result,
+          );
+        }),
+      ),
+    ),
   );
 }
 
