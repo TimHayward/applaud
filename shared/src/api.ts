@@ -142,6 +142,8 @@ export interface SpeakerStatusResponse extends SpeakerStatus {
   plaudNames: { name: string; recordings: number }[];
   /** The matching bands in use. */
   thresholds: SpeakerThresholds;
+  /** Settings → Speakers → "Send names to Plaud". */
+  sendToPlaud: boolean;
 }
 
 export interface SpeakerThresholds {

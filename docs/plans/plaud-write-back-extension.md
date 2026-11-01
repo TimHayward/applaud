@@ -2,7 +2,7 @@
 
 |             |                                                                                                                                                                                                                                                          |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**  | Spike complete (GO, Appendix A). Plan drafted (sections 1 to 9); nothing built yet.                                                                                                                                                                      |
+| **Status**  | Spike complete (GO, Appendix A). Phase 1 (Applaud side) built, not yet verified on the Portainer host; Phases 2 to 4 not started. |
 | **Updated** | 2026-11-01                                                                                                                                                                                                                                               |
 | **Owner**   | Tim Hayward                                                                                                                                                                                                                                              |
 | **Context** | Picks up "Write-back to Plaud" from [speaker-identification.md](speaker-identification.md) section 11. Automated server-side write-back was rejected; a browser extension acting in the user's own signed-in Plaud session is the option being explored. |
@@ -175,6 +175,26 @@ The Applaud half ships first and is useful alone: a "Names to send to Plaud" lis
 | **2. Extension, read only** | Package, build, pairing, popup, content script reads Plaud documents, plan endpoint returns the diff. No `PATCH` in the code.                        | On Edge: pairing, dry run for three recordings, diffs correct; works after a Plaud sign-out and sign-in; refuses when Applaud's setting is off.                                   |
 | **3. Writes**               | `PATCH`, results, undo, rate limit, conflict handling. First release limited to one recording per Apply.                                             | On Edge, against test recordings: apply, conflict (edit in Plaud between dry run and apply), partial failure then re-run, undo. Plaud AI uses the names. Applaud's sync confirms. |
 | **4. Batch and release**    | Several recordings per Apply; release zip; README and install guide.                                                                                 | One week of normal use without a manual correction in Plaud.                                                                                                                      |
+
+### 6.1 Phase 1 record
+
+Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
+
+| Item | State |
+| ---- | ----- |
+| Migration 6 (`plaud_writeback`, `plaud_writeback_log`, `plaud_writeback_clients`) | Done |
+| Pending computation, refreshed wherever the `-Applaud` transcript is rebuilt (analysis, label and people changes, transcript resync) | Done, with route tests |
+| Transform (W2 to W5) in `server/src/plaud-writeback/transform.ts` | Done, with unit tests on synthetic documents |
+| Routes, extension-token guard, protocol check, kill switch, pairing and revoking | Done, with route tests |
+| Settings toggle and pairing; recording panel with copy buttons and history; dashboard mark | Done; checked in a browser against a seeded install |
+| Exit check: the panel's list matches what a manual rename in Plaud needs, for three real recordings | **Open**: to run on the Portainer host |
+
+Differences from the plan above:
+
+- **Segments are addressed by `segment_uid` only.** A segment without one, or with a uid Plaud repeats, is never written; it stays as Plaud has it.
+- **A recording is either written whole or not at all at plan time.** Any refusal in any document (a renamed or missing segment, a changed label, an unexpected shape) makes the whole recording `stale` until the next sync, rather than writing the parts that pass.
+- **The summary placeholder is taken from the label** (`Speaker 2`) as well as from the name being replaced, so a re-run after a partial write still fixes the summary (W5).
+- **Undo restores Plaud's previous content but not Applaud's labels.** After an undo the recording shows as having names to send again until the label is changed in Applaud.
 
 ## 7. Testing
 
