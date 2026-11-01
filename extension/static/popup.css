@@ -128,3 +128,23 @@ ul {
   flex-direction: column;
   gap: 4px;
 }
+
+h2 {
+  font-size: 13px;
+  margin: 0 0 4px;
+}
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+.recent {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.recent .recording:first-child {
+  border-top: 0;
+  padding-top: 0;
+}

@@ -301,7 +301,15 @@ function recordingItem(
           text: ` · ${r.pendingSegments} line${r.pendingSegments === 1 ? "" : "s"}${state}`,
         }),
       ),
-      run,
+      el(
+        "div",
+        { className: "actions" },
+        run,
+        // A send that went through can be undone from here until Applaud's sync confirms it.
+        canWrite && (r.state === "sent" || r.state === "partial")
+          ? renderUndo(result, r.recordingId)
+          : null,
+      ),
     ),
     result,
   );
@@ -378,12 +386,12 @@ function renderMain(st: StatusReply): void {
   show(
     header,
     ...facts,
+    recent,
     list,
     el("p", {
       className: "muted small",
       text: "Dry run shows exactly what would change. Nothing is written to Plaud until you choose Send to Plaud, one recording at a time.",
     }),
-    recent,
     check,
     diagnosis,
   );
@@ -405,28 +413,34 @@ function renderMain(st: StatusReply): void {
   );
   send({ type: "undoable" }).then(
     (items) => renderRecent(recent, items, st.plaudTab && st.applaud?.enabled === true),
-    () => recent.replaceChildren(),
+    (err: unknown) =>
+      recent.replaceChildren(errorLine(`Couldn't load recently sent recordings: ${message(err)}`)),
   );
 }
 
+/** Sends that can still be undone, newest first, at the top so they're easy to find. */
 function renderRecent(
   target: HTMLElement,
   items: PlaudWritebackUndoable[],
   canWrite: boolean,
 ): void {
-  if (items.length === 0 || !canWrite) {
+  if (items.length === 0) {
     target.replaceChildren();
     return;
   }
+  const shown = items.slice(0, 10);
   target.replaceChildren(
     el(
-      "details",
-      {},
-      el("summary", { text: `Recently sent (${items.length})` }),
+      "section",
+      { className: "recent" },
+      el("h2", { text: "Recently sent" }),
+      canWrite
+        ? null
+        : el("p", { className: "muted small", text: "Open Plaud in a tab to undo a send." }),
       el(
         "ul",
         { className: "recordings" },
-        ...items.map((u) => {
+        ...shown.map((u) => {
           const result = el("div", { className: "result" });
           return el(
             "li",
@@ -434,13 +448,24 @@ function renderRecent(
             el(
               "div",
               { className: "row" },
-              el("span", { text: `${u.title} · ${new Date(u.sentAt).toLocaleString()}` }),
-              renderUndo(result, u.recordingId),
+              el(
+                "div",
+                {},
+                el("strong", { text: u.title }),
+                el("span", {
+                  className: "muted",
+                  text: ` · ${new Date(u.sentAt).toLocaleString()}`,
+                }),
+              ),
+              canWrite ? renderUndo(result, u.recordingId) : null,
             ),
             result,
           );
         }),
       ),
+      items.length > shown.length
+        ? el("p", { className: "muted small", text: `and ${items.length - shown.length} more` })
+        : null,
     ),
   );
 }

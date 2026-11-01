@@ -291,7 +291,8 @@ interface LogRow {
   undo_of: number | null;
 }
 
-export type ResultsOutcome = { ok: true } | { ok: false; code: number; error: string };
+export type ResultsOutcome =
+  { ok: true; recordingId: string; applied: number } | { ok: false; code: number; error: string };
 
 /**
  * Record what the extension did with a plan (section 3, step 6). Documents
@@ -367,7 +368,7 @@ export function recordResults(
       firstError ?? "not every document was written",
       now,
     );
-  return { ok: true };
+  return { ok: true, recordingId, applied };
 }
 
 /**

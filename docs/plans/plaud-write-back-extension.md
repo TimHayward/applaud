@@ -237,7 +237,12 @@ Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
 | One recording per send; a second send while one runs is refused | Done |
 | The only `PATCH` in the extension is in `plaud.ts` | Enforced by a test |
 | End to end in Chromium against a mock Plaud that enforces `origin_version`: send, undo (all three documents restored byte for byte), partial write then a second send that writes only what was missing | Done |
-| Exit checks on Edge against real Plaud: apply, conflict (edit in Plaud between dry run and send), partial then re-run, undo; Plaud AI uses the names; Applaud's sync confirms | In progress (owner, 2026-11-01): sends on two recordings succeeded, including one with only some speakers confirmed (the unconfirmed `Speaker 1` was left as it was). One recording (the spike recording) shows "stopped part-way"; cause being checked. Undo, conflict, Plaud AI and sync confirmation still to check. |
+| Exit checks on Edge against real Plaud: apply, conflict (edit in Plaud between dry run and send), partial then re-run, undo; Plaud AI uses the names; Applaud's sync confirms | Mostly passed (owner, 2026-11-01): sends succeeded, including a partly confirmed recording (the unconfirmed `Speaker 1` left as it was); Plaud AI and Plaud's own speaker list use the names; undo works; a manual resync confirms. Found: undo was hard to reach after reopening the popup, and only a manual resync confirmed a send (both fixed below). Open: the conflict check, and the cause of "stopped part-way" on the spike recording. |
+
+Fixes after the first real sends:
+
+- **Applaud confirms a send by itself.** Routine polls fetch only transcripts Applaud doesn't have, so a sent recording stayed "sent, awaiting sync" until a manual resync. Applaud now re-reads the recording 20 seconds after any result with an applied write (`server/src/plaud-writeback/confirm.ts`, `poller.confirmRecording`). Unlike a resync from the UI, this keeps a local title and fires no `transcript_ready` webhook.
+- **Undo is easy to reach.** Recordings still awaiting confirmation carry their own Undo button, and **Recently sent** sits at the top of the popup instead of collapsed at the bottom; a failure to load it is shown rather than hidden.
 
 Differences from the plan above:
 

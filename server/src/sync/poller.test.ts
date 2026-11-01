@@ -44,7 +44,7 @@ vi.mock("../webhook/post.js", () => webhookMocks);
 vi.mock("./events.js", () => ({ emit: vi.fn() }));
 
 import { noteFileName, poller, stripSignedLinks, toRecordingMeta } from "./poller.js";
-import { getRecordingById, requestDownload, upsertFromPlaud } from "./state.js";
+import { getRecordingById, requestDownload, setRecordingDisplayName, upsertFromPlaud } from "./state.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 import { POLLER_LIST_PAGE_SIZE, POLLER_RUN_WATCHDOG_MS } from "../constants.js";
 
@@ -238,6 +238,21 @@ describe("poller", () => {
       await poller.resyncRecording(ID);
       expect(writtenFiles()).toContain("outline.json");
       expect(clientMocks.downloadToFile).toHaveBeenCalledTimes(1); // audio not fetched again
+    });
+
+    it("confirms a send to Plaud by re-reading the transcript, keeping the title and the webhook quiet", async () => {
+      loadConfig.mockReturnValue({ ...baseConfig, webhook: { url: "https://hook.example/x", enabled: true, enabledAt: 0 } });
+      await poller.trigger();
+      const fired = webhookMocks.fireWebhookForRecording.mock.calls.length;
+      setRecordingDisplayName(ID, "My own title");
+
+      fsMocks.renameSync.mockClear();
+      await poller.confirmRecording(ID);
+      const row = getRecordingById(ID)!;
+      expect(writtenFiles()).toContain("transcript.json");
+      expect(row.transcriptDownloadedAt).not.toBeNull();
+      expect(row.displayName).toBe("My own title");
+      expect(webhookMocks.fireWebhookForRecording.mock.calls.length).toBe(fired);
     });
 
     it("records an error and retries later when Plaud has no audio link yet", async () => {

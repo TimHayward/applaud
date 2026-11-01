@@ -25,6 +25,7 @@ vi.mock("../logger.js", () => ({
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 import { resetAuthFailures } from "../auth/lan-token.js";
 import { resetPairingForTests } from "../plaud-writeback/clients.js";
+import { setConfirmationForTests } from "../plaud-writeback/confirm.js";
 import { writeApplaudTranscript } from "../speakers/outputs.js";
 import {
   plaudWritebackPairRouter,
@@ -33,6 +34,8 @@ import {
 } from "./plaud-writeback.js";
 
 const LAN = "lan-token-for-tests-0123456789";
+const confirmed: string[] = [];
+setConfirmationForTests((id) => confirmed.push(id));
 
 // Synthetic, shaped like Plaud's documents (plan Appendix A.8).
 const seg = (uid: string, label: string, speaker: string, start: number) => ({
@@ -260,9 +263,12 @@ describe("plaudWritebackRouter", () => {
       outcome: "applied",
       newVersion: 1000 + i,
     }));
+    confirmed.length = 0;
     expect(
       (await call("POST", "/results", { token, body: { planId: plan.planId, results } })).status,
     ).toBe(200);
+    // Applaud re-reads the recording from Plaud to confirm the send (W7).
+    expect(confirmed).toEqual(["f_1"]);
     expect(
       (await call("POST", "/results", { token, body: { planId: plan.planId, results } })).status,
     ).toBe(409);

@@ -29,6 +29,7 @@ import {
   listPending,
   recordResults,
 } from "../plaud-writeback/store.js";
+import { scheduleConfirmation } from "../plaud-writeback/confirm.js";
 import { clientKey, createRateLimiter } from "../security/rate-limit.js";
 import { getRecordingById } from "../sync/state.js";
 
@@ -262,6 +263,8 @@ plaudWritebackRouter.post("/results", extensionOnly, (req, res) => {
     res.status(out.code).json({ error: out.error });
     return;
   }
+  // Something changed in Plaud: re-read it through the official API (W7).
+  if (out.applied > 0) scheduleConfirmation(out.recordingId);
   res.json({ ok: true });
 });
 
