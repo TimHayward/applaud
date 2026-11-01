@@ -2,7 +2,7 @@
 
 |             |                                                                                                                                                                                                                                                          |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**  | Spike complete (GO, Appendix A). Phases 1 and 2 verified by the owner on the Portainer host and in Edge against Plaud. Phase 3 built, not yet verified against Plaud; Phase 4 not started. |
+| **Status**  | Phases 1 to 3 complete and verified by the owner on the Portainer host and in Edge against Plaud (2026-11-01). Phase 4 (batch sends, release) not started. |
 | **Updated** | 2026-11-01                                                                                                                                                                                                                                               |
 | **Owner**   | Tim Hayward                                                                                                                                                                                                                                              |
 | **Context** | Picks up "Write-back to Plaud" from [speaker-identification.md](speaker-identification.md) section 11. Automated server-side write-back was rejected; a browser extension acting in the user's own signed-in Plaud session is the option being explored. |
@@ -237,12 +237,14 @@ Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
 | One recording per send; a second send while one runs is refused | Done |
 | The only `PATCH` in the extension is in `plaud.ts` | Enforced by a test |
 | End to end in Chromium against a mock Plaud that enforces `origin_version`: send, undo (all three documents restored byte for byte), partial write then a second send that writes only what was missing | Done |
-| Exit checks on Edge against real Plaud: apply, conflict (edit in Plaud between dry run and send), partial then re-run, undo; Plaud AI uses the names; Applaud's sync confirms | Mostly passed (owner, 2026-11-01): sends succeeded, including a partly confirmed recording (the unconfirmed `Speaker 1` left as it was); Plaud AI and Plaud's own speaker list use the names; undo works; a manual resync confirms. Found: undo was hard to reach after reopening the popup, and only a manual resync confirmed a send (both fixed below). Open: the conflict check, and the cause of "stopped part-way" on the spike recording. |
+| Exit checks on Edge against real Plaud: apply, conflict (edit in Plaud between dry run and send), partial then re-run, undo; Plaud AI uses the names; Applaud's sync confirms | **Passed** (owner, 2026-11-01). Sends, including a partly confirmed recording (the unconfirmed `Speaker 1` left as it was); Plaud AI and Plaud's own speaker list use the names; undo; the conflict check wrote nothing. Two fixes were needed on the way (below). |
 
 Fixes after the first real sends:
 
 - **Applaud confirms a send by itself.** Routine polls fetch only transcripts Applaud doesn't have, so a sent recording stayed "sent, awaiting sync" until a manual resync. Applaud now re-reads the recording 20 seconds after any result with an applied write (`server/src/plaud-writeback/confirm.ts`, `poller.confirmRecording`). Unlike a resync from the UI, this keeps a local title and fires no `transcript_ready` webhook.
 - **Undo is easy to reach.** Recordings still awaiting confirmation carry their own Undo button, and **Recently sent** sits at the top of the popup instead of collapsed at the bottom; a failure to load it is shown rather than hidden.
+
+**Observed: the summary can be refused after the transcripts are written.** On one recording (the spike recording) Plaud accepted the transcript and polished transcript, then refused the summary with `version conflict, re-fetch and retry`. Its version was checked just before the first write, so it moved while the transcripts were being written. The likeliest cause is Plaud itself updating the summary when a transcript changes (the web app sends all three writes at once, so it would not meet this). Not confirmed. It is handled as designed: nothing was overwritten, the recording shows as stopped part-way, and sending again writes the summary from a fresh read. If it recurs often, Phase 4 can re-read and retry the summary once within the same send.
 
 Differences from the plan above:
 
