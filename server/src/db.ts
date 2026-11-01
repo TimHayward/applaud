@@ -77,6 +77,7 @@ const MIGRATIONS: Migration[] = [
     up: (d) => addColumn(d, "recordings", "download_requested_at", "INTEGER"),
   },
   { version: 5, name: "speaker identification", up: migrateSpeakers },
+  { version: 6, name: "sending speaker names to Plaud", up: migratePlaudWriteback },
 ];
 
 /** Schema version this build writes. */
@@ -135,6 +136,60 @@ function migrateRelativePaths(d: Database.Database): void {
   for (const col of ["audio_path", "transcript_path", "summary_path", "metadata_path"]) {
     d.exec(`ALTER TABLE recordings DROP COLUMN ${col}`);
   }
+}
+
+/**
+ * v6: sending confirmed speaker names to Plaud through a browser extension
+ * (docs/plans/plaud-write-back-extension.md, section 4).
+ */
+function migratePlaudWriteback(d: Database.Database): void {
+  d.exec(`
+    -- One row per recording with confirmed names: how many segments Plaud
+    -- still names differently, and how the last write-back went.
+    CREATE TABLE plaud_writeback (
+      recording_id TEXT PRIMARY KEY,
+      pending_segments INTEGER NOT NULL,
+      changes TEXT NOT NULL,
+      last_result TEXT,
+      last_attempt_at INTEGER,
+      last_error TEXT,
+      updated_at INTEGER NOT NULL
+    );
+
+    -- Every document planned or written, with the content before and after:
+    -- the undo log (W11). Pruned after 30 days.
+    CREATE TABLE plaud_writeback_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id TEXT NOT NULL,
+      recording_id TEXT NOT NULL,
+      client_id INTEGER,
+      kind TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      content_id TEXT NOT NULL,
+      origin_version INTEGER NOT NULL,
+      previous_content TEXT NOT NULL,
+      new_content TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      new_version INTEGER,
+      error TEXT,
+      undo_of INTEGER REFERENCES plaud_writeback_log(id) ON DELETE SET NULL,
+      undone_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX idx_plaud_writeback_log_plan ON plaud_writeback_log(plan_id);
+    CREATE INDEX idx_plaud_writeback_log_recording ON plaud_writeback_log(recording_id, created_at);
+
+    -- Paired browser extensions (W10). Only a hash of each token is kept.
+    CREATE TABLE plaud_writeback_clients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER,
+      revoked_at INTEGER
+    );
+  `);
 }
 
 /**

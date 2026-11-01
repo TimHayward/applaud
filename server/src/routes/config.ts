@@ -89,6 +89,8 @@ const PatchSchema = z.object({
       autoMargin: z.number().min(0).max(1).optional(),
       minSpeechSec: z.number().int().min(5).max(300).optional(),
       suggestThreshold: z.number().min(0).max(1).optional(),
+      /** Let a paired browser extension send confirmed names to Plaud. */
+      sendToPlaud: z.boolean().optional(),
     })
     .optional(),
 });
@@ -151,6 +153,7 @@ configRouter.post("/", (req, res) => {
             ...prevSpeakers,
             ...(speakersPatch.enabled !== undefined ? { enabled: speakersPatch.enabled } : {}),
             ...(speakersPatch.ownerName !== undefined ? { ownerName: speakersPatch.ownerName || null } : {}),
+            ...(speakersPatch.sendToPlaud !== undefined ? { sendToPlaud: speakersPatch.sendToPlaud } : {}),
             ...thresholds,
           },
         }

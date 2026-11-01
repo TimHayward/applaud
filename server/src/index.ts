@@ -15,6 +15,11 @@ import { syncRouter } from "./routes/sync.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { mediaRouter } from "./routes/media.js";
 import { speakersRouter } from "./routes/speakers.js";
+import {
+  PLAUD_WRITEBACK_BODY_LIMIT,
+  plaudWritebackPairRouter,
+  plaudWritebackRouter,
+} from "./routes/plaud-writeback.js";
 import { poller } from "./sync/poller.js";
 import { speakers } from "./speakers/service.js";
 import { requireLanToken, requireLanTokenMedia } from "./auth/lan-token.js";
@@ -192,7 +197,13 @@ async function main(): Promise<void> {
   // install (a rebound page is same-origin, so CORS/CSRF checks don't apply).
   app.use(requireAllowedHost);
 
-  app.use(express.json({ limit: "1mb" }));
+  // Plaud's documents for a long recording are larger than any other body,
+  // so the write-back routes alone get a higher limit.
+  const jsonBody = express.json({ limit: "1mb" });
+  const writebackJsonBody = express.json({ limit: PLAUD_WRITEBACK_BODY_LIMIT });
+  app.use((req, res, next) =>
+    (req.path.startsWith("/api/plaud-writeback/") ? writebackJsonBody : jsonBody)(req, res, next),
+  );
 
   // Unauthenticated liveness probe (e.g. the Docker HEALTHCHECK) — must stay
   // reachable even when a lanToken is configured, and discloses nothing.
@@ -221,6 +232,11 @@ async function main(): Promise<void> {
   app.get(OAUTH_CALLBACK_PATH, (req, res) => {
     void oauthCallbackHandler(req, res);
   });
+
+  // Sending names to Plaud: a paired browser extension authenticates with its
+  // own token, the web UI with the LAN token (see routes/plaud-writeback.ts).
+  app.use("/api/plaud-writeback", plaudWritebackPairRouter);
+  app.use("/api/plaud-writeback", plaudWritebackRouter);
 
   app.use("/api", requireLanToken);
   app.use("/media", requireLanTokenMedia);

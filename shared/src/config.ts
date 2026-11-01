@@ -32,6 +32,12 @@ export interface SpeakerConfig {
   suggestThreshold: number;
   /** Model the voiceprint library was built with. Set by the server. */
   activeModelId: string | null;
+  /**
+   * Let a paired browser extension send confirmed names to Plaud
+   * (docs/plans/plaud-write-back-extension.md). Off by default; turning it
+   * off refuses every write at once (W12).
+   */
+  sendToPlaud: boolean;
 }
 
 export const DEFAULT_SPEAKER_CONFIG: SpeakerConfig = {
@@ -42,6 +48,7 @@ export const DEFAULT_SPEAKER_CONFIG: SpeakerConfig = {
   minSpeechSec: 20,
   suggestThreshold: 0.55,
   activeModelId: null,
+  sendToPlaud: false,
 };
 
 export interface AppConfig {
