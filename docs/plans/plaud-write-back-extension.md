@@ -1,10 +1,10 @@
-# Plaud write-back extension: principles
+# Plaud write-back extension
 
-|             |                                                                                                                                       |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**  | Principles agreed for planning. No design yet: a feasibility spike (P1) comes first.                                                   |
-| **Updated** | 2026-11-01                                                                                                                            |
-| **Owner**   | Tim Hayward                                                                                                                           |
+|             |                                                                                                                                                                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**  | Spike complete (GO, Appendix A). Plan drafted (sections 1 to 9); nothing built yet.                                                                                                                                                                      |
+| **Updated** | 2026-11-01                                                                                                                                                                                                                                               |
+| **Owner**   | Tim Hayward                                                                                                                                                                                                                                              |
 | **Context** | Picks up "Write-back to Plaud" from [speaker-identification.md](speaker-identification.md) section 11. Automated server-side write-back was rejected; a browser extension acting in the user's own signed-in Plaud session is the option being explored. |
 
 ## Why
@@ -15,18 +15,18 @@ The goal is less overhead, not more. Every principle below is tested against tha
 
 ## Inputs
 
-| Category   | Item                                                                                                     |
-| ---------- | -------------------------------------------------------------------------------------------------------- |
-| Known      | Names must be in Plaud for use with Plaud AI.                                                            |
-| Known      | Chromium browsers first; development and testing on Microsoft Edge.                                      |
-| Known      | Single user initially; the code is open source and will be usable by other Applaud users.                |
-| Known      | A feasibility spike comes before any architecture is fixed.                                              |
+| Category   | Item                                                                                                                                         |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Known      | Names must be in Plaud for use with Plaud AI.                                                                                                |
+| Known      | Chromium browsers first; development and testing on Microsoft Edge.                                                                          |
+| Known      | Single user initially; the code is open source and will be usable by other Applaud users.                                                    |
+| Known      | A feasibility spike comes before any architecture is fixed.                                                                                  |
 | Evidenced  | Applaud already protects `/api` and `/media` with a LAN token and a host check (`server/src/index.ts`, `server/src/security/host-check.ts`). |
-| Evidenced  | The workspace has `shared`, `server` and `web` packages (`pnpm-workspace.yaml`).                         |
-| Assumption | Volume is a handful of recordings a week, so one confirmation per batch is acceptable but per-recording navigation is not. |
-| Unknown    | Whether Plaud's web app exposes a rename request the extension can call, and in what form.              |
-| Unknown    | Whether a speaker rename in Plaud changes what Plaud AI sees for that recording.                         |
-| Unknown    | Whether Plaud's terms permit this kind of tool.                                                          |
+| Evidenced  | The workspace has `shared`, `server` and `web` packages (`pnpm-workspace.yaml`).                                                             |
+| Assumption | Volume is a handful of recordings a week, so one confirmation per batch is acceptable but per-recording navigation is not.                   |
+| Unknown    | Whether Plaud's web app exposes a rename request the extension can call, and in what form.                                                   |
+| Unknown    | Whether a speaker rename in Plaud changes what Plaud AI sees for that recording.                                                             |
+| Unknown    | Whether Plaud's terms permit this kind of tool.                                                                                              |
 
 ## Principles
 
@@ -46,8 +46,8 @@ A time-boxed spike answers, with evidence recorded in this document:
 
 Applaud stays the single source of truth for who each speaker is, which names are confirmed and what is pending. The extension holds no matching, naming or conflict logic. It fetches a list of pending renames, applies them, and reports each outcome back.
 
-*Why:* logic in one place, covered by the existing server tests, and no extension release when a rule changes.
-*Trade-off:* the extension works only while Applaud is reachable. That is accepted.
+_Why:_ logic in one place, covered by the existing server tests, and no extension release when a rule changes.
+_Trade-off:_ the extension works only while Applaud is reachable. That is accepted.
 
 ### P3. Optional, separable and useful without the extension
 
@@ -100,18 +100,109 @@ Carried over from the deferred write-back design:
 
 ## Traceability
 
-| Requirement                         | Principles      |
-| ----------------------------------- | --------------- |
-| Names reach Plaud AI                | P1 (4)          |
-| Reduce overhead                     | P2, P3, P4      |
-| Do not damage Plaud data            | P5, P6          |
-| Protect the Plaud account and Applaud | P4, P7, P9    |
-| Same repo, companion to Applaud     | P8              |
-| Open source for other users         | P8, P9          |
+| Requirement                           | Principles |
+| ------------------------------------- | ---------- |
+| Names reach Plaud AI                  | P1 (4)     |
+| Reduce overhead                       | P2, P3, P4 |
+| Do not damage Plaud data              | P5, P6     |
+| Protect the Plaud account and Applaud | P4, P7, P9 |
+| Same repo, companion to Applaud       | P8         |
+| Open source for other users           | P8, P9     |
 
-## Next step
+## 1. Plan summary
 
-Run the spike in P1 and record the results here. Plan the extension only if the spike passes.
+Applaud works out which speaker names Plaud is missing and builds the exact documents to write. A Manifest V3 extension for Chromium browsers carries them out from inside the Plaud web app, using the user's own session, after a dry run the user approves. Plaud's server refuses any write whose document changed since it was read, and Applaud keeps the previous versions so a write-back can be undone.
+
+The Applaud half ships first and is useful alone: a "Names to send to Plaud" list the user can work through by hand (P3).
+
+## 2. Decisions
+
+| #   | Decision                                                                                                                                                                                                                                                                                                     | Basis                                                                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| W1  | **Applaud builds the new documents.** The extension reads the current transcript, polished transcript and summary from Plaud, sends them to Applaud, and gets back the documents to write with a human-readable diff. The extension holds no naming logic.                                                   | P2. Logic tested once, in the server suite; no extension release when a rule changes.                                     |
+| W2  | **Names written per segment, from Applaud's named transcript** (`buildApplaudTranscript`), keyed by `segment_uid`, so per-segment corrections reach Plaud too. The polished transcript shares the `segment_uid`s (Evidenced, A.9) and gets the same names.                                                   | Evidenced: segment uids identical across the two transcripts in the capture.                                              |
+| W3  | **Only confirmed names are sent**: confirmed labels, segment overrides and the Plaud owner. Automatic matches are not sent until confirmed in Applaud. Unknown, suggested and ignored labels leave Plaud's value untouched.                                                                                  | Speaker plan D6: guesses never leave Applaud. One confirmation per recording in Applaud is the accepted cost.             |
+| W4  | **Summary: whole-word replacement of a Plaud label** (`Speaker 2`, not `Speaker 20`) and only when every segment of that label has the same confirmed name. A label split across people by overrides is left as it is in the summary. Pronouns are not touched. Outline and other note tabs are not written. | Mirrors the web app (A.8), made safer.                                                                                    |
+| W5  | **Order and partial failure: roll forward, never roll back automatically.** Writes go transcript, polished transcript, summary, as the web app does. If one fails the batch stops; the next run reads Plaud afresh, finds the documents already written produce no change, and completes the rest.           | Idempotent by construction (W1 recomputes from a fresh read); an automatic rollback is a second write that can also fail. |
+| W6  | **`origin_version` is the precondition guard.** A conflict (`status` `-1800313`) skips the recording and reports it; no automatic retry. Success is `status: 0` in the body, never HTTP 200 alone.                                                                                                           | Evidenced, A.10.                                                                                                          |
+| W7  | **Applaud's sync is the independent check.** A recording is "in Plaud" only when Applaud's next sync, through the official API, shows the names. Until then it is "sent, awaiting sync".                                                                                                                     | Verifies the write through a second channel.                                                                              |
+| W8  | **Plaud calls run in a content script on `web.plaud.ai`; Applaud calls run in the service worker.** The content script reads the session token from `pld_tokenstr` when it needs it, never stores it and never passes it to the service worker or Applaud.                                                   | P7. CORS on Plaud's API admits only `web.plaud.ai` (A.8).                                                                 |
+| W9  | **Applaud is reached with an optional host permission** granted at pairing for the user's own Applaud address, so no CORS change is needed in Applaud.                                                                                                                                                       | P7. Chromium exempts extension service-worker requests from CORS when the extension holds the host permission.            |
+| W10 | **A separate extension token**, issued in Applaud Settings by a one-time pairing code, stored hashed, revocable, and accepted only on `/api/plaud-writeback/*`.                                                                                                                                              | P7. The LAN token stays with the web UI.                                                                                  |
+| W11 | **Undo log in Applaud**: for each write, the previous content, its version and the new version, kept for 30 days. Undo is a write like any other: it goes through the extension and is refused if Plaud's document has changed since.                                                                        | P5.                                                                                                                       |
+| W12 | **Off by default, kill switch in Applaud.** Settings → Speakers → "Send names to Plaud" (off). Turning it off makes the plan endpoint refuse at once, whatever the extension's state.                                                                                                                        | P5, P6.                                                                                                                   |
+| W13 | **Protocol version** in every extension request. Applaud refuses a mismatch with a message naming the release to install.                                                                                                                                                                                    | P6.                                                                                                                       |
+
+## 3. Data flow
+
+1. Applaud marks a recording **pending** when its confirmed names (W3) differ from the `speaker` values in its latest synced `transcript.json`.
+2. The user opens Plaud in Edge and clicks the extension. The popup lists pending recordings from `GET /api/plaud-writeback/pending`.
+3. **Dry run.** For each recording, the content script calls `GET /file-app/v4/files/detail/<id>`, takes the `TRANSCRIPT`, `POLISHED_TRANSCRIPT` and `SUMMARY` objects (id, content id, version, signed URL), and downloads each document. The service worker sends them to `POST /api/plaud-writeback/plan`, which returns the new documents, their versions, and a diff ("Speaker 2 → Mollie Sutton, 79 segments; summary: 14 replacements").
+4. The popup shows the diff. The user clicks **Apply** (once per batch).
+5. **Write.** The content script sends each changed document with `PATCH /file-app/v4/files/update/content/<id>` and its `origin_version`, one recording at a time, with a pause between requests.
+6. **Report.** Each outcome (applied with new version, conflict, error, skipped) goes to `POST /api/plaud-writeback/results`, which records it and the undo entry.
+7. Applaud's next sync confirms (W7) and clears the pending mark.
+
+## 4. Applaud changes
+
+| Area      | Change                                                                                                                                                                                                                                          |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database  | Migration 6: `plaud_writeback` (one row per recording: state, last attempt, last error) and `plaud_writeback_log` (per document: kind, content id, previous content, previous and new version, outcome, created, undone). Pruned after 30 days. |
+| Pending   | Computed after each sync and after each label change, from `buildApplaudTranscript` and the synced transcript.                                                                                                                                  |
+| Transform | `server/src/plaud-writeback/transform.ts`: pure functions for W2 and W4, with fixtures built from synthetic documents shaped like the capture (never real transcripts).                                                                         |
+| Routes    | `/api/plaud-writeback/pending`, `/plan`, `/results`, `/undo/:recordingId` (returns the documents to restore), `/status` (enabled, protocol version). Extension-token guard only.                                                                |
+| Pairing   | Settings → Speakers → Browser extension: generate a pairing code (10 minutes, single use), list paired extensions, revoke.                                                                                                                      |
+| UI        | Dashboard mark "Names to send to Plaud"; on the recording page, a panel listing exactly what would change, with copy buttons for manual entry (P3), the write-back history and Undo.                                                            |
+| Docs      | `docs/api.md`, README section with the unofficial-use statement, `docs/portainer.md` note that nothing changes for the container.                                                                                                               |
+
+## 5. Extension
+
+| Item           | Choice                                                                                                                                                                                                                                                                                                            |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Location       | `extension/` workspace package; types from `@applaud/shared`.                                                                                                                                                                                                                                                     |
+| Build          | Vite in library mode, one bundle each for service worker, content script and popup. Output `extension/dist`, zipped into the GitHub release.                                                                                                                                                                      |
+| Manifest       | MV3. `permissions`: `storage`. `host_permissions`: `https://web.plaud.ai/*`. `optional_host_permissions`: `http://*/*`, `https://*/*`, requested for the single Applaud origin at pairing. Content script on `https://web.plaud.ai/*` only. A fixed `key` so the extension id is stable across unpacked installs. |
+| Plaud API host | Taken from the web app at run time, not hard-coded: the capture used `api-euc1`, and other regions use other hosts. How the page exposes it is open question Q1.                                                                                                                                                  |
+| Storage        | Applaud address and extension token in `chrome.storage.local`. Nothing from Plaud is stored.                                                                                                                                                                                                                      |
+| Popup          | Paired state, pending count, dry-run diff, Apply, per-recording results, link to the recording in Applaud.                                                                                                                                                                                                        |
+| Browsers       | Edge is the reference. Standard Chromium APIs only, so Chrome and Brave should work unchanged; not tested until a user asks.                                                                                                                                                                                      |
+
+## 6. Phases
+
+| Phase                       | Scope                                                                                                                                                | Exit check                                                                                                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. Applaud side**         | Migration, pending computation, transform, routes behind the setting (off), pairing, "Names to send to Plaud" panel with copy buttons. No extension. | Unit and route tests; the panel's list matches what a manual rename in Plaud needs for three real recordings; release as a minor version.                                         |
+| **2. Extension, read only** | Package, build, pairing, popup, content script reads Plaud documents, plan endpoint returns the diff. No `PATCH` in the code.                        | On Edge: pairing, dry run for three recordings, diffs correct; works after a Plaud sign-out and sign-in; refuses when Applaud's setting is off.                                   |
+| **3. Writes**               | `PATCH`, results, undo, rate limit, conflict handling. First release limited to one recording per Apply.                                             | On Edge, against test recordings: apply, conflict (edit in Plaud between dry run and apply), partial failure then re-run, undo. Plaud AI uses the names. Applaud's sync confirms. |
+| **4. Batch and release**    | Several recordings per Apply; release zip; README and install guide.                                                                                 | One week of normal use without a manual correction in Plaud.                                                                                                                      |
+
+## 7. Testing
+
+- **Server:** Vitest for the transform (labels, overrides, owner, split labels, `Speaker 2` against `Speaker 20`, missing polished transcript or summary), pending computation, routes, token guard, kill switch and protocol check.
+- **Extension:** Vitest with mocked `fetch` and `chrome.*` for the content script's read and write sequence, including the conflict and `status` handling.
+- **Contract fixtures:** synthetic documents and responses with the captured shapes, so a change in Plaud's format fails a test rather than a write.
+- **Manual:** a checklist per phase on Edge (section 6), run against recordings chosen for the purpose.
+
+## 8. Risks
+
+| Risk                                                     | Likelihood    | Impact | Mitigation                                                                                                              |
+| -------------------------------------------------------- | ------------- | ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Plaud changes the web API or content format              | Medium        | Medium | Shape checks before every write (P6), contract fixtures, protocol version, kill switch; Phase 1 still works by hand.    |
+| Plaud blocks or objects to the extension                 | Low to medium | Medium | Low request volume, user-initiated only (P4); no store listing at first (P9); the manual list remains.                  |
+| Partial write leaves Plaud inconsistent                  | Low           | Low    | W5: the next run completes it; the panel shows the state.                                                               |
+| Wrong name sent                                          | Low           | Medium | Confirmed names only (W3), dry run, undo (W11).                                                                         |
+| Plaud session token exposed                              | Low           | High   | Read only in the content script, never stored or sent to Applaud (W8).                                                  |
+| Summary wording reads oddly after replacement (pronouns) | Medium        | Low    | Accepted; Plaud does the same. Regenerating the summary in Plaud remains the user's choice.                             |
+| Extension token leaked                                   | Low           | Medium | Scoped to write-back routes (W10), hashed, revocable; it cannot read audio or transcripts beyond what write-back needs. |
+
+## 9. Open questions
+
+| #   | Question                                                                                                                                | Resolve in                                                              |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Q1  | Where the web app keeps the regional API host, and the minimum set of headers a write needs (`x-scope-id`, `x-device-id`, `edit-from`). | Phase 2, by reading from the page and trying a read with fewer headers. |
+| Q2  | Whether a content-script fetch of the signed content URLs is accepted by the storage host's CORS policy, as the page's own fetch is.    | Phase 2.                                                                |
+| Q3  | Recordings with no polished transcript, no summary, or more than one summary (`relation_content_ids`).                                  | Phase 1 tests with synthetic cases; Phase 2 against real recordings.    |
+| Q4  | Whether Plaud's "recently used names" list should be updated too. Not needed for Plaud AI; left alone unless it proves useful.          | After Phase 3.                                                          |
 
 ## Appendix A. Spike capture checklist
 
@@ -141,7 +232,7 @@ For the request that performed the rename (usually `POST`, `PUT` or `PATCH`), an
 
 - [ ] Method, full URL and host (note whether the API host differs from the web app's host, or is regional).
 - [ ] Status code.
-- [ ] **Authentication:** header *names* only (for example `Authorization`, `x-…-token`, `x-device-id`, an app version). Is it a bearer token, a cookie, or both? In **Application** → Local storage / Cookies, note the *key name* the token lives under, not its value.
+- [ ] **Authentication:** header _names_ only (for example `Authorization`, `x-…-token`, `x-device-id`, an app version). Is it a bearer token, a cookie, or both? In **Application** → Local storage / Cookies, note the _key name_ the token lives under, not its value.
 - [ ] **Anti-bot or anti-forgery:** any CAPTCHA, Turnstile, signature, nonce or timestamp-hash header, or a request fetching one first. This is the main stop risk.
 - [ ] **Body:** how the speaker is addressed (`original_speaker`, display name, segment ids, a speaker id). Does the body carry only the change, or the **whole transcript**? A whole-transcript write is a serious risk and must be written down.
 - [ ] **Response body:** its shape, and whether it returns the updated speaker or transcript.
@@ -176,23 +267,23 @@ This shows whether a scripted request is accepted at all. It runs in the page, s
 
 First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker renamed from `Speaker 2` to a real name on a 25-minute recording with 230 segments. Evidence is a sanitised HAR held outside the repo.
 
-| Item                                                          | Result |
-| ------------------------------------------------------------- | ------ |
-| Rename request: method, host, path                            | **No rename endpoint.** The web app rewrites the content client-side and sends three `PATCH https://api-euc1.plaud.ai/file-app/v4/files/update/content/<file_id>` requests, one each for the transcript, the polished transcript and the summary. Host is regional (`api-euc1`). |
-| Request body                                                  | `{ object_id, content_id, content, origin_version }`, plus `relation_content_ids` on the summary. `content` is the **whole document** as a string: the full segment array (about 55 KB) for each transcript, and the full markdown for the summary. |
-| What changed                                                  | Transcripts: only `speaker` on the 79 segments whose `speaker` was `Speaker 2`; nothing else differs. Summary: a plain text replacement of `Speaker 2` with the name (14 occurrences); pronouns left as they were. Outline and other tabs not written. |
-| Concurrency                                                   | Each write sends `origin_version` (a millisecond version of the content being replaced); the response returns a new `version_ms`. **Plaud enforces it**: a write with a stale `origin_version` is refused with HTTP 200 and `{"status":-1800313,"msg":"version conflict, re-fetch and retry"}` (test A.10). Failures are reported in the body's `status`, not the HTTP status. |
-| Authentication mechanism (names only)                         | Bearer `authorization` header (named in the CORS preflight; stripped from the sanitised HAR). The web app keeps it in `localStorage` under `pld_tokenstr`, value prefixed `bearer `. No cookies are sent. A malformed token gives HTTP 401 `unauthorized`. Other headers: `app-language`, `app-platform`, `edit-from`, `traceparent`, `x-device-id`, `x-request-id`, `x-scope-id`, `x-scope-type`, `x-timezone-iana`. CORS allows only `https://web.plaud.ai`, with credentials. |
-| Anti-bot or anti-forgery measures                             | None seen: no signature, nonce, CAPTCHA or challenge request. `x-request-id` is a random UUID. |
-| Speaker addressed by                                          | Not addressed at all by the server: the client edits `speaker` values in the documents. |
-| UI scope options offered                                      | To be recorded. |
-| `original_speaker` unchanged after rename                     | **Yes**, in the PATCH bodies and in Applaud's next sync: `transcript.json` and `transcript_polished.json` both show `original_speaker` `Speaker 2` with the new `speaker`, and `summary.md` carries the name. Applaud's key (D8) maps directly. |
-| How Plaud AI reads transcripts                                | Ask Plaud's retriever returns transcript chunks formatted `[start-end] [Speaker name]` followed by the text (`contextos-dproxy/v4/context/resource`). Whether those chunks are rebuilt after a rename is the open question below. |
-| Plaud AI uses the new name: new chat (and delay)              | Not separately tested; the existing-chat result makes a failure unlikely. |
-| Plaud AI uses the new name: existing chat (and delay)         | **Yes.** Before the rename it answered with `Speaker 2`; within minutes afterwards, the same question in the same chat answered with the name (and inferred a pronoun). |
-| Replay from page console accepted                             | Passed. A replay from the page console with the token from `pld_tokenstr` is accepted; with a stale `origin_version` it is refused (A.10). |
-| Terms of service position                                     | Pending. |
-| **Decision:** continue to extension-context test, or stop     | **Continue.** The P1 stop criterion (Plaud AI ignores the name) is not met. A.10 passed. Remaining before planning: the terms of service. |
+| Item                                                      | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rename request: method, host, path                        | **No rename endpoint.** The web app rewrites the content client-side and sends three `PATCH https://api-euc1.plaud.ai/file-app/v4/files/update/content/<file_id>` requests, one each for the transcript, the polished transcript and the summary. Host is regional (`api-euc1`).                                                                                                                                                                                                 |
+| Request body                                              | `{ object_id, content_id, content, origin_version }`, plus `relation_content_ids` on the summary. `content` is the **whole document** as a string: the full segment array (about 55 KB) for each transcript, and the full markdown for the summary.                                                                                                                                                                                                                              |
+| What changed                                              | Transcripts: only `speaker` on the 79 segments whose `speaker` was `Speaker 2`; nothing else differs. Summary: a plain text replacement of `Speaker 2` with the name (14 occurrences); pronouns left as they were. Outline and other tabs not written.                                                                                                                                                                                                                           |
+| Concurrency                                               | Each write sends `origin_version` (a millisecond version of the content being replaced); the response returns a new `version_ms`. **Plaud enforces it**: a write with a stale `origin_version` is refused with HTTP 200 and `{"status":-1800313,"msg":"version conflict, re-fetch and retry"}` (test A.10). Failures are reported in the body's `status`, not the HTTP status.                                                                                                   |
+| Authentication mechanism (names only)                     | Bearer `authorization` header (named in the CORS preflight; stripped from the sanitised HAR). The web app keeps it in `localStorage` under `pld_tokenstr`, value prefixed `bearer `. No cookies are sent. A malformed token gives HTTP 401 `unauthorized`. Other headers: `app-language`, `app-platform`, `edit-from`, `traceparent`, `x-device-id`, `x-request-id`, `x-scope-id`, `x-scope-type`, `x-timezone-iana`. CORS allows only `https://web.plaud.ai`, with credentials. |
+| Anti-bot or anti-forgery measures                         | None seen: no signature, nonce, CAPTCHA or challenge request. `x-request-id` is a random UUID.                                                                                                                                                                                                                                                                                                                                                                                   |
+| Speaker addressed by                                      | Not addressed at all by the server: the client edits `speaker` values in the documents.                                                                                                                                                                                                                                                                                                                                                                                          |
+| UI scope options offered                                  | To be recorded.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `original_speaker` unchanged after rename                 | **Yes**, in the PATCH bodies and in Applaud's next sync: `transcript.json` and `transcript_polished.json` both show `original_speaker` `Speaker 2` with the new `speaker`, and `summary.md` carries the name. Applaud's key (D8) maps directly.                                                                                                                                                                                                                                  |
+| How Plaud AI reads transcripts                            | Ask Plaud's retriever returns transcript chunks formatted `[start-end] [Speaker name]` followed by the text (`contextos-dproxy/v4/context/resource`). Whether those chunks are rebuilt after a rename is the open question below.                                                                                                                                                                                                                                                |
+| Plaud AI uses the new name: new chat (and delay)          | Not separately tested; the existing-chat result makes a failure unlikely.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Plaud AI uses the new name: existing chat (and delay)     | **Yes.** Before the rename it answered with `Speaker 2`; within minutes afterwards, the same question in the same chat answered with the name (and inferred a pronoun).                                                                                                                                                                                                                                                                                                          |
+| Replay from page console accepted                         | Passed. A replay from the page console with the token from `pld_tokenstr` is accepted; with a stale `origin_version` it is refused (A.10).                                                                                                                                                                                                                                                                                                                                       |
+| Terms of service position                                 | Checked by the owner on 2026-11-01: no reference to automated access or to using the interface other than as provided.                                                                                                                                                                                                                                                                                                                                                           |
+| **Decision:** continue to extension-context test, or stop | **Continue.** The P1 stop criterion (Plaud AI ignores the name) is not met. A.10 passed; terms checked. Spike closed.                                                                                                                                                                                                                                                                                                                                                            |
 
 ### A.9 Consequences for the design (provisional)
 
@@ -208,7 +299,7 @@ First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker
 Settles whether `origin_version` can serve as the precondition guard (P5). It sends content identical to what Plaud already holds, so it cannot change the recording whatever the outcome.
 
 1. Open the recording in the Plaud tab, with DevTools open on the Console.
-2. From the earlier capture, take the **transcript** PATCH (the first of the three) as copied fetch. Its body carries the `origin_version` from *before* the rename, which is now stale. The `content` already contains the name, so it matches Plaud's current transcript.
+2. From the earlier capture, take the **transcript** PATCH (the first of the three) as copied fetch. Its body carries the `origin_version` from _before_ the rename, which is now stale. The `content` already contains the name, so it matches Plaud's current transcript.
 3. Run it in the Console and record the HTTP status and the response JSON (`status`, any message).
 4. **Refused** (non-zero `status` or an HTTP error mentioning a version or conflict): Plaud enforces it, and it becomes the P5 guard.
    **Accepted:** Plaud does not enforce it. The extension must do its own fresh read and comparison immediately before each write, and the race window, though small, cannot be closed.
