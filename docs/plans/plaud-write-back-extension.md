@@ -206,7 +206,7 @@ First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker
 
 Settles whether `origin_version` can serve as the precondition guard (P5). It sends content identical to what Plaud already holds, so it cannot change the recording whatever the outcome.
 
-1. In the Plaud tab, open the recording and capture a fresh rename-free baseline: DevTools → Network, then reload the page.
+1. Open the recording in the Plaud tab, with DevTools open on the Console.
 2. From the earlier capture, take the **transcript** PATCH (the first of the three) as copied fetch. Its body carries the `origin_version` from *before* the rename, which is now stale. The `content` already contains the name, so it matches Plaud's current transcript.
 3. Run it in the Console and record the HTTP status and the response JSON (`status`, any message).
 4. **Refused** (non-zero `status` or an HTTP error mentioning a version or conflict): Plaud enforces it, and it becomes the P5 guard.
