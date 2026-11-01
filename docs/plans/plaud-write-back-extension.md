@@ -174,17 +174,30 @@ This shows whether a scripted request is accepted at all. It runs in the page, s
 
 ### A.8 Results
 
+First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker renamed from `Speaker 2` to a real name on a 25-minute recording with 230 segments. Evidence is a sanitised HAR held outside the repo.
+
 | Item                                                          | Result |
 | ------------------------------------------------------------- | ------ |
-| Rename request: method, host, path                            |        |
-| Authentication mechanism (names only)                         |        |
-| Anti-bot or anti-forgery measures                             |        |
-| Speaker addressed by                                          |        |
-| Body carries only the change, or the whole transcript         |        |
-| UI scope options offered                                      |        |
-| `original_speaker` unchanged after rename                     |        |
-| Plaud AI uses the new name: new chat (and delay)              |        |
-| Plaud AI uses the new name: existing chat (and delay)         |        |
-| Replay from page console accepted                             |        |
-| Terms of service position                                     |        |
-| **Decision:** continue to extension-context test, or stop     |        |
+| Rename request: method, host, path                            | **No rename endpoint.** The web app rewrites the content client-side and sends three `PATCH https://api-euc1.plaud.ai/file-app/v4/files/update/content/<file_id>` requests, one each for the transcript, the polished transcript and the summary. Host is regional (`api-euc1`). |
+| Request body                                                  | `{ object_id, content_id, content, origin_version }`, plus `relation_content_ids` on the summary. `content` is the **whole document** as a string: the full segment array (about 55 KB) for each transcript, and the full markdown for the summary. |
+| What changed                                                  | Transcripts: only `speaker` on the 79 segments whose `speaker` was `Speaker 2`; nothing else differs. Summary: a plain text replacement of `Speaker 2` with the name (14 occurrences); pronouns left as they were. Outline and other tabs not written. |
+| Concurrency                                                   | Each write sends `origin_version` (a millisecond version of the content being replaced); the response returns a new `version_ms`. Whether Plaud **rejects** a stale `origin_version` is not yet known. |
+| Authentication mechanism (names only)                         | Bearer `authorization` header (named in the CORS preflight; stripped from the sanitised HAR). No cookies are sent. Other headers: `app-language`, `app-platform`, `edit-from`, `traceparent`, `x-device-id`, `x-request-id`, `x-scope-id`, `x-scope-type`, `x-timezone-iana`. CORS allows only `https://web.plaud.ai`, with credentials. |
+| Anti-bot or anti-forgery measures                             | None seen: no signature, nonce, CAPTCHA or challenge request. `x-request-id` is a random UUID. |
+| Speaker addressed by                                          | Not addressed at all by the server: the client edits `speaker` values in the documents. |
+| UI scope options offered                                      | To be recorded. |
+| `original_speaker` unchanged after rename                     | **Yes.** `original_speaker` stays `Speaker 2`, so Applaud's key (D8) maps directly. |
+| How Plaud AI reads transcripts                                | Ask Plaud's retriever returns transcript chunks formatted `[start-end] [Speaker name]` followed by the text (`contextos-dproxy/v4/context/resource`). Whether those chunks are rebuilt after a rename is the open question below. |
+| Plaud AI uses the new name: new chat (and delay)              | Pending. |
+| Plaud AI uses the new name: existing chat (and delay)         | Pending. |
+| Replay from page console accepted                             | Reported as passed. Which `origin_version` was sent on replay is to be confirmed. |
+| Terms of service position                                     | Pending. |
+| **Decision:** continue to extension-context test, or stop     | Pending the Plaud AI result. |
+
+### A.9 Consequences for the design (provisional)
+
+- **The extension must reproduce the web app's edit.** It reads the current transcript, polished transcript and summary, changes `speaker` where `original_speaker` matches, replaces the label in the summary, and writes all three back whole. This is the "whole-transcript write" risk in A.3; P5 and P6 carry the weight.
+- **`origin_version` is the natural precondition guard** (P5), but only if Plaud enforces it. Test: replay a write with a deliberately stale `origin_version` and confirm it is refused.
+- **Run requests from the Plaud page, not the service worker.** The token is a bearer token held by the page, and CORS admits only `web.plaud.ai`. A content script that runs the edit in the page's context avoids handling the token in the extension's own storage (P7), at the cost of needing a Plaud tab open (consistent with P4).
+- **The summary replacement is naive.** A whole-word match is needed so `Speaker 2` does not also match `Speaker 20`, and pronouns stay as Plaud wrote them.
+- **The write is three requests, not one.** A failure part-way leaves Plaud inconsistent; the undo log must hold all three previous documents and their versions.
