@@ -112,3 +112,79 @@ Carried over from the deferred write-back design:
 ## Next step
 
 Run the spike in P1 and record the results here. Plan the extension only if the spike passes.
+
+## Appendix A. Spike capture checklist
+
+Covers P1 questions 1, 3, 4 and 5 by hand in Edge. Question 2 (replay from an extension context) needs a throwaway unpacked extension and is a separate step once A.3 shows a usable request.
+
+**Handling secrets.** Cookies, bearer tokens and device ids from these captures never go into the repo, an issue or a chat. Keep raw captures in a local folder outside the repo; only redacted fixtures are committed.
+
+### A.1 Prepare
+
+- [ ] Choose a short, low-value test recording with at least two speakers, one of them still generic (`Speaker 2` or similar).
+- [ ] Note its Plaud id (the last 8 characters are in the Applaud folder name) and the current name of every speaker.
+- [ ] In Applaud, open its `transcript.json` and note the `speaker` and `original_speaker` for the speaker you will rename.
+- [ ] **Plaud AI baseline.** Ask Plaud AI a question about the recording whose answer depends on who said what, for example "What did Speaker 2 say about X?" and "List the speakers in this recording." Screenshot the answers. Keep this chat open: it is the "existing chat" for A.4.
+- [ ] Open the Plaud web app in Edge, signed in, in your normal profile.
+- [ ] Open DevTools (F12) → **Network**. Tick **Preserve log** and **Disable cache**, filter to **Fetch/XHR**, then clear the log.
+
+### A.2 Capture the rename
+
+- [ ] Open the test recording and rename the generic speaker to a distinctive test name, for example `Spike Test Alice`.
+- [ ] Note every option the UI offers (this segment only, all of this speaker in this recording, across recordings) and which one you chose. Choose "all of this speaker in this recording" if offered.
+- [ ] Save, then stop and look at the requests that appeared.
+- [ ] Export the log: right-click in the request list → **Save all as HAR (sanitized)** if Edge offers it, otherwise **Save all as HAR**. Store it outside the repo.
+
+### A.3 Record the request
+
+For the request that performed the rename (usually `POST`, `PUT` or `PATCH`), and for any request just before it that looks like a token or challenge:
+
+- [ ] Method, full URL and host (note whether the API host differs from the web app's host, or is regional).
+- [ ] Status code.
+- [ ] **Authentication:** header *names* only (for example `Authorization`, `x-…-token`, `x-device-id`, an app version). Is it a bearer token, a cookie, or both? In **Application** → Local storage / Cookies, note the *key name* the token lives under, not its value.
+- [ ] **Anti-bot or anti-forgery:** any CAPTCHA, Turnstile, signature, nonce or timestamp-hash header, or a request fetching one first. This is the main stop risk.
+- [ ] **Body:** how the speaker is addressed (`original_speaker`, display name, segment ids, a speaker id). Does the body carry only the change, or the **whole transcript**? A whole-transcript write is a serious risk and must be written down.
+- [ ] **Response body:** its shape, and whether it returns the updated speaker or transcript.
+- [ ] Right-click the request → **Copy** → **Copy as fetch** and keep it with the HAR (it contains secrets).
+
+### A.4 Check the effect
+
+- [ ] Reload the Plaud recording: the new name shows on every segment you expected and no others.
+- [ ] Run a sync in Applaud (or wait for the next one). In `transcript.json`, check that `speaker` changed and `original_speaker` did **not** (D8).
+- [ ] **Plaud AI, new chat:** ask the baseline questions again. Does it use `Spike Test Alice`?
+- [ ] **Plaud AI, existing chat:** ask again in the baseline chat. Same question.
+- [ ] If either does not use the name, try again after about 15 minutes and again the next day, in case Plaud AI indexes later. Record the times.
+
+### A.5 Replay from the page
+
+This shows whether a scripted request is accepted at all. It runs in the page, so it does not yet prove the extension context (P1 question 2).
+
+- [ ] In the Plaud tab, open DevTools → **Console**. Paste the copied fetch, change only the name back to the original, and run it.
+- [ ] Note the status and response. Reload the recording and confirm the original name is restored.
+- [ ] Note anything that failed or needed a fresh token or challenge.
+
+### A.6 Terms
+
+- [ ] Read Plaud's current terms of service for clauses on automated access, scripts, reverse engineering or third-party tools. Note the clause text, the URL and the date read.
+
+### A.7 Tidy up
+
+- [ ] The test speaker is back to its original name in Plaud, and Applaud shows the same after a sync.
+- [ ] Raw captures are stored outside the repo or deleted. If a token was exposed anywhere it should not be, sign out of the Plaud web app to invalidate the session.
+
+### A.8 Results
+
+| Item                                                          | Result |
+| ------------------------------------------------------------- | ------ |
+| Rename request: method, host, path                            |        |
+| Authentication mechanism (names only)                         |        |
+| Anti-bot or anti-forgery measures                             |        |
+| Speaker addressed by                                          |        |
+| Body carries only the change, or the whole transcript         |        |
+| UI scope options offered                                      |        |
+| `original_speaker` unchanged after rename                     |        |
+| Plaud AI uses the new name: new chat (and delay)              |        |
+| Plaud AI uses the new name: existing chat (and delay)         |        |
+| Replay from page console accepted                             |        |
+| Terms of service position                                     |        |
+| **Decision:** continue to extension-context test, or stop     |        |
