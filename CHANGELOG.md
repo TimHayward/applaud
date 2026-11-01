@@ -6,7 +6,8 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ### Added
 - **Names to send to Plaud.** Plaud AI only uses speaker names held in Plaud. A recording's page now lists the confirmed names Plaud is still missing, by speaker or by line, with a button to copy each name for entering in Plaud. The Recordings list marks recordings with names to send. Only names you have confirmed are listed; automatic matches are not.
-- Groundwork for a browser extension that sends those names to Plaud for you (**Settings → Speaker identification → Send names to Plaud**, off by default, with pairing). The extension itself is not released yet. API: `/api/plaud-writeback/*` (see `docs/api.md`).
+- Groundwork for a browser extension that sends those names to Plaud for you (**Settings → Speaker identification → Send names to Plaud**, off by default, with pairing). API: `/api/plaud-writeback/*` (see `docs/api.md`).
+- **Browser extension, read only** (`extension/`, Chromium browsers, load unpacked; see `extension/README.md`). It pairs with Applaud, reads your recordings through your own signed-in Plaud tab, and shows a dry run of the names it would send. It cannot change anything in Plaud yet. Unofficial and not affiliated with Plaud.
 
 ## [0.6.0] - 2026-10-30
 

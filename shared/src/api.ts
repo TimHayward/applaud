@@ -431,6 +431,8 @@ export interface PlaudDocument {
 export interface PlaudWritebackPlanRequest {
   recordingId: string;
   documents: PlaudDocument[];
+  /** Show the changes without recording a plan; `planId` comes back null. */
+  dryRun?: boolean;
 }
 
 export interface PlaudDocumentWrite {

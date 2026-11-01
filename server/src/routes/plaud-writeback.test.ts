@@ -234,6 +234,22 @@ describe("plaudWritebackRouter", () => {
     expect(plan.documents[2]!.content).toBe("Ben Example will book it.");
   });
 
+  it("shows a dry run without recording anything", async () => {
+    const token = await pairExtension();
+    const res = await call("POST", "/plan", {
+      token,
+      body: { recordingId: "f_1", documents: docs(), dryRun: true },
+    });
+    const plan = (await res.json()) as PlaudWritebackPlanResponse;
+    expect(plan).toMatchObject({ status: "ready", planId: null, changedSegments: 2 });
+    expect(plan.documents.map((d) => d.kind)).toEqual(["transcript", "polished", "summary"]);
+    const rec = (await (
+      await call("GET", "/recordings/f_1", { token: LAN })
+    ).json()) as PlaudWritebackRecordingResponse;
+    expect(rec.history).toEqual([]);
+    expect(rec.recording?.state).toBe("to_send");
+  });
+
   it("records results, then marks the recording sent until the next sync", async () => {
     const token = await pairExtension();
     const plan = (await (

@@ -49,6 +49,22 @@ export default tseslint.config(
     },
   },
   {
+    files: ["extension/src/**/*.ts"],
+    languageOptions: {
+      globals: { ...globals.browser, chrome: "readonly" },
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
+  {
+    files: ["extension/build.mjs"],
+    languageOptions: { globals: { ...globals.node } },
+  },
+  {
     files: ["**/*.test.ts", "**/*.test.tsx"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",

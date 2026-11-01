@@ -172,6 +172,7 @@ export function createPlan(
   clientId: number | null,
   docs: PlaudDocument[],
   now: number = Date.now(),
+  opts: { dryRun?: boolean } = {},
 ): PlanOutcome {
   const invalid = validateDocuments(docs);
   if (invalid) return { ok: false, code: 400, error: invalid };
@@ -188,10 +189,10 @@ export function createPlan(
     };
   }
 
-  prune(now);
+  if (!opts.dryRun) prune(now);
   const plan = planRecording(desired, docs);
   if (plan.status === "stale") {
-    setResult(recordingId, "stale", plan.reason, now);
+    if (!opts.dryRun) setResult(recordingId, "stale", plan.reason, now);
     return { ok: true, body: { planId: null, status: "stale", reason: plan.reason, ...empty } };
   }
   if (plan.status === "nothing") {
@@ -201,53 +202,58 @@ export function createPlan(
     };
   }
 
-  const planId = randomBytes(12).toString("hex");
   const byKind = new Map(docs.map((d) => [d.kind, d]));
-  const writes: PlaudDocumentWrite[] = [];
+  const writes: PlaudDocumentWrite[] = ORDER.flatMap((kind) => {
+    const content = plan.documents.get(kind);
+    const source = byKind.get(kind);
+    return content === undefined || !source
+      ? []
+      : [
+          {
+            kind,
+            objectId: source.objectId,
+            contentId: source.contentId,
+            originVersion: source.version,
+            content,
+          },
+        ];
+  });
+  const summary = {
+    status: "ready" as const,
+    reason: null,
+    documents: writes,
+    changes,
+    changedSegments: plan.changedSegments,
+    summaryReplacements: plan.summaryReplacements,
+  };
+  // A dry run (section 6, Phase 2) shows the changes and records nothing.
+  if (opts.dryRun) return { ok: true, body: { planId: null, ...summary } };
+
+  const planId = randomBytes(12).toString("hex");
   const insert = getDb().prepare(
     `INSERT INTO plaud_writeback_log (plan_id, recording_id, client_id, kind, object_id, content_id, origin_version,
        previous_content, new_content, outcome, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?)`,
   );
   getDb().transaction(() => {
-    for (const kind of ORDER) {
-      const content = plan.documents.get(kind);
-      const source = byKind.get(kind);
-      if (content === undefined || !source) continue;
+    for (const w of writes) {
+      const source = byKind.get(w.kind)!;
       insert.run(
         planId,
         recordingId,
         clientId,
-        kind,
-        source.objectId,
-        source.contentId,
-        source.version,
+        w.kind,
+        w.objectId,
+        w.contentId,
+        w.originVersion,
         source.content,
-        content,
+        w.content,
         now,
         now,
       );
-      writes.push({
-        kind,
-        objectId: source.objectId,
-        contentId: source.contentId,
-        originVersion: source.version,
-        content,
-      });
     }
   })();
-  return {
-    ok: true,
-    body: {
-      planId,
-      status: "ready",
-      reason: null,
-      documents: writes,
-      changes,
-      changedSegments: plan.changedSegments,
-      summaryReplacements: plan.summaryReplacements,
-    },
-  };
+  return { ok: true, body: { planId, ...summary } };
 }
 
 interface LogRow {

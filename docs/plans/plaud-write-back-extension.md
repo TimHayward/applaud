@@ -2,7 +2,7 @@
 
 |             |                                                                                                                                                                                                                                                          |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**  | Spike complete (GO, Appendix A). Phase 1 (Applaud side) built, not yet verified on the Portainer host; Phases 2 to 4 not started. |
+| **Status**  | Spike complete (GO, Appendix A). Phases 1 and 2 built, not yet verified on the Portainer host or in Edge against Plaud; Phases 3 and 4 not started. |
 | **Updated** | 2026-11-01                                                                                                                                                                                                                                               |
 | **Owner**   | Tim Hayward                                                                                                                                                                                                                                              |
 | **Context** | Picks up "Write-back to Plaud" from [speaker-identification.md](speaker-identification.md) section 11. Automated server-side write-back was rejected; a browser extension acting in the user's own signed-in Plaud session is the option being explored. |
@@ -195,6 +195,31 @@ Differences from the plan above:
 - **A recording is either written whole or not at all at plan time.** Any refusal in any document (a renamed or missing segment, a changed label, an unexpected shape) makes the whole recording `stale` until the next sync, rather than writing the parts that pass.
 - **The summary placeholder is taken from the label** (`Speaker 2`) as well as from the name being replaced, so a re-run after a partial write still fixes the summary (W5).
 - **Undo restores Plaud's previous content but not Applaud's labels.** After an undo the recording shows as having names to send again until the label is changed in Applaud.
+
+### 6.2 Phase 2 record
+
+Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
+
+| Item | State |
+| ---- | ----- |
+| `extension/` workspace package: Manifest V3, esbuild (the version already in the lockfile), service worker, content script, popup | Done |
+| Pairing: address and code in the popup, host permission for that one origin asked on the click, token in `chrome.storage.local` | Done |
+| Content script reads `files/detail` and the three documents in the Plaud tab with the tab's token; the token is never stored or passed on | Done, with unit tests on synthetic responses |
+| Dry run: `POST /api/plaud-writeback/plan` with `dryRun: true`, which records nothing and returns no plan id | Done, with a route test |
+| No write code in the extension | Done; a test fails if `PATCH`, `update/content` or `origin_version` appears in its source |
+| End to end in Chromium: built extension, real Applaud server, mock Plaud site shaped like the capture | Done: pairing, pending list, dry run, the tab check; the token went only to the API host, storage links carried no credentials, and Applaud recorded nothing |
+| Exit checks on Edge against real Plaud: three recordings, after sign-out and sign-in, refusal while Applaud's setting is off | **Open** |
+
+Open questions, as far as Phase 2 can take them:
+
+- **Q1 (API host and headers).** The host is taken from the requests the Plaud page has made (`performance` entries), else from any storage value naming an `api…plaud.ai` host. Reads send `authorization`, `app-platform`, `edit-from` and `app-language` only. Whether Plaud also needs `x-scope-id` or `x-device-id` is to be seen on real Plaud; **Check the Plaud tab** lists the names of storage keys that may hold them.
+- **Q2 (storage CORS).** The signed links are fetched from the content script without credentials, as the page does. Confirmed against the mock only.
+- **Q3 (several documents of a kind).** A kind Plaud has more than one of is left out and reported as a warning.
+
+Differences from the plan above:
+
+- **No fixed extension `key`.** The extension reaches Applaud through a host permission (W9), so its id does not need to be stable; this can be added when the extension is published.
+- **The build is not part of `pnpm build`**, so the Docker image is unchanged. `pnpm build:extension` builds it.
 
 ## 7. Testing
 

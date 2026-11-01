@@ -178,6 +178,8 @@ const Kind = z.enum(["transcript", "polished", "summary"]);
 
 const PlanBody = z.object({
   recordingId: z.string().min(1).max(200),
+  /** Show the changes without recording a plan (Phase 2). */
+  dryRun: z.boolean().optional(),
   documents: z
     .array(
       z.object({
@@ -204,7 +206,16 @@ plaudWritebackRouter.post("/plan", extensionOnly, (req, res) => {
     return;
   }
   try {
-    const out = createPlan(dir, parsed.data.recordingId, clientOf(res), parsed.data.documents);
+    const out = createPlan(
+      dir,
+      parsed.data.recordingId,
+      clientOf(res),
+      parsed.data.documents,
+      Date.now(),
+      {
+        dryRun: parsed.data.dryRun === true,
+      },
+    );
     if (!out.ok) {
       res.status(out.code).json({ error: out.error });
       return;
