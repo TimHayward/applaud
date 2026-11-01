@@ -181,8 +181,8 @@ First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker
 | Rename request: method, host, path                            | **No rename endpoint.** The web app rewrites the content client-side and sends three `PATCH https://api-euc1.plaud.ai/file-app/v4/files/update/content/<file_id>` requests, one each for the transcript, the polished transcript and the summary. Host is regional (`api-euc1`). |
 | Request body                                                  | `{ object_id, content_id, content, origin_version }`, plus `relation_content_ids` on the summary. `content` is the **whole document** as a string: the full segment array (about 55 KB) for each transcript, and the full markdown for the summary. |
 | What changed                                                  | Transcripts: only `speaker` on the 79 segments whose `speaker` was `Speaker 2`; nothing else differs. Summary: a plain text replacement of `Speaker 2` with the name (14 occurrences); pronouns left as they were. Outline and other tabs not written. |
-| Concurrency                                                   | Each write sends `origin_version` (a millisecond version of the content being replaced); the response returns a new `version_ms`. Whether Plaud **rejects** a stale `origin_version` is not yet known. |
-| Authentication mechanism (names only)                         | Bearer `authorization` header (named in the CORS preflight; stripped from the sanitised HAR). No cookies are sent. Other headers: `app-language`, `app-platform`, `edit-from`, `traceparent`, `x-device-id`, `x-request-id`, `x-scope-id`, `x-scope-type`, `x-timezone-iana`. CORS allows only `https://web.plaud.ai`, with credentials. |
+| Concurrency                                                   | Each write sends `origin_version` (a millisecond version of the content being replaced); the response returns a new `version_ms`. **Plaud enforces it**: a write with a stale `origin_version` is refused with HTTP 200 and `{"status":-1800313,"msg":"version conflict, re-fetch and retry"}` (test A.10). Failures are reported in the body's `status`, not the HTTP status. |
+| Authentication mechanism (names only)                         | Bearer `authorization` header (named in the CORS preflight; stripped from the sanitised HAR). The web app keeps it in `localStorage` under `pld_tokenstr`, value prefixed `bearer `. No cookies are sent. A malformed token gives HTTP 401 `unauthorized`. Other headers: `app-language`, `app-platform`, `edit-from`, `traceparent`, `x-device-id`, `x-request-id`, `x-scope-id`, `x-scope-type`, `x-timezone-iana`. CORS allows only `https://web.plaud.ai`, with credentials. |
 | Anti-bot or anti-forgery measures                             | None seen: no signature, nonce, CAPTCHA or challenge request. `x-request-id` is a random UUID. |
 | Speaker addressed by                                          | Not addressed at all by the server: the client edits `speaker` values in the documents. |
 | UI scope options offered                                      | To be recorded. |
@@ -190,15 +190,16 @@ First capture: 2026-11-01, Edge, web app build `prod-261030-050226`, one speaker
 | How Plaud AI reads transcripts                                | Ask Plaud's retriever returns transcript chunks formatted `[start-end] [Speaker name]` followed by the text (`contextos-dproxy/v4/context/resource`). Whether those chunks are rebuilt after a rename is the open question below. |
 | Plaud AI uses the new name: new chat (and delay)              | Not separately tested; the existing-chat result makes a failure unlikely. |
 | Plaud AI uses the new name: existing chat (and delay)         | **Yes.** Before the rename it answered with `Speaker 2`; within minutes afterwards, the same question in the same chat answered with the name (and inferred a pronoun). |
-| Replay from page console accepted                             | Reported as passed. Whether a **stale** `origin_version` is refused is unresolved: Applaud's files hold no version data. Test A.10 settles it. |
+| Replay from page console accepted                             | Passed. A replay from the page console with the token from `pld_tokenstr` is accepted; with a stale `origin_version` it is refused (A.10). |
 | Terms of service position                                     | Pending. |
-| **Decision:** continue to extension-context test, or stop     | **Continue.** The P1 stop criterion (Plaud AI ignores the name) is not met. Remaining before planning: A.10 and the terms of service. |
+| **Decision:** continue to extension-context test, or stop     | **Continue.** The P1 stop criterion (Plaud AI ignores the name) is not met. A.10 passed. Remaining before planning: the terms of service. |
 
 ### A.9 Consequences for the design (provisional)
 
 - **The extension must reproduce the web app's edit.** It reads the current transcript, polished transcript and summary, changes `speaker` where `original_speaker` matches, replaces the label in the summary, and writes all three back whole. This is the "whole-transcript write" risk in A.3; P5 and P6 carry the weight.
-- **`origin_version` is the natural precondition guard** (P5), but only if Plaud enforces it. Test: replay a write with a deliberately stale `origin_version` and confirm it is refused.
-- **Run requests from the Plaud page, not the service worker.** The token is a bearer token held by the page, and CORS admits only `web.plaud.ai`. A content script that runs the edit in the page's context avoids handling the token in the extension's own storage (P7), at the cost of needing a Plaud tab open (consistent with P4).
+- **`origin_version` is the precondition guard** (P5). Plaud enforces it, so a document changed since the extension read it is refused by the server, not merely detected by the client. On a conflict the extension skips that recording and reports it; it does not re-fetch and retry automatically.
+- **Success is `status: 0` in the body.** HTTP 200 alone does not mean the write was applied.
+- **Run requests from the Plaud page, not the service worker.** The token is a bearer token held by the page in `localStorage` (`pld_tokenstr`), and CORS admits only `web.plaud.ai`. A content script that runs the edit in the page's context avoids handling the token in the extension's own storage (P7), at the cost of needing a Plaud tab open (consistent with P4).
 - **The summary replacement is naive.** A whole-word match is needed so `Speaker 2` does not also match `Speaker 20`, and pronouns stay as Plaud wrote them.
 - **The write is three requests, not one.** A failure part-way leaves Plaud inconsistent; the undo log must hold all three previous documents and their versions.
 
@@ -211,3 +212,5 @@ Settles whether `origin_version` can serve as the precondition guard (P5). It se
 3. Run it in the Console and record the HTTP status and the response JSON (`status`, any message).
 4. **Refused** (non-zero `status` or an HTTP error mentioning a version or conflict): Plaud enforces it, and it becomes the P5 guard.
    **Accepted:** Plaud does not enforce it. The extension must do its own fresh read and comparison immediately before each write, and the race window, though small, cannot be closed.
+
+**Result (2026-11-01):** refused, HTTP 200 with `{"status":-1800313,"msg":"version conflict, re-fetch and retry"}`. Plaud enforces `origin_version`.
