@@ -237,7 +237,7 @@ Built 2026-11-01 on branch `claude/festive-clarke-b4rw0t`.
 | One recording per send; a second send while one runs is refused | Done |
 | The only `PATCH` in the extension is in `plaud.ts` | Enforced by a test |
 | End to end in Chromium against a mock Plaud that enforces `origin_version`: send, undo (all three documents restored byte for byte), partial write then a second send that writes only what was missing | Done |
-| Exit checks on Edge against real Plaud: apply, conflict (edit in Plaud between dry run and send), partial then re-run, undo; Plaud AI uses the names; Applaud's sync confirms | **Open** |
+| Exit checks on Edge against real Plaud: apply, conflict (edit in Plaud between dry run and send), partial then re-run, undo; Plaud AI uses the names; Applaud's sync confirms | In progress (owner, 2026-11-01): sends on two recordings succeeded, including one with only some speakers confirmed (the unconfirmed `Speaker 1` was left as it was). One recording (the spike recording) shows "stopped part-way"; cause being checked. Undo, conflict, Plaud AI and sync confirmation still to check. |
 
 Differences from the plan above:
 

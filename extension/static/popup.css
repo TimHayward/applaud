@@ -68,6 +68,10 @@ input {
   color: var(--bg);
   align-self: flex-start;
 }
+.result .btn,
+.recording > .result > button {
+  align-self: flex-start;
+}
 .btn:disabled {
   opacity: 0.5;
   cursor: default;
