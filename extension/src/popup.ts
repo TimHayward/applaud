@@ -399,7 +399,7 @@ function renderMain(st: StatusReply): void {
           diagnosis.replaceChildren(
             el("p", {
               className: "muted",
-              text: `Signed in: ${d.signedIn ? "yes" : "no"} · API: ${d.apiOrigin ?? "not found"} · device id: ${d.deviceId ? "found" : "not found"} · workspace: ${d.workspace ? "found" : "not found"}`,
+              text: `Signed in: ${d.signedIn ? `yes (${d.tokenSource})` : "no"} · API: ${d.apiOrigin ?? "not found"} · device id: ${d.deviceId ? "found" : "not found"} · workspace: ${d.workspace ? "found" : "not found"}`,
             }),
             el("p", {
               className: "muted",

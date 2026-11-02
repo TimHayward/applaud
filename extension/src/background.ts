@@ -93,9 +93,16 @@ async function client(): Promise<ApplaudClient> {
   return new ApplaudClient(s.applaudUrl, s.token);
 }
 
+/** The Plaud tab you're looking at, else the one used most recently. */
 async function plaudTab(): Promise<chrome.tabs.Tab | null> {
+  const [current] = await chrome.tabs.query({
+    url: "https://web.plaud.ai/*",
+    active: true,
+    lastFocusedWindow: true,
+  });
+  if (current) return current;
   const tabs = await chrome.tabs.query({ url: "https://web.plaud.ai/*" });
-  return tabs.find((t) => t.active) ?? tabs[0] ?? null;
+  return tabs.sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0] ?? null;
 }
 
 async function askPlaud<K extends ContentRequest["type"]>(

@@ -250,6 +250,7 @@ Found installing on a second computer (2026-11-02), and fixed:
 
 - **The permission prompt closed the popup**, losing the address and code typed for pairing. Pairing now opens in a tab.
 - **A Plaud tab opened before the extension was installed had no content script** ("The Plaud tab isn't ready"). The extension now adds it on demand (`scripting` permission), and the script registers its listener only once so a write can't run twice.
+- **"You are not signed in to Plaud in this tab" on a signed-in tab.** The second computer's Plaud session had no usable `pld_tokenstr`; its storage also holds `pld_session.tokens` and `pld_tokenType`. The extension now falls back to the access token in `pld_session.tokens` (never the refresh token), with the type from `pld_tokenType`, and **Check the Plaud tab** names the key it used. Which Plaud sessions use which key is not known. With several Plaud tabs open it now reads the one in view, else the one used last.
 - **An extension newer than Applaud got "Pair it again"** for a route Applaud didn't have: the request fell through to the LAN-token guard, which refuses extension tokens. Unknown write-back routes now answer 404 with *update Applaud*.
 
 Differences from the plan above:

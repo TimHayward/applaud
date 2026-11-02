@@ -64,11 +64,69 @@ export function readWorkspaceId(storage: PageContext["storage"]): string | null 
   return m ? m[1]! : null;
 }
 
-export function readToken(storage: PageContext["storage"]): string | null {
-  const raw = storage.getItem(TOKEN_KEY);
+/** Where some Plaud sessions keep the token instead (seen on a second computer), and its type. */
+export const SESSION_TOKENS_KEY = "pld_session.tokens";
+export const TOKEN_TYPE_KEY = "pld_tokenType";
+
+const PREFIXED = /^bearer\s+\S{20,}$/i;
+const BARE = /^[A-Za-z0-9._~+/=-]{20,}$/;
+
+function withType(storage: PageContext["storage"], value: string): string | null {
+  const v = unquote(value);
+  if (PREFIXED.test(v)) return v;
+  if (!BARE.test(v)) return null;
+  const type = unquote(storage.getItem(TOKEN_TYPE_KEY) ?? "") || "bearer";
+  return /^[A-Za-z]{1,20}$/.test(type) ? `${type.toLowerCase()} ${v}` : `bearer ${v}`;
+}
+
+/** The access token inside `pld_session.tokens`, whatever its exact shape. */
+function fromSessionTokens(storage: PageContext["storage"]): string | null {
+  const raw = storage.getItem(SESSION_TOKENS_KEY);
   if (!raw) return null;
-  const v = raw.trim().replace(/^"|"$/g, "");
-  return /^bearer\s+\S{20,}$/i.test(v) ? v : null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return withType(storage, raw);
+  }
+  if (typeof parsed === "string") return withType(storage, parsed);
+  // Prefer a key that names an access token, then any key that names a token.
+  const found: { score: number; value: string }[] = [];
+  const walk = (node: unknown, depth: number): void => {
+    if (!node || typeof node !== "object" || depth > 4) return;
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (typeof v === "string") {
+        if (/refresh/i.test(k)) continue;
+        const score = /access.?token/i.test(k) ? 2 : /token/i.test(k) ? 1 : 0;
+        if (score > 0) found.push({ score, value: v });
+      } else {
+        walk(v, depth + 1);
+      }
+    }
+  };
+  walk(parsed, 0);
+  for (const f of found.sort((a, b) => b.score - a.score)) {
+    const t = withType(storage, f.value);
+    if (t) return t;
+  }
+  return null;
+}
+
+export type TokenSource = typeof TOKEN_KEY | typeof SESSION_TOKENS_KEY;
+
+/** The tab's session token and the storage key it came from. */
+export function findToken(
+  storage: PageContext["storage"],
+): { token: string; source: TokenSource } | null {
+  const raw = storage.getItem(TOKEN_KEY);
+  const direct = raw ? withType(storage, raw) : null;
+  if (direct) return { token: direct, source: TOKEN_KEY };
+  const session = fromSessionTokens(storage);
+  return session ? { token: session, source: SESSION_TOKENS_KEY } : null;
+}
+
+export function readToken(storage: PageContext["storage"]): string | null {
+  return findToken(storage)?.token ?? null;
 }
 
 /**
@@ -319,6 +377,8 @@ async function writeOne(
 /** What a dry run needs from the page, by name only: never a token or other value. */
 export interface Diagnosis {
   signedIn: boolean;
+  /** The storage key the token was found under (its name, never its value). */
+  tokenSource: TokenSource | null;
   apiOrigin: string | null;
   deviceId: boolean;
   workspace: boolean;
@@ -334,6 +394,7 @@ export function diagnose(ctx: Pick<PageContext, "storage" | "resourceUrls">): Di
   }
   return {
     signedIn: readToken(ctx.storage) !== null,
+    tokenSource: findToken(ctx.storage)?.source ?? null,
     apiOrigin: findApiOrigin(ctx),
     deviceId: readDeviceId(ctx.storage) !== null,
     workspace: readWorkspaceId(ctx.storage) !== null,

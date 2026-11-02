@@ -98,6 +98,7 @@ describe("page context", () => {
     });
     expect(d).toEqual({
       signedIn: true,
+      tokenSource: "pld_tokenstr",
       apiOrigin: null,
       deviceId: false,
       workspace: false,
@@ -339,5 +340,43 @@ describe("writeDocuments", () => {
         error: "no reply from Plaud; it may have been written",
       },
     ]);
+  });
+});
+
+describe("finding the session token", () => {
+  const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJlLXZhbHVl";
+
+  it("uses pld_tokenstr when present", () => {
+    expect(readToken(storage({ pld_tokenstr: `"bearer ${JWT}"` }))).toBe(`bearer ${JWT}`);
+  });
+
+  it("falls back to pld_session.tokens, preferring the access token over the refresh token", () => {
+    const st = storage({
+      "pld_session.tokens": JSON.stringify({ refreshToken: "r".repeat(40), accessToken: JWT }),
+      pld_tokenType: '"Bearer"',
+    });
+    expect(readToken(st)).toBe(`bearer ${JWT}`);
+    expect(diagnose({ storage: st, resourceUrls: () => [] }).tokenSource).toBe(
+      "pld_session.tokens",
+    );
+  });
+
+  it("accepts nested and already-prefixed shapes", () => {
+    expect(
+      readToken(
+        storage({
+          "pld_session.tokens": JSON.stringify({ data: { access_token: `bearer ${JWT}` } }),
+        }),
+      ),
+    ).toBe(`bearer ${JWT}`);
+    expect(readToken(storage({ "pld_session.tokens": JSON.stringify(JWT) }))).toBe(`bearer ${JWT}`);
+  });
+
+  it("finds nothing in an empty or unrelated session", () => {
+    expect(readToken(storage({ "pld_session.tokens": "{}" }))).toBeNull();
+    expect(
+      readToken(storage({ "pld_session.tokens": JSON.stringify({ user: "someone" }) })),
+    ).toBeNull();
+    expect(readToken(storage({ pld_tokenstr: "abc" }))).toBeNull();
   });
 });
