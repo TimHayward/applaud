@@ -1,3 +1,4 @@
+import { getDb } from "../db.js";
 import { logger } from "../logger.js";
 
 /**
@@ -35,4 +36,33 @@ export function scheduleConfirmation(recordingId: string): void {
 /** Tests only. */
 export function setConfirmationForTests(fn: Confirm): void {
   confirm = fn;
+}
+
+/** Spacing between the startup re-reads, so they don't all hit Plaud at once. */
+const OUTSTANDING_SPACING_MS = 15_000;
+
+/**
+ * At startup: re-read recordings sent to Plaud whose count hasn't been taken
+ * from a transcript downloaded since (sends made before Applaud confirmed by
+ * itself, or whose confirmation was lost to a restart). Returns how many.
+ */
+export function confirmOutstanding(): number {
+  const rows = getDb()
+    .prepare(
+      `SELECT recording_id FROM plaud_writeback
+       WHERE last_result IN ('sent', 'partial') AND pending_segments > 0 AND last_attempt_at IS NOT NULL
+         AND (pending_transcript_at IS NULL OR pending_transcript_at <= last_attempt_at)
+       ORDER BY last_attempt_at DESC LIMIT 50`,
+    )
+    .all() as { recording_id: string }[];
+  rows.forEach((r, i) => {
+    const timer = setTimeout(
+      () => scheduleConfirmation(r.recording_id),
+      i * OUTSTANDING_SPACING_MS,
+    );
+    timer.unref();
+  });
+  if (rows.length > 0)
+    logger.info({ recordings: rows.length }, "re-reading recordings sent to Plaud");
+  return rows.length;
 }

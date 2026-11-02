@@ -32,6 +32,7 @@ interface WritebackRow {
   last_result: LastResult | null;
   last_attempt_at: number | null;
   last_error: string | null;
+  pending_transcript_at: number | null;
   filename: string;
   display_name: string | null;
   start_time: number;
@@ -39,7 +40,7 @@ interface WritebackRow {
 }
 
 const SELECT_ROWS = `
-  SELECT w.recording_id, w.pending_segments, w.changes, w.last_result, w.last_attempt_at, w.last_error,
+  SELECT w.recording_id, w.pending_segments, w.changes, w.last_result, w.last_attempt_at, w.last_error, w.pending_transcript_at,
          r.filename, r.display_name, r.start_time, r.transcript_downloaded_at
   FROM plaud_writeback w JOIN recordings r ON r.id = w.recording_id
   WHERE r.user_deleted_at IS NULL`;
@@ -51,13 +52,16 @@ const SELECT_ROWS = `
 export function stateOf(
   row: Pick<
     WritebackRow,
-    "pending_segments" | "last_result" | "last_attempt_at" | "transcript_downloaded_at"
+    "pending_segments" | "last_result" | "last_attempt_at" | "pending_transcript_at"
   >,
 ): PlaudWritebackState {
   if (row.pending_segments === 0) return "in_plaud";
-  const syncedSince =
-    row.last_attempt_at !== null && (row.transcript_downloaded_at ?? 0) > row.last_attempt_at;
-  if (row.last_result === null || syncedSince) return "to_send";
+  // Only a count taken from a transcript downloaded after the last attempt
+  // describes Plaud since that attempt (W7). A newer download whose count
+  // hasn't been worked out yet changes nothing.
+  const recountedSince =
+    row.last_attempt_at !== null && (row.pending_transcript_at ?? 0) > row.last_attempt_at;
+  if (row.last_result === null || recountedSince) return "to_send";
   if (row.last_result === "sent") return "sent";
   if (row.last_result === "partial") return "partial";
   if (row.last_result === "stale") return "stale";

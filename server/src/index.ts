@@ -22,6 +22,7 @@ import {
 } from "./routes/plaud-writeback.js";
 import { poller } from "./sync/poller.js";
 import { speakers } from "./speakers/service.js";
+import { confirmOutstanding } from "./plaud-writeback/confirm.js";
 import { requireLanToken, requireLanTokenMedia } from "./auth/lan-token.js";
 import { buildAppCsp, securityHeaders } from "./security/headers.js";
 import { requireAllowedHost } from "./security/host-check.js";
@@ -296,6 +297,12 @@ async function main(): Promise<void> {
       }
     } else {
       poller.start();
+      // Sends to Plaud not yet confirmed by a re-read (plan W7).
+      try {
+        confirmOutstanding();
+      } catch (err) {
+        logger.warn({ err }, "could not check for unconfirmed sends to Plaud");
+      }
     }
     // Off unless switched on in Settings; runs apart from sync.
     speakers.start();

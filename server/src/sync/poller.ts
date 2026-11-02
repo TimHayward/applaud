@@ -545,7 +545,10 @@ class Poller {
         const fresh = getRecordingById(row.id);
         if (fresh && !opts.quiet) await this.deliverWebhook("transcript_ready", fresh);
         try {
-          speakers.onTranscript(row.id);
+          // After a send to Plaud only the names changed: rebuild the named
+          // transcript and its count now, without running the voice model again.
+          if (opts.quiet) speakers.onNamesChanged(row.id);
+          else speakers.onTranscript(row.id);
         } catch (err) {
           logger.warn({ err, id: row.id }, "could not queue speaker analysis");
         }

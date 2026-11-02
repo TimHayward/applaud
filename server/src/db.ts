@@ -78,6 +78,12 @@ const MIGRATIONS: Migration[] = [
   },
   { version: 5, name: "speaker identification", up: migrateSpeakers },
   { version: 6, name: "sending speaker names to Plaud", up: migratePlaudWriteback },
+  {
+    version: 7,
+    name: "the transcript each Plaud write-back count was taken from",
+    // Null on existing rows until the next rebuild, which reads as "not yet counted".
+    up: (d) => addColumn(d, "plaud_writeback", "pending_transcript_at", "INTEGER"),
+  },
 ];
 
 /** Schema version this build writes. */

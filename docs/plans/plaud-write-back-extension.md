@@ -274,6 +274,10 @@ Built 2026-11-02 on branch `claude/festive-clarke-b4rw0t`, after the owner teste
 | End to end in Chromium: three recordings, one changed in Plaud; the popup closed mid-batch and reopened; two sent, one skipped with no write attempted | Done |
 | Exit check: a week of normal use without a manual correction in Plaud | **Open** (owner) |
 
+Found in the owner's first week of use (2026-11-02), and fixed:
+
+- **Recordings already in Plaud reappeared as "to send", with a different count each time the popup opened.** The re-read after a send restarted full speaker analysis, and the count was only recalculated once that finished, behind every other queued analysis. Meanwhile the state treated the fresh download as a sync and fell back to the old count. Now each count records which download of the transcript it came from (migration 7, `pending_transcript_at`). A sent recording stays "sent, awaiting sync" until a count is taken from a transcript downloaded after the send. The re-read after a send rebuilds the `-Applaud` transcript and count straight away, without running the voice model, since only names changed. At startup, Applaud re-reads sends not yet confirmed that way (up to 50, 15 s apart).
+
 Not done, deliberately:
 
 - **Store publication** (Edge Add-ons, Chrome Web Store) stays a separate decision (P9).

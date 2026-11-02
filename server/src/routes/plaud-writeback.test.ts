@@ -313,6 +313,36 @@ describe("plaudWritebackRouter", () => {
     expect(pending.recordings).toEqual([]);
   });
 
+  it("stays sent until a count is taken from a transcript downloaded after the send", async () => {
+    const token = await pairExtension();
+    const plan = (await (
+      await call("POST", "/plan", { token, body: { recordingId: "f_1", documents: docs() } })
+    ).json()) as PlaudWritebackPlanResponse;
+    await call("POST", "/results", {
+      token,
+      body: {
+        planId: plan.planId,
+        results: plan.documents.map((d) => ({ kind: d.kind, outcome: "applied", newVersion: 5 })),
+      },
+    });
+    const state = async (): Promise<string | undefined> =>
+      (
+        (await (
+          await call("GET", "/recordings/f_1", { token: LAN })
+        ).json()) as PlaudWritebackRecordingResponse
+      ).recording?.state;
+
+    // A newer download whose count hasn't been worked out yet changes nothing.
+    db.prepare("UPDATE recordings SET transcript_downloaded_at = ? WHERE id = 'f_1'").run(
+      Date.now() + 1000,
+    );
+    expect(await state()).toBe("sent");
+
+    // Counted from that download, and Plaud still has the old names: send again.
+    writeApplaudTranscript(dir, "f_1");
+    expect(await state()).toBe("to_send");
+  });
+
   it("marks a write that stopped part-way as partial", async () => {
     const token = await pairExtension();
     const plan = (await (
