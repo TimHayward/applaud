@@ -365,20 +365,17 @@ function renderMain(st: StatusReply): void {
     renderPairing(st, null);
     return;
   }
-  const header = el(
-    "div",
-    { className: "row" },
-    el("h1", { text: "Names to send to Plaud" }),
-    button(
-      "Unpair",
-      () => {
-        send({ type: "unpair" }).then(
-          (s) => renderPairing(s, null),
-          (err: unknown) => show(errorLine(String(err))),
-        );
-      },
-      "link",
-    ),
+  const header = el("h1", { text: "Names to send to Plaud" });
+  // Unpairing is rare and undoes the pairing: kept at the bottom, behind a confirmation.
+  const unpairBox = el("div");
+  const unpair = button(
+    "Unpair",
+    () => {
+      void send({ type: "batchStatus" })
+        .catch(() => null)
+        .then((batch) => confirmUnpair(unpairBox, st, batch?.running === true));
+    },
+    "link danger",
   );
   const facts: Node[] = [el("p", { className: "muted", text: `Applaud: ${st.applaudUrl}` })];
   if (st.error) facts.push(errorLine(st.error));
@@ -440,8 +437,9 @@ function renderMain(st: StatusReply): void {
       className: "muted small",
       text: "Dry run shows exactly what would change. Nothing is written to Plaud until you choose Send to Plaud or Send all.",
     }),
-    check,
+    el("div", { className: "footer" }, check, unpair),
     diagnosis,
+    unpairBox,
   );
   if (st.error || !st.applaud) {
     list.replaceChildren();
@@ -612,6 +610,54 @@ async function showBatch(
       button(`Send all (${batch.length})`, confirmBox, "btn primary"),
     ),
   );
+}
+
+/** Asks before unpairing, with a clear way back. */
+function confirmUnpair(target: HTMLElement, st: StatusReply, batchRunning: boolean): void {
+  const close = (): void => target.replaceChildren();
+  if (batchRunning) {
+    target.replaceChildren(
+      el(
+        "div",
+        { className: "dialog" },
+        el("p", {
+          text: "Send all is still running. Wait for it to finish, or stop it, before unpairing.",
+        }),
+        el("div", { className: "row-end" }, button("OK", close, "btn")),
+      ),
+    );
+    return;
+  }
+  const yes = button(
+    "Unpair",
+    () => {
+      yes.disabled = true;
+      send({ type: "unpair" }).then(
+        (s) => renderPairing(s, null),
+        (err: unknown) => target.replaceChildren(errorLine(message(err))),
+      );
+    },
+    "btn danger",
+  );
+  const no = button("Keep paired", close, "btn primary");
+  target.replaceChildren(
+    el(
+      "div",
+      { className: "dialog" },
+      el("p", { className: "dialog-title", text: "Unpair from Applaud?" }),
+      el("p", {
+        text: `This extension will stop working with Applaud at ${st.applaudUrl ?? "your Applaud"}. To use it again you'll need a new pairing code from Applaud's settings.`,
+      }),
+      el("p", {
+        className: "muted small",
+        text: "Nothing in Plaud or Applaud is changed. The pairing stays listed in Applaud's settings until you remove it there.",
+      }),
+      el("div", { className: "row-end" }, no, yes),
+    ),
+  );
+  target.firstElementChild?.setAttribute("role", "alertdialog");
+  no.focus();
+  target.scrollIntoView({ block: "end" });
 }
 
 /** Sends that can still be undone, newest first: collapsed at the top. */

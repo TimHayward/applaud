@@ -180,3 +180,33 @@ details.recent > summary {
 details.recent[open] > summary {
   margin-bottom: 6px;
 }
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+.link.danger {
+  color: var(--error);
+}
+.btn.danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+.dialog {
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dialog-title {
+  font-weight: 600;
+}
+.row-end {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
