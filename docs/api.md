@@ -82,6 +82,26 @@ Speaker identification is optional; `/api/speakers/status` reports whether it is
 
 The request and response types are in [`shared/src/api.ts`](../shared/src/api.ts).
 
+## Sending names to Plaud
+
+Confirmed speaker names that Plaud does not have yet, and the routes a paired browser extension uses to write them into Plaud ([plan](plans/plaud-write-back-extension.md)). Writing is off until **Settings → Speaker identification → Send names to Plaud** is switched on (`POST /api/config` with `speakers.sendToPlaud`).
+
+These routes accept the LAN token as usual, or a paired extension's own token as `Authorization: Bearer <token>`. An extension token works on these routes only. Plan, results and undo are for the extension alone and need the `x-applaud-writeback-protocol` header (currently `1`); a mismatch returns 426. Bodies may be up to 16 MB.
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| GET | `/api/plaud-writeback/status` | both | Protocol, whether writing is on, whether the caller is a paired extension. |
+| GET | `/api/plaud-writeback/pending` | both | Recordings Plaud is missing names for: the changes, by label or by segment, and the state (`to_send`, `sent`, `partial`, `stale`). |
+| GET | `/api/plaud-writeback/recordings/:id` | both | One recording's changes and its write history. |
+| GET | `/api/plaud-writeback/undoable` | both | Recordings whose most recent send can still be undone (30 days). |
+| POST | `/api/plaud-writeback/plan` | extension | Body: `{ recordingId, documents, dryRun? }`, Plaud's current transcript, polished transcript and summary with their versions. With `dryRun: true` nothing is recorded and `planId` is null. Returns the documents to write, in order, each with the `originVersion` to send, or `stale` when Plaud changed since Applaud last synced. 409 while writing is off. |
+| POST | `/api/plaud-writeback/results` | extension | Body: `{ planId, results }`: per document `applied` (with Plaud's new version), `conflict` or `failed`. Documents not reported are recorded as abandoned. |
+| POST | `/api/plaud-writeback/undo/:id` | extension | The documents that restore the last write still in force, each guarded by the version Plaud gave that write. |
+| POST | `/api/plaud-writeback/pairing-code` | web UI | A single-use pairing code, valid for 10 minutes. |
+| POST | `/api/plaud-writeback/pair` | none | Body: `{ code, name }`. Exchanges a pairing code for an extension token. No other authentication; failures are rate limited. |
+| GET | `/api/plaud-writeback/clients` | web UI | Paired extensions. |
+| DELETE | `/api/plaud-writeback/clients/:id` | web UI | Remove a paired extension; its token stops working at once. |
+
 ## Sync
 
 | Method | Path | Description |

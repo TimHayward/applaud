@@ -225,10 +225,12 @@ export function markSummaryDownloaded(id: string): void {
  * Also clears any local display-name override — a resync re-pulls from
  * Plaud, so Plaud's filename becomes authoritative again.
  */
-export function resetDownloadStateForResync(id: string): void {
+export function resetDownloadStateForResync(id: string, opts: { keepDisplayName?: boolean } = {}): void {
   getDb()
     .prepare(
-      "UPDATE recordings SET transcript_downloaded_at = NULL, summary_downloaded_at = NULL, last_error = NULL, display_name = NULL WHERE id = ?",
+      `UPDATE recordings SET transcript_downloaded_at = NULL, summary_downloaded_at = NULL, last_error = NULL${
+        opts.keepDisplayName ? "" : ", display_name = NULL"
+      } WHERE id = ?`,
     )
     .run(id);
 }

@@ -1,0 +1,20 @@
+{
+  "name": "@applaud/extension",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser extension that sends confirmed speaker names from Applaud to Plaud (docs/plans/plaud-write-back-extension.md).",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@applaud/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "esbuild": "0.21.5",
+    "typescript": "^5.6.0"
+  }
+}

@@ -41,6 +41,15 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # The browser extension ships as a zip on the release, built from the
+      # same commit as the image so the two always speak the same protocol.
+      - name: Build browser extension
+        run: |
+          pnpm build:extension
+          mkdir -p release-assets/applaud-extension
+          cp -r extension/dist/. release-assets/applaud-extension/
+          (cd release-assets && zip -qr "applaud-extension-${GITHUB_REF_NAME}.zip" applaud-extension)
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -71,5 +80,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          files: release-assets/applaud-extension-${{ github.ref_name }}.zip
           draft: false
           prerelease: false

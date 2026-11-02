@@ -8,6 +8,7 @@ import { getCurrentUser } from "../plaud/client.js";
 import type { Embedder } from "./embedder.js";
 import { LocalEmbedder } from "./local-embedder.js";
 import type { MatchThresholds } from "./matcher.js";
+import { writeApplaudTranscript } from "./outputs.js";
 import { SpeakerRunner } from "./runner.js";
 
 /** The model baked into the image (D10); `APPLAUD_SPEAKER_MODEL` overrides the path. */
@@ -112,6 +113,18 @@ export const speakers = {
   onTranscript(recordingId: string): void {
     if (!speakerConfig(loadConfig()).enabled) return;
     speakerRunner().enqueue("analyse", recordingId);
+  },
+  /**
+   * Plaud's transcript was re-read after a send and only its speaker names
+   * changed: rewrite the `-Applaud` transcript and the names-to-send count
+   * straight away. A recording never analysed is analysed as usual.
+   */
+  onNamesChanged(recordingId: string): void {
+    const cfg = loadConfig();
+    if (!speakerConfig(cfg).enabled || !cfg.recordingsDir) return;
+    if (writeApplaudTranscript(cfg.recordingsDir, recordingId) === "skipped") {
+      speakerRunner().enqueue("analyse", recordingId);
+    }
   },
   /** After each sync: pick up recordings whose audio arrived after their transcript. */
   afterPoll(): void {

@@ -9,6 +9,7 @@ import {
 } from "@applaud/shared";
 import { api } from "../api.js";
 import { useToast } from "./Toast.js";
+import { PlaudWritebackSettings } from "./PlaudWritebackSettings.js";
 import { formatRelative } from "../lib/format.js";
 
 /** Poll quickly while something is happening, slowly otherwise. */
@@ -204,6 +205,7 @@ export function SpeakerSettings(): JSX.Element {
       await api.updateSpeakerSettings(patch);
       await qc.invalidateQueries({ queryKey: ["speaker-status"] });
       await qc.invalidateQueries({ queryKey: ["config"] });
+      await qc.invalidateQueries({ queryKey: ["plaud-writeback"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
@@ -288,6 +290,8 @@ export function SpeakerSettings(): JSX.Element {
           </Link>
 
           <ThresholdSettings key={JSON.stringify(s.thresholds)} saved={s.thresholds} busy={busy} onSave={save} />
+
+          <PlaudWritebackSettings enabled={s.sendToPlaud} busy={busy} onSave={save} />
         </>
       )}
     </section>

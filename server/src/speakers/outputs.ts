@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { getDb } from "../db.js";
 import { writeFileAtomic } from "../fsAtomic.js";
+import { recordPending } from "../plaud-writeback/pending.js";
 import { flattenTranscript } from "../plaud/transcript.js";
 import { DEFAULT_AUDIO_FILENAME, recordingPaths, type RecordingPaths } from "../sync/layout.js";
 import { normaliseSegments, type SpeakerSegment } from "./segments.js";
@@ -102,6 +103,7 @@ export function writeApplaudTranscript(recordingsDir: string, recordingId: strin
   if (!loaded) return "skipped";
   const { paths, segments } = loaded;
   const out = applaudSegments(recordingId, segments);
+  recordPending(recordingId, segments, out);
   const json = `${JSON.stringify(out, null, 2)}\n`;
   const text = flattenTranscript(
     out.map((s) => ({

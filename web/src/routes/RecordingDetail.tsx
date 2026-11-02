@@ -16,6 +16,7 @@ import { TranscriptCard } from "../components/TranscriptCard.js";
 import { SummaryPanel } from "../components/SummaryPanel.js";
 import { AttachmentsCard } from "../components/AttachmentsCard.js";
 import { SpeakersPanel } from "../components/SpeakersPanel.js";
+import { PlaudWritebackPanel } from "../components/PlaudWritebackPanel.js";
 import { formatDurationVerbose, formatDateTime, formatBytes } from "../lib/format.js";
 
 /**
@@ -87,6 +88,7 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
     qc.setQueryData(["recording-speakers", id], data);
     void qc.invalidateQueries({ queryKey: ["speaker-review"] });
     void qc.invalidateQueries({ queryKey: ["speaker-people"] });
+    void qc.invalidateQueries({ queryKey: ["plaud-writeback"] });
   };
 
   const setSpeakerLabel = async (label: string, body: SetSpeakerLabelRequest): Promise<boolean> => {
@@ -413,6 +415,8 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
               onReanalyse={() => void reanalyseSpeakers()}
             />
           )}
+
+          {speakers?.enabled && speakers.analysed && !r.userDeletedAt && <PlaudWritebackPanel recordingId={r.id} />}
 
           {r.transcriptText ? (
             <TranscriptCard

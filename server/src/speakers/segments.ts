@@ -6,6 +6,8 @@
 export interface SpeakerSegment {
   /** `segment_uid`, or `t<startMs>` for a segment without one. */
   key: string;
+  /** Plaud's `segment_uid` when the segment has one; the key Plaud's own documents use. */
+  uid?: string;
   /** Plaud's `original_speaker`: the diarisation label, unchanged by renames. `UU` when missing. */
   label: string;
   /** Plaud's `speaker`: reflects renames in the Plaud app (including the owner tag). */
@@ -46,6 +48,12 @@ export function normaliseSegments(raw: unknown, durationMs?: number | null): Spe
 
   const scale = timeScale(timed, durationMs);
   const seen = new Set<string>();
+  // A uid Plaud repeats can't address one segment in Plaud's own documents.
+  const uidCount = new Map<string, number>();
+  for (const { item } of timed) {
+    const u = typeof item.segment_uid === "string" ? item.segment_uid.trim() : "";
+    if (u) uidCount.set(u, (uidCount.get(u) ?? 0) + 1);
+  }
   const out: SpeakerSegment[] = [];
   for (const { item, start, end } of timed) {
     const startMs = Math.round(start * scale);
@@ -60,6 +68,7 @@ export function normaliseSegments(raw: unknown, durationMs?: number | null): Spe
     const name = str(item.speaker);
     out.push({
       key,
+      ...(uid && uidCount.get(uid) === 1 ? { uid } : {}),
       label: original || name || MISSING_SPEAKER_LABEL,
       name: name || original,
       startMs,

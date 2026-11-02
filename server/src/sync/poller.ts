@@ -203,6 +203,20 @@ class Poller {
   }
 
   /**
+   * Re-read a recording after Applaud sent names to Plaud, so the send is
+   * confirmed through the official API (plan W7). Unlike a resync from the
+   * UI it keeps a local title and fires no webhook: the recording hasn't
+   * changed for anything downstream except its speaker names.
+   */
+  async confirmRecording(id: string): Promise<void> {
+    if (this.processingIds.has(id)) return;
+    resetDownloadStateForResync(id, { keepDisplayName: true });
+    const refreshed = getRecordingById(id);
+    if (!refreshed) return;
+    await this.processRecording(refreshed, true, { quiet: true });
+  }
+
+  /**
    * Download one recording now, outside the poll cycle (the user asked for a
    * recording older than the history window). Failures are recorded on the
    * row; an auth failure flags "reconnect required" like a poll would.
@@ -416,7 +430,11 @@ class Poller {
    * note tab (the summary becomes `summary.md`). `force` rewrites existing
    * text files (a resync); audio already on disk is never re-downloaded.
    */
-  private async processRecording(row: RecordingRow, force = false): Promise<void> {
+  private async processRecording(
+    row: RecordingRow,
+    force = false,
+    opts: { quiet?: boolean } = {},
+  ): Promise<void> {
     // Guards the scheduled Phase 2 loop and a manual resync from ever writing
     // the same recording's files concurrently.
     if (this.processingIds.has(row.id)) return;
@@ -525,9 +543,12 @@ class Poller {
         // Fires on a null→set transition: the first download, or a resync
         // (which clears the transcript state first).
         const fresh = getRecordingById(row.id);
-        if (fresh) await this.deliverWebhook("transcript_ready", fresh);
+        if (fresh && !opts.quiet) await this.deliverWebhook("transcript_ready", fresh);
         try {
-          speakers.onTranscript(row.id);
+          // After a send to Plaud only the names changed: rebuild the named
+          // transcript and its count now, without running the voice model again.
+          if (opts.quiet) speakers.onNamesChanged(row.id);
+          else speakers.onTranscript(row.id);
         } catch (err) {
           logger.warn({ err, id: row.id }, "could not queue speaker analysis");
         }

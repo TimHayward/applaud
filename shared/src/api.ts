@@ -142,6 +142,8 @@ export interface SpeakerStatusResponse extends SpeakerStatus {
   plaudNames: { name: string; recordings: number }[];
   /** The matching bands in use. */
   thresholds: SpeakerThresholds;
+  /** Settings → Speakers → "Send names to Plaud". */
+  sendToPlaud: boolean;
 }
 
 export interface SpeakerThresholds {
@@ -156,6 +158,7 @@ export interface SpeakerSettingsPatch extends Partial<SpeakerThresholds> {
   enabled?: boolean;
   /** "" or null falls back to the Plaud nickname. */
   ownerName?: string | null;
+  sendToPlaud?: boolean;
 }
 
 export type SpeakerLabelStatus = "confirmed" | "auto" | "suggested" | "unknown" | "ignored";
@@ -339,4 +342,163 @@ export interface RecordingsDirValidateResponse {
   writable?: boolean;
   freeBytes?: number;
   error?: string;
+}
+
+// ── Sending speaker names to Plaud (docs/plans/plaud-write-back-extension.md) ──
+
+/** Version of the Applaud ↔ extension protocol. A mismatch disables writing (W13). */
+export const PLAUD_WRITEBACK_PROTOCOL = 1;
+
+/** Header the extension sends with `PLAUD_WRITEBACK_PROTOCOL`. */
+export const PLAUD_WRITEBACK_PROTOCOL_HEADER = "x-applaud-writeback-protocol";
+
+/** Plaud's documents that carry speaker names. */
+export type PlaudDocumentKind = "transcript" | "polished" | "summary";
+
+/** One rename Plaud still needs: a whole label, or a single segment corrected on its own. */
+export interface PlaudWritebackChange {
+  /** Plaud's `original_speaker`. */
+  plaudLabel: string;
+  /** The name Plaud shows now. */
+  from: string;
+  /** The confirmed name to send. */
+  to: string;
+  segments: number;
+  /** Set for a per-segment correction: where it is, to find it in Plaud. */
+  segment: { startMs: number; text: string } | null;
+}
+
+/**
+ * - `to_send`: Plaud is missing confirmed names.
+ * - `sent`: written to Plaud; waiting for Applaud's next sync to confirm (W7).
+ * - `partial`: a write-back stopped part-way; the next run completes it (W5).
+ * - `stale`: Plaud changed since Applaud last synced; wait for the next sync.
+ * - `in_plaud`: Plaud has every confirmed name.
+ */
+export type PlaudWritebackState = "to_send" | "sent" | "partial" | "stale" | "in_plaud";
+
+export interface PlaudWritebackRecording {
+  recordingId: string;
+  title: string;
+  startTime: number;
+  pendingSegments: number;
+  changes: PlaudWritebackChange[];
+  state: PlaudWritebackState;
+  lastAttemptAt: number | null;
+  lastError: string | null;
+}
+
+/** `GET /api/plaud-writeback/pending`. */
+export interface PlaudWritebackPendingResponse {
+  /** Settings → Speakers → "Send names to Plaud" (W12). */
+  enabled: boolean;
+  protocol: number;
+  recordings: PlaudWritebackRecording[];
+}
+
+export type PlaudWritebackOutcome = "planned" | "applied" | "conflict" | "failed" | "abandoned";
+
+export interface PlaudWritebackHistoryEntry {
+  planId: string;
+  kind: PlaudDocumentKind;
+  outcome: PlaudWritebackOutcome;
+  /** Set when this write restored an earlier one. */
+  undo: boolean;
+  undone: boolean;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** `GET /api/plaud-writeback/recordings/:id`. */
+export interface PlaudWritebackRecordingResponse {
+  enabled: boolean;
+  recording: PlaudWritebackRecording | null;
+  history: PlaudWritebackHistoryEntry[];
+}
+
+/** One of Plaud's documents as the extension read it. */
+export interface PlaudDocument {
+  kind: PlaudDocumentKind;
+  objectId: string;
+  contentId: string;
+  /** Plaud's `version_ms` for the content; sent back as `origin_version`. */
+  version: number;
+  content: string;
+}
+
+/** `POST /api/plaud-writeback/plan`. */
+export interface PlaudWritebackPlanRequest {
+  recordingId: string;
+  documents: PlaudDocument[];
+  /** Show the changes without recording a plan; `planId` comes back null. */
+  dryRun?: boolean;
+}
+
+export interface PlaudDocumentWrite {
+  kind: PlaudDocumentKind;
+  objectId: string;
+  contentId: string;
+  /** Send as `origin_version`; Plaud refuses the write if the document changed since. */
+  originVersion: number;
+  content: string;
+}
+
+export interface PlaudWritebackPlanResponse {
+  /** Null when there is nothing to write. */
+  planId: string | null;
+  status: "ready" | "nothing" | "stale";
+  reason: string | null;
+  /** In write order: transcript, polished transcript, summary (W5). */
+  documents: PlaudDocumentWrite[];
+  changes: PlaudWritebackChange[];
+  changedSegments: number;
+  summaryReplacements: number;
+}
+
+export interface PlaudWritebackResult {
+  kind: PlaudDocumentKind;
+  outcome: "applied" | "conflict" | "failed";
+  /** Plaud's `version_ms` after an applied write. */
+  newVersion?: number;
+  error?: string;
+}
+
+/** `POST /api/plaud-writeback/results`. */
+export interface PlaudWritebackResultsRequest {
+  planId: string;
+  results: PlaudWritebackResult[];
+}
+
+/** `GET /api/plaud-writeback/undoable`: recordings whose last send can be undone. */
+export interface PlaudWritebackUndoable {
+  recordingId: string;
+  title: string;
+  sentAt: number;
+}
+
+/** A browser extension paired with this Applaud. */
+export interface PlaudWritebackClient {
+  id: number;
+  name: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+/** `POST /api/plaud-writeback/pairing-code`. */
+export interface PlaudWritebackPairingCodeResponse {
+  code: string;
+  expiresAt: number;
+}
+
+/** `POST /api/plaud-writeback/pair`. */
+export interface PlaudWritebackPairRequest {
+  code: string;
+  name: string;
+}
+
+export interface PlaudWritebackPairResponse {
+  token: string;
+  clientId: number;
+  protocol: number;
 }

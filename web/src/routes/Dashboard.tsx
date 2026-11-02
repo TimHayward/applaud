@@ -155,6 +155,13 @@ export function Dashboard(): JSX.Element {
   });
   // Speaker identification: recordings with speakers still to name (empty while it's off).
   const review = useQuery({ queryKey: ["speaker-review"], queryFn: api.speakerReview, staleTime: 30_000 });
+  const toSend = useQuery({
+    queryKey: ["plaud-writeback", "pending"],
+    queryFn: api.plaudWritebackPending,
+    staleTime: 30_000,
+    enabled: review.data?.enabled === true,
+  });
+  const toSendById = new Map((toSend.data?.recordings ?? []).map((w) => [w.recordingId, w]));
 
   const resyncRecording = async (id: string, e: MouseEvent): Promise<void> => {
     e.preventDefault();
@@ -470,6 +477,12 @@ export function Dashboard(): JSX.Element {
                         <span className="text-tertiary normal-case tracking-normal font-semibold">
                           {review.data.recordings[r.id]} speaker{review.data.recordings[r.id] === 1 ? "" : "s"} to name
                         </span>
+                      </>
+                    ) : null}
+                    {toSendById.get(r.id)?.state === "to_send" || toSendById.get(r.id)?.state === "partial" ? (
+                      <>
+                        <span className="w-1 h-1 rounded-full bg-outline-variant" />
+                        <span className="text-tertiary normal-case tracking-normal font-semibold">Names to send to Plaud</span>
                       </>
                     ) : null}
                   </div>

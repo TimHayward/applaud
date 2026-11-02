@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "concurrently -n web,srv -c cyan,magenta \"pnpm -C web dev\" \"pnpm -C server dev\"",
     "build": "pnpm -C shared build && pnpm -C web build && pnpm -C server build",
+    "build:extension": "pnpm -C shared build && pnpm -C extension build",
     "start": "pnpm build && node server/dist/index.js",
     "start:nobuild": "node server/dist/index.js",
     "typecheck": "pnpm -r typecheck",

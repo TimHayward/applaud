@@ -14,7 +14,7 @@ const seg = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
 describe("normaliseSegments", () => {
   it("keeps a current Plaud segment as is, keyed by segment_uid", () => {
     expect(normaliseSegments([seg()])).toEqual([
-      { key: "u1", label: "Speaker 1", name: "Speaker 1", startMs: 1000, endMs: 4000, text: "Hello." },
+      { key: "u1", uid: "u1", label: "Speaker 1", name: "Speaker 1", startMs: 1000, endMs: 4000, text: "Hello." },
     ]);
   });
 
@@ -26,11 +26,14 @@ describe("normaliseSegments", () => {
   it("falls back to t<startMs> without a segment_uid", () => {
     const [s] = normaliseSegments([seg({ segment_uid: undefined, start_time: 2500, end_time: 3000 })]);
     expect(s?.key).toBe("t2500");
+    expect(s?.uid).toBeUndefined();
   });
 
   it("makes duplicate keys unique", () => {
-    const keys = normaliseSegments([seg(), seg({ start_time: 5000, end_time: 6000 })]).map((s) => s.key);
-    expect(keys).toEqual(["u1", "u1#2"]);
+    const out = normaliseSegments([seg(), seg({ start_time: 5000, end_time: 6000 })]);
+    expect(out.map((s) => s.key)).toEqual(["u1", "u1#2"]);
+    // A repeated uid can't address a segment in Plaud's documents, so neither keeps it.
+    expect(out.map((s) => s.uid)).toEqual([undefined, undefined]);
   });
 
   it("maps a missing speaker to UU and falls back to speaker for the label", () => {
