@@ -1,7 +1,7 @@
 /**
  * Service worker: holds the pairing with Applaud and runs dry runs, sends and
  * undos (plan section 3). Plaud is only ever reached through the content
- * script in a Plaud tab. One recording at a time (Phase 3).
+ * script in a Plaud tab. One send at a time, whether single or a batch.
  */
 import { PLAUD_WRITEBACK_PROTOCOL, type PlaudWritebackResult } from "@applaud/shared";
 import { ApplaudClient, ApplaudError, normaliseApplaudUrl } from "./applaud.js";
@@ -13,6 +13,7 @@ import type {
   Reply,
   StatusReply,
 } from "./messages.js";
+import { MAX_BATCH, newBatch, runBatch, type BatchItem, type BatchState } from "./batch.js";
 import { send, undo, type SendDeps } from "./send.js";
 
 interface Stored {
@@ -69,6 +70,53 @@ async function exclusive<T>(run: () => Promise<T>): Promise<T> {
   } finally {
     busy = false;
   }
+}
+
+/**
+ * The batch's progress lives in session storage, so a popup opened later
+ * (or on another window) can show it; the loop itself runs here.
+ */
+let batchActive = false;
+let batchStop = false;
+
+async function batchState(): Promise<BatchState | null> {
+  const v = (await chrome.storage.session.get("batch")) as { batch?: BatchState };
+  const state = v.batch ?? null;
+  // The worker restarted mid-batch (rare): the loop is gone, so say so.
+  if (state?.running && !batchActive) {
+    state.running = false;
+    state.current = null;
+    state.stoppedBecause = "the extension restarted; send the rest again";
+    state.finishedAt = Date.now();
+    await chrome.storage.session.set({ batch: state });
+  }
+  return state;
+}
+
+async function startBatch(items: BatchItem[]): Promise<BatchState> {
+  if (busy) throw new Error("A send is already running. Wait for it to finish");
+  const clean = items
+    .filter(
+      (i) => typeof i?.recordingId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(i.recordingId),
+    )
+    .slice(0, MAX_BATCH)
+    .map((i) => ({ recordingId: i.recordingId, title: String(i.title ?? "").slice(0, 200) }));
+  if (clean.length === 0) throw new Error("Nothing to send");
+  const deps = await sendDeps();
+  const state = newBatch(clean, Date.now());
+  await chrome.storage.session.set({ batch: state });
+  busy = true;
+  batchActive = true;
+  batchStop = false;
+  void runBatch(state, {
+    send: (id) => send(deps, id),
+    save: (s) => chrome.storage.session.set({ batch: s }),
+    stopRequested: () => batchStop,
+  }).finally(() => {
+    busy = false;
+    batchActive = false;
+  });
+  return state;
 }
 
 async function sendDeps(): Promise<SendDeps> {
@@ -204,6 +252,13 @@ async function handle(msg: PopupRequest): Promise<PopupReplies[PopupRequest["typ
       const deps = await sendDeps();
       return exclusive(() => undo(deps, msg.recordingId));
     }
+    case "sendAll":
+      return startBatch(Array.isArray(msg.items) ? msg.items : []);
+    case "batchStatus":
+      return batchState();
+    case "stopBatch":
+      batchStop = true;
+      return batchState();
     case "diagnose":
       return askPlaud({ type: "plaud.diagnose" });
     default:

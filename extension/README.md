@@ -13,21 +13,19 @@ Sends the speaker names you have confirmed in your own Applaud to Plaud, so that
 5. Applaud keeps the previous version of every document for 30 days. **Undo** (on the result, or under **Recently sent**) restores what the most recent send replaced, and is refused in the same way if Plaud changed since. Undoing again goes back one more send.
 6. Applaud's next sync confirms the names in Plaud through Plaud's official API.
 
-One recording at a time. See [the plan](../docs/plans/plaud-write-back-extension.md) for the design.
+**Send all** sends up to 25 recordings after one confirmation, one after another with a short pause. Each is read and checked exactly as a single send. A recording that changed in Plaud or can't be completed is noted and the batch carries on; a problem that would affect every recording (signed out of Plaud, sending switched off in Applaud, Applaud unreachable) stops it. It runs in the background: closing the popup doesn't stop it, and **Stop after this one** does. See [the plan](../docs/plans/plaud-write-back-extension.md) for the design.
 
 ## Install (Microsoft Edge; other Chromium browsers work the same way)
 
-1. Build it from the repository root:
-   ```bash
-   pnpm install
-   ```
-   ```bash
-   pnpm build:extension
-   ```
-2. Open `edge://extensions`, switch on **Developer mode**, choose **Load unpacked** and select `extension/dist`.
+1. Get the extension, either:
+   - **From a release:** download `applaud-extension-<version>.zip` from the [Applaud release](https://github.com/TimHayward/applaud/releases) that matches your Applaud, and unzip it; or
+   - **From source:** in the repository root, run `pnpm install` then `pnpm build:extension`; the extension is in `extension/dist`.
+2. Open `edge://extensions` (or `chrome://extensions`), switch on **Developer mode**, choose **Load unpacked** and select the unzipped `applaud-extension` folder (or `extension/dist`). The browser shows a reminder about developer-mode extensions from time to time; that is expected for an extension that isn't in a store.
 3. In Applaud, switch on **Settings → Speaker identification → Send names to Plaud** and choose **Pair an extension**.
 4. Click the extension's icon and choose **Pair with Applaud**. Pairing opens in a tab, because the browser asks permission for the extension to reach Applaud and that prompt would close the toolbar popup. Enter Applaud's address (for example `http://192.168.1.20:44471`) and the pairing code, choose **Pair**, and allow the permission.
-5. Open [web.plaud.ai](https://web.plaud.ai) in a tab and sign in. The extension lists the recordings Plaud is missing names for; **Dry run** shows what would change, and **Send to Plaud** writes it.
+5. Open [web.plaud.ai](https://web.plaud.ai) in a tab and sign in. The extension lists the recordings Plaud is missing names for; **Dry run** shows what would change, **Send to Plaud** writes it, and **Send all** sends up to 25 recordings in one go.
+
+To update, replace the folder's contents with the new release and choose **Reload** on the extension. The pairing is kept.
 
 ## What it can reach
 

@@ -151,3 +151,32 @@ h2 {
 body.tab {
   margin: 40px auto;
 }
+
+.batch {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.batch .btn {
+  align-self: flex-start;
+}
+.batch-log {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.row-start {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+details.recent > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+details.recent[open] > summary {
+  margin-bottom: 6px;
+}

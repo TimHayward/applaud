@@ -23,7 +23,10 @@ export function PlaudWritebackSettings({
   const toast = useToast();
   const [code, setCode] = useState<PlaudWritebackPairingCodeResponse | null>(null);
   const [working, setWorking] = useState(false);
-  const clients = useQuery({ queryKey: ["plaud-writeback-clients"], queryFn: api.plaudWritebackClients });
+  const clients = useQuery({
+    queryKey: ["plaud-writeback-clients"],
+    queryFn: api.plaudWritebackClients,
+  });
 
   const newCode = async (): Promise<void> => {
     setWorking(true);
@@ -55,10 +58,11 @@ export function PlaudWritebackSettings({
         <div className="space-y-1">
           <h3 className="text-sm font-semibold text-on-surface">Send names to Plaud</h3>
           <p className="text-xs text-on-surface-variant max-w-prose">
-            Lets the Applaud browser extension write the names you have confirmed into Plaud, so Plaud AI uses them.
-            It works through your own Plaud sign-in in the browser, shows you every change first, and can undo it.
-            This is not a Plaud feature and Plaud does not support it. Each recording&apos;s page lists the names
-            to send, so you can also enter them in Plaud yourself.
+            Lets the Applaud browser extension write the names you have confirmed into Plaud, so
+            Plaud AI uses them. It works through your own Plaud sign-in in the browser, shows you
+            every change first, and can undo it. This is not a Plaud feature and Plaud does not
+            support it. Each recording&apos;s page lists the names to send, so you can also enter
+            them in Plaud yourself.
           </p>
         </div>
         <label className="flex items-center gap-2 shrink-0 cursor-pointer">
@@ -72,6 +76,20 @@ export function PlaudWritebackSettings({
           <span className="text-sm font-semibold text-on-surface">{enabled ? "On" : "Off"}</span>
         </label>
       </div>
+
+      <p className="text-xs text-on-surface-variant max-w-prose">
+        Get the extension from the{" "}
+        <a
+          className="font-semibold text-primary hover:underline"
+          href="https://github.com/TimHayward/applaud/releases"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Applaud release
+        </a>{" "}
+        that matches this Applaud (applaud-extension-&lt;version&gt;.zip), and load it in Edge or
+        Chrome with Developer mode on. Then pair it here.
+      </p>
 
       <div className="space-y-3">
         <p className="text-sm font-semibold text-on-surface">Paired extensions</p>
@@ -115,8 +133,11 @@ export function PlaudWritebackSettings({
           {code && (
             <p className="text-sm text-on-surface-variant">
               Enter{" "}
-              <span className="font-mono text-base font-semibold text-on-surface tracking-widest">{code.code}</span> in
-              the extension. It works once, until {new Date(code.expiresAt).toLocaleTimeString()}.
+              <span className="font-mono text-base font-semibold text-on-surface tracking-widest">
+                {code.code}
+              </span>{" "}
+              in the extension. It works once, until {new Date(code.expiresAt).toLocaleTimeString()}
+              .
             </p>
           )}
         </div>

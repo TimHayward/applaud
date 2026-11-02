@@ -71,6 +71,7 @@ PACKAGES=(
   "server/package.json"
   "web/package.json"
   "shared/package.json"
+  "extension/package.json"
 )
 echo "==> bumping package.json versions"
 for p in "${PACKAGES[@]}"; do

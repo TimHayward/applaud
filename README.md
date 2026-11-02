@@ -13,6 +13,7 @@ A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recording
 - **Audio player** — custom player with waveform visualization, play/pause, skip -10s/+30s, click-to-seek
 - **Transcript viewer** — speaker-labeled, timestamped, color-coded blocks with auto-scroll during playback, click-to-seek, and full-text search within transcripts
 - **Speaker identification** — optional and off by default: recognises people by voice across recordings, with names you confirm applied to a separate `-Applaud` transcript. Runs entirely on your host (Docker image; see [Speaker identification](#speaker-identification))
+- **Names in Plaud** — optional: a browser extension sends the speaker names you confirmed to Plaud, so Plaud AI uses them (see [Sending names to Plaud](#sending-names-to-plaud))
 - **AI summaries** — rendered markdown with expandable full-screen modal for long summaries
 - **Webhooks** — POST JSON payloads on `audio_ready` and `transcript_ready` events for n8n, Zapier, or custom integrations
 - **Dark & light mode** — toggle between themes, defaults to system preference
@@ -246,6 +247,19 @@ A local (non-Docker) install still binds `127.0.0.1` and stays unauthenticated b
 Turn it on in **Settings → Speaker identification**. Applaud analyses each downloaded recording once in the background and learns your voice from recordings where Plaud tagged you. Name other people in the **Speakers** panel on a recording's page; from then on they are named automatically when the match is clear, and suggested when it is close. Plaud's own transcript files are never modified.
 
 The speaker model ships in the Docker image and runs inside the container, so audio and voiceprints never leave your host. Voiceprints are biometric data: they stay in Applaud's database and are not included in webhooks. A non-Docker install has no model by default; run `node scripts/fetch-speaker-model.mjs models` from the install folder to fetch it. Requirements, resource use and tuning are in the [Portainer guide](docs/portainer.md#speaker-identification), and they apply to any Docker host.
+
+### Sending names to Plaud
+
+Plaud AI only uses speaker names held in Plaud. Each recording's page in Applaud lists the confirmed names Plaud is missing, with a button to copy each one for entering in Plaud by hand. To send them for you, Applaud has a companion browser extension for Edge, Chrome and other Chromium browsers.
+
+> **Unofficial.** The extension is not affiliated with or supported by Plaud. It changes your recordings in your own Plaud account by doing what the Plaud web app does when you rename a speaker, using your own sign-in in the browser.
+
+1. Download `applaud-extension-<version>.zip` from the [release](https://github.com/TimHayward/applaud/releases) that matches your Applaud, unzip it, and in `edge://extensions` (or `chrome://extensions`) switch on **Developer mode** and choose **Load unpacked**.
+2. In Applaud, switch on **Settings → Speaker identification → Send names to Plaud** and choose **Pair an extension**.
+3. In the extension choose **Pair with Applaud**, then enter Applaud's address and the code.
+4. With [web.plaud.ai](https://web.plaud.ai) open and signed in, use **Dry run** and **Send to Plaud** on one recording, or **Send all**.
+
+Only names you confirmed are sent, never automatic matches. Plaud refuses any write to a document that changed since it was read, a send that stops part-way is completed by sending again, and every send can be undone for 30 days. Details, permissions and building from source: [extension/README.md](extension/README.md).
 
 ## Running in the background
 

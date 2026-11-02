@@ -1,6 +1,6 @@
 // Builds the extension into dist/ (load it unpacked from there).
 import { build } from "esbuild";
-import { cpSync, mkdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,3 +37,10 @@ await build({
   format: "iife",
 });
 cpSync(path.join(here, "static"), out, { recursive: true });
+
+// The extension carries the version of the Applaud release it was built with.
+const { version } = JSON.parse(readFileSync(path.join(here, "package.json"), "utf8"));
+const manifestPath = path.join(out, "manifest.json");
+const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+manifest.version = version;
+writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

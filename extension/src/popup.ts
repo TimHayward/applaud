@@ -9,6 +9,7 @@ import type {
   PlaudWritebackUndoable,
 } from "@applaud/shared";
 import { normaliseApplaudUrl } from "./applaud.js";
+import { MAX_BATCH, type BatchEntry, type BatchState } from "./batch.js";
 import type {
   ApplyReply,
   DryRunReply,
@@ -427,14 +428,17 @@ function renderMain(st: StatusReply): void {
     );
   }
   const recent = el("div");
+  const batchBox = el("div");
+  const canWrite = st.plaudTab && st.applaud?.enabled === true;
   show(
     header,
     ...facts,
+    batchBox,
     recent,
     list,
     el("p", {
       className: "muted small",
-      text: "Dry run shows exactly what would change. Nothing is written to Plaud until you choose Send to Plaud, one recording at a time.",
+      text: "Dry run shows exactly what would change. Nothing is written to Plaud until you choose Send to Plaud or Send all.",
     }),
     check,
     diagnosis,
@@ -444,14 +448,14 @@ function renderMain(st: StatusReply): void {
     return;
   }
   send({ type: "pending" }).then(
-    (recordings) =>
+    (recordings) => {
       list.replaceChildren(
         ...(recordings.length === 0
           ? [el("li", { className: "muted", text: "Plaud has every name you have confirmed." })]
-          : recordings.map((r) =>
-              recordingItem(r, st.plaudTab, st.plaudTab && st.applaud?.enabled === true),
-            )),
-      ),
+          : recordings.map((r) => recordingItem(r, st.plaudTab, canWrite))),
+      );
+      void showBatch(batchBox, recordings, canWrite, st);
+    },
     (err: unknown) =>
       list.replaceChildren(errorLine(err instanceof Error ? err.message : String(err))),
   );
@@ -462,7 +466,155 @@ function renderMain(st: StatusReply): void {
   );
 }
 
-/** Sends that can still be undone, newest first, at the top so they're easy to find. */
+const ENTRY_TEXT: Record<BatchEntry["status"], string> = {
+  applied: "sent",
+  partial: "stopped part-way",
+  stale: "skipped: changed in Plaud since Applaud's last sync",
+  nothing: "skipped: Plaud already has these names",
+  failed: "not sent",
+  error: "not sent",
+};
+
+function entryLine(e: BatchEntry): HTMLElement {
+  const ok = e.status === "applied";
+  const reason =
+    e.reason && !ok && e.status !== "stale" && e.status !== "nothing" ? `: ${e.reason}` : "";
+  return el("li", {
+    className: ok ? "" : e.status === "stale" || e.status === "nothing" ? "muted" : "error",
+    text: `${e.title} · ${ENTRY_TEXT[e.status]}${reason}`,
+  });
+}
+
+/** Where the batch stands: progress while it runs, the outcome after. */
+function renderBatchState(target: HTMLElement, state: BatchState, onDone: () => void): void {
+  const sent = state.done.filter((e) => e.status === "applied").length;
+  const skipped = state.done.filter((e) => e.status === "stale" || e.status === "nothing").length;
+  const failed = state.done.length - sent - skipped;
+  const parts: (Node | null)[] = [];
+  if (state.running) {
+    const at = Math.min(state.done.length + 1, state.items.length);
+    parts.push(
+      el("p", {
+        className: "ok",
+        text: `Sending ${at} of ${state.items.length}${state.current ? `: ${state.current.title}` : ""}…`,
+      }),
+      el("p", { className: "muted small", text: "You can close this popup; sending carries on." }),
+      button("Stop after this one", () => {
+        void send({ type: "stopBatch" });
+      }),
+    );
+  } else {
+    parts.push(
+      el("p", {
+        className: failed > 0 || state.stoppedBecause ? "error" : "ok",
+        text: `Sent ${sent} of ${state.items.length}${skipped ? `, skipped ${skipped}` : ""}${failed ? `, ${failed} not sent` : ""}.${
+          state.stoppedBecause === "stopped"
+            ? " Stopped as you asked."
+            : state.stoppedBecause
+              ? ` Stopped: ${state.stoppedBecause}.`
+              : ""
+        }`,
+      }),
+      button("Done", onDone, "btn primary"),
+    );
+  }
+  if (state.done.length > 0)
+    parts.push(el("ul", { className: "batch-log" }, ...state.done.map(entryLine)));
+  target.replaceChildren(el("section", { className: "batch" }, ...parts));
+}
+
+/**
+ * The Send all bar, or the batch in progress. A finished batch stays on show
+ * until Done, so its outcome isn't missed.
+ */
+async function showBatch(
+  target: HTMLElement,
+  recordings: PlaudWritebackRecording[],
+  canWrite: boolean,
+  st: StatusReply,
+): Promise<void> {
+  const refresh = (): void => {
+    void send({ type: "status" }).then(renderMain);
+  };
+  const done = (state: BatchState): void => {
+    void chrome.storage.session.set({ batchDismissed: state.startedAt }).then(refresh);
+  };
+  const follow = (state: BatchState): void => {
+    renderBatchState(target, state, () => done(state));
+    if (!state.running) return;
+    const timer = setInterval(() => {
+      void send({ type: "batchStatus" }).then((s) => {
+        if (!s) return;
+        renderBatchState(target, s, () => done(s));
+        if (!s.running) clearInterval(timer);
+      });
+    }, 1000);
+  };
+
+  const state = await send({ type: "batchStatus" }).catch(() => null);
+  const dismissed = (
+    (await chrome.storage.session.get("batchDismissed")) as { batchDismissed?: number }
+  ).batchDismissed;
+  if (state && (state.running || state.startedAt !== dismissed)) {
+    follow(state);
+    return;
+  }
+
+  const eligible = recordings.filter((r) => r.state === "to_send" || r.state === "partial");
+  if (!canWrite || eligible.length === 0) {
+    target.replaceChildren();
+    return;
+  }
+  const batch = eligible.slice(0, MAX_BATCH);
+  const lines = batch.reduce((n, r) => n + r.pendingSegments, 0);
+  const confirmBox = (): void => {
+    target.replaceChildren(
+      el(
+        "section",
+        { className: "batch" },
+        el("p", {
+          text: `Send names for ${batch.length} recording${batch.length === 1 ? "" : "s"} (${lines} line${lines === 1 ? "" : "s"})?${
+            eligible.length > batch.length
+              ? ` The first ${MAX_BATCH} of ${eligible.length}; send the rest afterwards.`
+              : ""
+          }`,
+        }),
+        el("p", {
+          className: "muted small",
+          text: "Each recording is read from Plaud again first. Any that changed since Applaud's last sync are skipped, and every send can be undone.",
+        }),
+        el(
+          "div",
+          { className: "row-start" },
+          button(
+            `Send ${batch.length} recording${batch.length === 1 ? "" : "s"}`,
+            () => {
+              send({
+                type: "sendAll",
+                items: batch.map((r) => ({ recordingId: r.recordingId, title: r.title })),
+              }).then(follow, (err: unknown) => target.replaceChildren(errorLine(message(err))));
+            },
+            "btn primary",
+          ),
+          button("Cancel", () => void showBatch(target, recordings, canWrite, st), "link"),
+        ),
+      ),
+    );
+  };
+  target.replaceChildren(
+    el(
+      "div",
+      { className: "row" },
+      el("span", {
+        className: "muted",
+        text: `${eligible.length} recording${eligible.length === 1 ? "" : "s"} with names to send`,
+      }),
+      button(`Send all (${batch.length})`, confirmBox, "btn primary"),
+    ),
+  );
+}
+
+/** Sends that can still be undone, newest first: collapsed at the top. */
 function renderRecent(
   target: HTMLElement,
   items: PlaudWritebackUndoable[],
@@ -475,9 +627,10 @@ function renderRecent(
   const shown = items.slice(0, 10);
   target.replaceChildren(
     el(
-      "section",
+      "details",
       { className: "recent" },
-      el("h2", { text: "Recently sent" }),
+      // Collapsed to start: the popup is for sending names; undo is the exception.
+      el("summary", { text: `Recently sent (${items.length})` }),
       canWrite
         ? null
         : el("p", { className: "muted small", text: "Open Plaud in a tab to undo a send." }),

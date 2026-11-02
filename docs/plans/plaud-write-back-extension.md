@@ -2,7 +2,7 @@
 
 |             |                                                                                                                                                                                                                                                          |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**  | Phases 1 to 3 complete and verified by the owner on the Portainer host and in Edge against Plaud (2026-11-01). Phase 4 (batch sends, release) not started. |
+| **Status**  | Phases 1 to 3 complete and verified by the owner on two computers in Edge against Plaud. Phase 4 built (batch sends, release packaging, install guide), not yet verified by the owner. |
 | **Updated** | 2026-11-01                                                                                                                                                                                                                                               |
 | **Owner**   | Tim Hayward                                                                                                                                                                                                                                              |
 | **Context** | Picks up "Write-back to Plaud" from [speaker-identification.md](speaker-identification.md) section 11. Automated server-side write-back was rejected; a browser extension acting in the user's own signed-in Plaud session is the option being explored. |
@@ -257,6 +257,27 @@ Differences from the plan above:
 
 - **Undo walks back one send at a time.** Each undo restores the most recent send still in force; after a partial send and its completion, two undos restore the original.
 - **A lost reply is reported as failed.** Plaud may have applied it; the next send reads Plaud afresh, so the work completes either way, but that one write is missing from the undo log.
+
+### 6.4 Phase 4 record
+
+Built 2026-11-02 on branch `claude/festive-clarke-b4rw0t`, after the owner tested Phase 3 on many recordings across two computers.
+
+| Item | State |
+| ---- | ----- |
+| **Send all**: up to 25 recordings after one confirmation, each sent exactly as a single send, 1.5 s apart (`extension/src/batch.ts`) | Done, with unit tests |
+| A recording that changed, has nothing to send, or stops part-way is noted and the batch carries on; signed out of Plaud, sending off in Applaud, Applaud unreachable, a protocol mismatch stop it | Done, with unit tests |
+| Runs in the service worker with progress in session storage: closing the popup doesn't stop it; **Stop after this one**; the outcome stays until **Done**; a worker restart mid-batch is reported | Done |
+| The preview comes from Applaud's pending list, so Plaud is read once per recording (during its send), not twice | Done |
+| **Recently sent** collapsed by default (owner's request) | Done |
+| Release: `release.yml` builds the extension from the tagged commit and attaches `applaud-extension-<tag>.zip`; `release-version.sh` bumps `extension/package.json`; the build stamps that version into the manifest; CI builds the extension on every push | Done; first exercised by the next release |
+| Install guide: README section, `extension/README.md`, a link in Applaud's settings | Done |
+| End to end in Chromium: three recordings, one changed in Plaud; the popup closed mid-batch and reopened; two sent, one skipped with no write attempted | Done |
+| Exit check: a week of normal use without a manual correction in Plaud | **Open** (owner) |
+
+Not done, deliberately:
+
+- **Store publication** (Edge Add-ons, Chrome Web Store) stays a separate decision (P9).
+- **Retrying the summary within a send** after the version conflict seen once in Phase 3: not seen again in the owner's testing, so left as it is.
 
 ## 7. Testing
 

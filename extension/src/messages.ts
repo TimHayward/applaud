@@ -5,6 +5,7 @@ import type {
   PlaudWritebackResult,
   PlaudWritebackUndoable,
 } from "@applaud/shared";
+import type { BatchItem, BatchState } from "./batch.js";
 import type { Diagnosis, ReadResult } from "./plaud.js";
 
 /** Popup → service worker. */
@@ -17,6 +18,9 @@ export type PopupRequest =
   | { type: "dryRun"; recordingId: string }
   | { type: "apply"; recordingId: string }
   | { type: "undo"; recordingId: string }
+  | { type: "sendAll"; items: BatchItem[] }
+  | { type: "batchStatus" }
+  | { type: "stopBatch" }
   | { type: "diagnose" };
 
 export interface StatusReply {
@@ -58,6 +62,9 @@ export interface PopupReplies {
   dryRun: DryRunReply;
   apply: ApplyReply;
   undo: ApplyReply;
+  sendAll: BatchState;
+  batchStatus: BatchState | null;
+  stopBatch: BatchState | null;
   diagnose: Diagnosis;
 }
 
