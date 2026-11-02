@@ -64,7 +64,35 @@ function browserName(): string {
   return "Browser";
 }
 
+/**
+ * Pairing runs in a normal tab, not the toolbar popup: Edge and Chrome close
+ * the popup when the permission prompt for Applaud's address appears, which
+ * loses what was typed.
+ */
+const IN_TAB = new URLSearchParams(location.search).has("tab");
+if (IN_TAB) document.body.classList.add("tab");
+
 function renderPairing(st: StatusReply | null, error: string | null): void {
+  if (!IN_TAB) {
+    show(
+      el("h1", { text: "Pair with Applaud" }),
+      el("p", {
+        className: "muted",
+        text: "Pairing opens in a tab, because your browser will ask permission for the extension to reach Applaud.",
+      }),
+      button(
+        "Pair with Applaud",
+        () => {
+          void chrome.tabs
+            .create({ url: chrome.runtime.getURL("popup.html?tab=1") })
+            .then(() => window.close());
+        },
+        "btn primary",
+      ),
+      error ? errorLine(error) : null,
+    );
+    return;
+  }
   const address = el("input");
   address.placeholder = "http://192.168.1.20:44471";
   address.value = st?.applaudUrl ?? "";
@@ -95,10 +123,26 @@ function renderPairing(st: StatusReply | null, error: string | null): void {
             name: `${browserName()} extension`,
           });
         })
-        .then(renderMain, (err: unknown) => {
-          pairButton.disabled = false;
-          message.replaceChildren(errorLine(err instanceof Error ? err.message : String(err)));
-        });
+        .then(
+          (paired) => {
+            if (!paired.paired) {
+              renderMain(paired);
+              return;
+            }
+            show(
+              el("h1", { text: "Paired" }),
+              el("p", {
+                className: "ok",
+                text: `The extension is paired with ${paired.applaudUrl}. Close this tab and use the Applaud button in the toolbar.`,
+              }),
+              button("Close this tab", () => window.close(), "btn primary"),
+            );
+          },
+          (err: unknown) => {
+            pairButton.disabled = false;
+            message.replaceChildren(errorLine(err instanceof Error ? err.message : String(err)));
+          },
+        );
     },
     "btn primary",
   );

@@ -108,7 +108,14 @@ async function askPlaud<K extends ContentRequest["type"]>(
   try {
     reply = (await chrome.tabs.sendMessage(tab.id, req)) as Reply<ContentReplies[K]> | undefined;
   } catch {
-    throw new Error("The Plaud tab isn't ready for the extension. Reload it and try again");
+    // A Plaud tab opened before the extension was installed or reloaded has no
+    // content script yet: add it, then ask once more.
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+      reply = (await chrome.tabs.sendMessage(tab.id, req)) as Reply<ContentReplies[K]> | undefined;
+    } catch {
+      throw new Error("The Plaud tab isn't ready for the extension. Reload it and try again");
+    }
   }
   if (!reply) throw new Error("The Plaud tab didn't answer. Reload it and try again");
   if (!reply.ok) throw new Error(reply.error);

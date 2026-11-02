@@ -216,6 +216,13 @@ describe("plaudWritebackRouter", () => {
     expect((await call("GET", "/pending", { token })).status).toBe(401);
   });
 
+  it("answers an unknown route itself instead of refusing the extension's token", async () => {
+    const token = await pairExtension();
+    const res = await call("GET", "/not-a-route", { token });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toMatch(/Update Applaud/);
+  });
+
   it("plans only for a paired extension speaking the same protocol, with writing switched on", async () => {
     const token = await pairExtension();
     const body = { recordingId: "f_1", documents: docs() };

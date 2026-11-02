@@ -246,6 +246,12 @@ Fixes after the first real sends:
 
 **Observed: the summary can be refused after the transcripts are written.** On one recording (the spike recording) Plaud accepted the transcript and polished transcript, then refused the summary with `version conflict, re-fetch and retry`. Its version was checked just before the first write, so it moved while the transcripts were being written. The likeliest cause is Plaud itself updating the summary when a transcript changes (the web app sends all three writes at once, so it would not meet this). Not confirmed. It is handled as designed: nothing was overwritten, the recording shows as stopped part-way, and sending again writes the summary from a fresh read. If it recurs often, Phase 4 can re-read and retry the summary once within the same send.
 
+Found installing on a second computer (2026-11-02), and fixed:
+
+- **The permission prompt closed the popup**, losing the address and code typed for pairing. Pairing now opens in a tab.
+- **A Plaud tab opened before the extension was installed had no content script** ("The Plaud tab isn't ready"). The extension now adds it on demand (`scripting` permission), and the script registers its listener only once so a write can't run twice.
+- **An extension newer than Applaud got "Pair it again"** for a route Applaud didn't have: the request fell through to the LAN-token guard, which refuses extension tokens. Unknown write-back routes now answer 404 with *update Applaud*.
+
 Differences from the plan above:
 
 - **Undo walks back one send at a time.** Each undo restores the most recent send still in force; after a partial send and its completion, two undos restore the original.

@@ -304,3 +304,16 @@ plaudWritebackRouter.delete("/clients/:id", uiOnly, (req, res) => {
   }
   res.json({ clients: listClients() });
 });
+
+/**
+ * Anything else under /api/plaud-writeback ends here rather than falling
+ * through to the LAN-token guard, which would refuse an extension token as
+ * "unauthorized" and wrongly tell the user to pair again. Most likely the
+ * extension is newer than this Applaud.
+ */
+plaudWritebackRouter.use((_req, res) => {
+  res.status(404).json({
+    error:
+      "Applaud doesn't support this yet. Update Applaud to the release the extension came with",
+  });
+});

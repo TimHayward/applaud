@@ -7,7 +7,7 @@
   "minimum_chrome_version": "116",
   "action": { "default_title": "Applaud", "default_popup": "popup.html" },
   "background": { "service_worker": "background.js", "type": "module" },
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting"],
   "host_permissions": ["https://web.plaud.ai/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "content_scripts": [
