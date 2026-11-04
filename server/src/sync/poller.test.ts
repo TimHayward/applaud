@@ -220,6 +220,13 @@ describe("poller", () => {
       expect(clientMocks.fetchContentText).toHaveBeenCalledTimes(1);
     });
 
+    it("takes the duration from the record when the listing had none", async () => {
+      clientMocks.listFiles.mockResolvedValue([listed(ID, START, { duration: null })]);
+      clientMocks.getFile.mockResolvedValue(detail(ID, START, { duration: 577_440 }));
+      await poller.trigger();
+      expect(getRecordingById(ID)!.durationMs).toBe(577_440);
+    });
+
     it("never stores the pre-signed links in metadata.json", async () => {
       await poller.trigger();
       const call = fsMocks.writeFileSync.mock.calls.find((c) => String(c[0]).includes("metadata.json"));

@@ -86,6 +86,7 @@ export function upsertFromPlaud(item: PlaudRecordingMeta): RecordingRow {
     if (existing.filename !== item.filename) {
       renameRecordingFolder(existing, item.filename);
     }
+    updateDuration(item.id, item.durationMs);
     return rowToRecording(
       db.prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?").get(item.id)!,
     );
@@ -114,6 +115,23 @@ export function upsertFromPlaud(item: PlaudRecordingMeta): RecordingRow {
     db
       .prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?")
       .get(item.id)!,
+  );
+}
+
+/**
+ * Take up Plaud's duration (ms) when it has one and it differs from the stored
+ * one. Recordings that upload in stages (Plaud One's `f_s_` ids) are listed
+ * before Plaud knows their length, with a duration of 0. Returns whether it changed.
+ */
+export function updateDuration(id: string, durationMs: number | null | undefined): boolean {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) return false;
+  const ms = Math.round(durationMs);
+  return (
+    getDb()
+      .prepare(
+        "UPDATE recordings SET duration_ms = ?, end_time = start_time + ? WHERE id = ? AND duration_ms != ?",
+      )
+      .run(ms, ms, id, ms).changes > 0
   );
 }
 

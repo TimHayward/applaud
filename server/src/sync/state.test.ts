@@ -115,6 +115,17 @@ describe("upsertFromPlaud", () => {
     expect(JSON.stringify(row)).not.toContain("/test/recordings");
   });
 
+  it("takes up a duration Plaud didn't have when the recording was first listed", () => {
+    // Plaud One recordings upload in stages and are listed with no duration at first.
+    const first = upsertFromPlaud(makePlaudItem({ durationMs: 0 }));
+    expect(first.durationMs).toBe(0);
+    const later = upsertFromPlaud(makePlaudItem({ durationMs: 577_440 }));
+    expect(later.durationMs).toBe(577_440);
+    expect(later.endTime).toBe(later.startTime + 577_440);
+    // A listing without a duration never erases a known one.
+    expect(upsertFromPlaud(makePlaudItem({ durationMs: 0 })).durationMs).toBe(577_440);
+  });
+
   it("keeps the audio filename set from the download URL across a folder rename", () => {
     upsertFromPlaud(makePlaudItem());
     setAudioFilename("abcdef0123456789", "audio.mp3");
