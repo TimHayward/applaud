@@ -7,8 +7,13 @@ import { getDb } from "../db.js";
 import { logger } from "../logger.js";
 import { signPayload } from "./sign.js";
 import { assertWebhookTargetAllowed, redirectFailureMessage } from "../security/ssrf.js";
-import { WEBHOOK_RETRY_BACKOFF_MS, HTTP_FETCH_TIMEOUT_MS, WEBHOOK_MEDIA_URL_TTL_MS } from "../constants.js";
+import {
+  WEBHOOK_RETRY_BACKOFF_MS,
+  HTTP_FETCH_TIMEOUT_MS,
+  WEBHOOK_MEDIA_URL_TTL_MS,
+} from "../constants.js";
 import { issueTicket, withTicket } from "../auth/ticket.js";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".svg"]);
 
@@ -17,7 +22,13 @@ interface DiscoveredAsset {
   type: WebhookAssetType;
 }
 
-const CORE_FILENAMES = new Set(["audio.ogg", "transcript.json", "transcript.txt", "summary.md", "metadata.json"]);
+const CORE_FILENAMES = new Set([
+  "audio.ogg",
+  "transcript.json",
+  "transcript.txt",
+  "summary.md",
+  "metadata.json",
+]);
 
 function readIfExists(absPath: string): string | null {
   try {
@@ -161,6 +172,22 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
   return payload;
 }
 
+/** Accepts any certificate: only for webhook targets the user marked as such. */
+let insecureAgent: Agent | null = null;
+
+/**
+ * `fetch`, or with certificate checks off when the user asked for that on a
+ * webhook target with a self-signed or private-CA certificate.
+ */
+function webhookFetch(url: string, init: RequestInit, insecureTls: boolean): Promise<Response> {
+  if (!insecureTls || !url.startsWith("https:")) return fetch(url, init);
+  insecureAgent ??= new Agent({ connect: { rejectUnauthorized: false } });
+  return undiciFetch(url, {
+    ...(init as Parameters<typeof undiciFetch>[1]),
+    dispatcher: insecureAgent,
+  }) as unknown as Promise<Response>;
+}
+
 /**
  * Node's fetch reports every connection problem as just "fetch failed"; the
  * reason (refused, timed out, TLS to a plain-HTTP port, an untrusted
@@ -179,9 +206,15 @@ export function describeFetchError(err: unknown): string {
         ? "the connection timed out"
         : code === "ERR_SSL_WRONG_VERSION_NUMBER" || /wrong version number/i.test(detail ?? "")
           ? "the URL uses https:// but the server speaks plain http:// (try http://)"
-          : code === "DEPTH_ZERO_SELF_SIGNED_CERT" || code === "SELF_SIGNED_CERT_IN_CHAIN" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
-            ? "the server's certificate isn't trusted"
-            : null;
+          : code === "DEPTH_ZERO_SELF_SIGNED_CERT" ||
+              code === "SELF_SIGNED_CERT_IN_CHAIN" ||
+              code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" ||
+              code === "UNABLE_TO_GET_ISSUER_CERT_LOCALLY" ||
+              code === "UNABLE_TO_GET_ISSUER_CERT"
+            ? "the server's certificate isn't trusted (self-signed or a private CA: see \"Don't check the target's certificate\")"
+            : code === "ERR_TLS_CERT_ALTNAME_INVALID"
+              ? "the server's certificate is for a different name than the one in the URL"
+              : null;
   return ["fetch failed", hint ?? detail ?? code].filter(Boolean).join(": ");
 }
 
@@ -251,20 +284,24 @@ export async function fireRaw(
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const started = Date.now();
     try {
-      const res = await fetch(url, {
-        redirect: "manual",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "user-agent": "applaud/0.1.0",
-          "x-applaud-event": event,
-          ...(signature
-            ? { "x-applaud-signature": signature, "x-applaud-timestamp": String(timestampSec) }
-            : {}),
+      const res = await webhookFetch(
+        url,
+        {
+          redirect: "manual",
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "user-agent": "applaud/0.1.0",
+            "x-applaud-event": event,
+            ...(signature
+              ? { "x-applaud-signature": signature, "x-applaud-timestamp": String(timestampSec) }
+              : {}),
+          },
+          body,
+          signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
         },
-        body,
-        signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
-      });
+        loadConfig()?.webhook?.insecureTls === true,
+      );
       const redirected = redirectFailureMessage(res);
       const text = redirected ? null : (await res.text().catch(() => "")).slice(0, 500);
       const ok = !redirected && res.status >= 200 && res.status < 300;
@@ -347,14 +384,16 @@ function buildTestPayload(): WebhookPayload & { test: true } {
     },
     content: {
       transcript_text: "This is a sample transcript from an Applaud test webhook.",
-      summary_markdown: "# Sample Summary\n\nThis is a sample summary from an Applaud test webhook.",
+      summary_markdown:
+        "# Sample Summary\n\nThis is a sample summary from an Applaud test webhook.",
       assets: [
         {
           name: "summary.md",
           type: "markdown",
           path: `${folder}/summary.md`,
           url: mediaUrl("summary.md"),
-          markdown_text: "# Sample Summary\\n\\nThis is a sample summary from an Applaud test webhook.",
+          markdown_text:
+            "# Sample Summary\\n\\nThis is a sample summary from an Applaud test webhook.",
         },
         {
           name: "Speech_Summary.md",
@@ -384,7 +423,14 @@ function buildTestPayload(): WebhookPayload & { test: true } {
 /** Test a webhook URL without retries, for UI validation. */
 export async function testWebhook(
   url: string,
-): Promise<{ ok: boolean; statusCode?: number; bodySnippet?: string; error?: string; durationMs: number }> {
+  opts: { insecureTls?: boolean } = {},
+): Promise<{
+  ok: boolean;
+  statusCode?: number;
+  bodySnippet?: string;
+  error?: string;
+  durationMs: number;
+}> {
   const started = Date.now();
   const body = JSON.stringify(buildTestPayload());
   const cfg = loadConfig();
@@ -402,22 +448,27 @@ export async function testWebhook(
       durationMs: Date.now() - started,
     };
   }
+  const insecureTls = opts.insecureTls ?? cfg.webhook?.insecureTls === true;
   try {
-    const res = await fetch(url, {
-      redirect: "manual",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "user-agent": "applaud/0.1.0",
-        "x-applaud-event": "transcript_ready",
-        "x-applaud-test": "1",
-        ...(signature
-          ? { "x-applaud-signature": signature, "x-applaud-timestamp": String(timestampSec) }
-          : {}),
+    const res = await webhookFetch(
+      url,
+      {
+        redirect: "manual",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "user-agent": "applaud/0.1.0",
+          "x-applaud-event": "transcript_ready",
+          "x-applaud-test": "1",
+          ...(signature
+            ? { "x-applaud-signature": signature, "x-applaud-timestamp": String(timestampSec) }
+            : {}),
+        },
+        body,
+        signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
       },
-      body,
-      signal: AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS),
-    });
+      insecureTls,
+    );
     const redirected = redirectFailureMessage(res);
     if (redirected) {
       return {

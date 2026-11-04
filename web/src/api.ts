@@ -121,10 +121,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(patch),
     }),
-  testWebhook: (url: string) =>
+  testWebhook: (url: string, insecureTls = false) =>
     jsonFetch<WebhookTestResponse>("/api/config/test-webhook", {
       method: "POST",
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, insecureTls }),
     }),
   /** `create` is opt-in: the server won't make the folder unless asked to. */
   validateRecordingsDir: (pathStr: string, create = false) =>
