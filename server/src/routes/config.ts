@@ -64,6 +64,8 @@ const PatchSchema = z.object({
       url: HttpUrl.or(z.literal("")),
       enabled: z.boolean().optional(),
       secret: z.string().optional(),
+      /** Don't verify the target's TLS certificate (self-signed / private CA). */
+      insecureTls: z.boolean().optional(),
     })
     .nullable()
     .optional(),
@@ -143,6 +145,10 @@ configRouter.post("/", (req, res) => {
           enabled: webhookEnabled,
           ...(mergedSecret ? { secret: mergedSecret } : {}),
           ...(webhookEnabledAt !== undefined ? { enabledAt: webhookEnabledAt } : {}),
+          // Kept as it was unless the patch says otherwise.
+          ...((patch.webhook.insecureTls ?? prev.webhook?.insecureTls)
+            ? { insecureTls: true }
+            : {}),
         }
       : patch.webhook,
     ...(patch.lanToken !== undefined ? { lanToken: mergedLanToken ?? null } : {}),
@@ -193,7 +199,7 @@ configRouter.post("/", (req, res) => {
   res.json({ config: redactConfig(next), ...(restartRequired ? { restartRequired: true } : {}) });
 });
 
-const TestWebhookSchema = z.object({ url: HttpUrl });
+const TestWebhookSchema = z.object({ url: HttpUrl, insecureTls: z.boolean().optional() });
 
 configRouter.post("/test-webhook", sensitiveLimiter, async (req, res) => {
   const parsed = TestWebhookSchema.safeParse(req.body);
@@ -201,7 +207,7 @@ configRouter.post("/test-webhook", sensitiveLimiter, async (req, res) => {
     res.status(400).json({ ok: false, error: "invalid URL — must be an http(s) URL" });
     return;
   }
-  const result = await testWebhook(parsed.data.url);
+  const result = await testWebhook(parsed.data.url, { insecureTls: parsed.data.insecureTls });
   res.json(result);
 });
 

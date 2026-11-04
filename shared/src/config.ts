@@ -14,6 +14,12 @@ export interface WebhookConfig {
    * Unset on configs that predate it, which means "no cutoff".
    */
   enabledAt?: number;
+  /**
+   * Don't verify the webhook target's TLS certificate (a self-signed or
+   * private-CA certificate). Deliveries and the test are still encrypted, but
+   * the receiver's identity isn't checked. Off by default.
+   */
+  insecureTls?: boolean;
 }
 
 /** Speaker identification (docs/plans/speaker-identification.md). */

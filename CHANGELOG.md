@@ -6,6 +6,7 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ### Added
 - **Send the webhook again once names are in Plaud** (Settings → Speaker identification → Send names to Plaud; off by default). After a send, once Applaud's re-read confirms Plaud has every confirmed name, it fires `transcript_ready` again, so receivers such as n8n get the transcript and summary with names. The receiver gets the recording twice; the second replaces the first if it saves by file name.
+- **Settings → Webhook Outbound → Don't check the target's certificate** (off by default), for an `https://` receiver with a self-signed or private-CA certificate, such as n8n on your network. The connection stays encrypted; the receiver's identity isn't checked.
 - `APPLAUD_WEBHOOK_ALLOW_PRIVATE` can now be set as a Portainer stack environment variable instead of by editing `docker-compose.yml`.
 
 ### Fixed

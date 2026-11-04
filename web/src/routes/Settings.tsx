@@ -25,6 +25,7 @@ export function Settings(): JSX.Element {
   const [webhookUrl, setWebhookUrl] = useState("");
   const [publicBaseUrl, setPublicBaseUrl] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+  const [insecureTls, setInsecureTls] = useState(false);
   const [secretExists, setSecretExists] = useState(false);
   const [secretTouched, setSecretTouched] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
@@ -52,6 +53,7 @@ export function Settings(): JSX.Element {
     if (!cfg.data || dirty) return;
     const c = cfg.data.config;
     setWebhookUrl(c.webhook?.url ?? "");
+    setInsecureTls(c.webhook?.insecureTls === true);
     setPublicBaseUrl(c.publicBaseUrl ?? "");
     setSecretExists(Boolean(c.webhook?.secret));
     setWebhookSecret("");
@@ -79,6 +81,7 @@ export function Settings(): JSX.Element {
             enabled: true,
             // Sent value: new secret if user typed one, sentinel to preserve existing, empty to clear.
             secret: webhookSecret.length > 0 ? webhookSecret : secretExists ? "***REDACTED***" : "",
+            insecureTls,
           }
         : null;
       await api.updateConfig({
@@ -142,7 +145,7 @@ export function Settings(): JSX.Element {
   const test = async (): Promise<void> => {
     setTestResult(null);
     try {
-      const r = await api.testWebhook(webhookUrl.trim());
+      const r = await api.testWebhook(webhookUrl.trim(), insecureTls);
       const snippet = r.bodySnippet?.slice(0, 400).trim();
       let message: string;
       if (r.error) {
@@ -433,6 +436,23 @@ export function Settings(): JSX.Element {
               Test
             </button>
           </div>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer"
+              checked={insecureTls}
+              onChange={(e) => {
+                setInsecureTls(e.target.checked);
+                setDirty(true);
+              }}
+            />
+            <span className="text-xs text-on-surface-variant">
+              <span className="block text-sm font-semibold text-on-surface">Don&apos;t check the target&apos;s certificate</span>
+              For an https:// receiver with a self-signed or private-CA certificate, such as n8n on your network. The
+              connection is still encrypted, but Applaud no longer confirms who it is talking to, so use it only for a
+              receiver on a network you trust.
+            </span>
+          </label>
           <div className="space-y-2">
             <label className="font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">
               Signing secret (optional)

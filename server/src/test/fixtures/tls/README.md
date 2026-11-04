@@ -1,0 +1,1 @@
+Test-only, self-signed certificate and key for `127.0.0.1` / `localhost`, used to check that webhook deliveries refuse an untrusted certificate unless certificate checks are switched off. Not used outside tests.

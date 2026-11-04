@@ -319,6 +319,8 @@ export interface WebhookRedeliverResponse {
 
 export interface WebhookTestRequest {
   url: string;
+  /** Test without verifying the target's certificate (the unsaved checkbox). */
+  insecureTls?: boolean;
 }
 
 export interface WebhookTestResponse {
