@@ -45,6 +45,7 @@ function statusBody(): SpeakerStatusResponse {
     enabled: s.enabled,
     ownerName: s.ownerName,
     sendToPlaud: s.sendToPlaud,
+    webhookWhenNamed: s.webhookWhenNamed,
     plaudNickname: cfg.plaudNickname,
     /** Names Plaud has tagged speakers with: candidates for the owner. */
     plaudNames: s.enabled ? observedPlaudNames() : [],

@@ -291,7 +291,12 @@ export function SpeakerSettings(): JSX.Element {
 
           <ThresholdSettings key={JSON.stringify(s.thresholds)} saved={s.thresholds} busy={busy} onSave={save} />
 
-          <PlaudWritebackSettings enabled={s.sendToPlaud} busy={busy} onSave={save} />
+          <PlaudWritebackSettings
+            enabled={s.sendToPlaud}
+            webhookWhenNamed={s.webhookWhenNamed}
+            busy={busy}
+            onSave={save}
+          />
         </>
       )}
     </section>

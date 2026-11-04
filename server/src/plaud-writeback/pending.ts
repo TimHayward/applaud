@@ -40,3 +40,11 @@ export function recordPending(
     now,
   );
 }
+
+/** Whether Plaud has every confirmed name for a recording that has any (count taken now). */
+export function namesInPlaud(recordingId: string): boolean {
+  const row = getDb()
+    .prepare("SELECT pending_segments FROM plaud_writeback WHERE recording_id = ?")
+    .get(recordingId) as { pending_segments: number } | undefined;
+  return row?.pending_segments === 0;
+}

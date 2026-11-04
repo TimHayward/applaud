@@ -38,6 +38,12 @@ export interface SpeakerConfig {
    * off refuses every write at once (W12).
    */
   sendToPlaud: boolean;
+  /**
+   * Fire `transcript_ready` again once a recording's confirmed names are in
+   * Plaud (after a send and Applaud's re-read), so webhook receivers get the
+   * named transcript and summary. Off by default.
+   */
+  webhookWhenNamed: boolean;
 }
 
 export const DEFAULT_SPEAKER_CONFIG: SpeakerConfig = {
@@ -49,6 +55,7 @@ export const DEFAULT_SPEAKER_CONFIG: SpeakerConfig = {
   suggestThreshold: 0.55,
   activeModelId: null,
   sendToPlaud: false,
+  webhookWhenNamed: false,
 };
 
 export interface AppConfig {

@@ -12,10 +12,12 @@ import { formatRelative } from "../lib/format.js";
  */
 export function PlaudWritebackSettings({
   enabled,
+  webhookWhenNamed,
   busy,
   onSave,
 }: {
   enabled: boolean;
+  webhookWhenNamed: boolean;
   busy: boolean;
   onSave: (patch: SpeakerSettingsPatch) => Promise<void>;
 }): JSX.Element {
@@ -90,6 +92,25 @@ export function PlaudWritebackSettings({
         that matches this Applaud (applaud-extension-&lt;version&gt;.zip), and load it in Edge or
         Chrome with Developer mode on. Then pair it here.
       </p>
+
+      <label className="flex items-start gap-3 cursor-pointer max-w-prose">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer"
+          checked={webhookWhenNamed}
+          disabled={busy}
+          onChange={(e) => void onSave({ webhookWhenNamed: e.target.checked })}
+        />
+        <span className="text-xs text-on-surface-variant">
+          <span className="block text-sm font-semibold text-on-surface">
+            Send the webhook again once names are in Plaud
+          </span>
+          After a send, when Applaud confirms Plaud has every name, it fires{" "}
+          <code>transcript_ready</code> again so receivers such as n8n get the named transcript and
+          summary. The receiver gets the recording twice; the second replaces the first if it saves
+          by file name.
+        </span>
+      </label>
 
       <div className="space-y-3">
         <p className="text-sm font-semibold text-on-surface">Paired extensions</p>

@@ -46,9 +46,10 @@ import {
 } from "../constants.js";
 import { fireWebhookForRecording, type FireOptions } from "../webhook/post.js";
 import { speakers } from "../speakers/service.js";
+import { namesInPlaud } from "../plaud-writeback/pending.js";
 import { emit } from "./events.js";
 import type { RecordingRow } from "@applaud/shared";
-import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
+import { sanitizePlaudSummaryMarkdown, speakerConfig } from "@applaud/shared";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -215,6 +216,16 @@ class Poller {
     const refreshed = getRecordingById(id);
     if (!refreshed) return;
     await this.processRecording(refreshed, true, { quiet: true });
+
+    // Optionally tell webhook receivers once the names are in Plaud, so they
+    // get the named transcript and summary (Settings → Speakers).
+    const cfg = loadConfig();
+    if (!speakerConfig(cfg).webhookWhenNamed || !namesInPlaud(id)) return;
+    const named = getRecordingById(id);
+    if (named?.transcriptDownloadedAt) {
+      logger.info({ id }, "names are in Plaud: sending transcript_ready again");
+      await this.deliverWebhook("transcript_ready", named);
+    }
   }
 
   /**
