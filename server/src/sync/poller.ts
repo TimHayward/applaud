@@ -34,6 +34,7 @@ import {
   setAudioFilename,
   setPlaudAvailability,
   type PlaudRecordingMeta,
+  updateDuration,
 } from "./state.js";
 import { audioFilenameForFiletype, ensureRecordingFolder, sanitizeFilename } from "./layout.js";
 import { writeFileAtomic } from "../fsAtomic.js";
@@ -454,6 +455,9 @@ class Poller {
         }
         throw err;
       }
+
+      // A recording first listed mid-upload had no duration yet; the record has it now.
+      if (updateDuration(row.id, detail.duration)) row = getRecordingById(row.id) ?? row;
 
       // Signed links expire after an hour, so everything below runs straight
       // after the record is fetched.

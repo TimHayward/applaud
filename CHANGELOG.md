@@ -4,6 +4,9 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+- **Recordings showed a duration of 0s** when Plaud listed them before it knew their length, as with the Plaud One, whose recordings upload in stages. Applaud now takes up the duration once Plaud has it, from the recording list or from the recording's record. Recent recordings correct on the next sync; **Sync Now** corrects older ones.
+
 ### Added
 - **Names to send to Plaud.** Plaud AI only uses speaker names held in Plaud. A recording's page now lists the confirmed names Plaud is still missing, by speaker or by line, with a button to copy each name for entering in Plaud. The Recordings list marks recordings with names to send. Only names you have confirmed are listed; automatic matches are not.
 - Groundwork for a browser extension that sends those names to Plaud for you (**Settings → Speaker identification → Send names to Plaud**, off by default, with pairing). API: `/api/plaud-writeback/*` (see `docs/api.md`).
