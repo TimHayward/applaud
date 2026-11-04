@@ -161,6 +161,30 @@ function buildPayload(event: WebhookEvent, row: RecordingRow): WebhookPayload {
   return payload;
 }
 
+/**
+ * Node's fetch reports every connection problem as just "fetch failed"; the
+ * reason (refused, timed out, TLS to a plain-HTTP port, an untrusted
+ * certificate) is in `cause`. Show it, so a failed test says what to fix.
+ */
+export function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = err.cause as { code?: unknown; message?: unknown } | undefined;
+  if (err.message !== "fetch failed" || !cause) return err.message;
+  const code = typeof cause.code === "string" ? cause.code : null;
+  const detail = typeof cause.message === "string" ? cause.message : null;
+  const hint =
+    code === "ECONNREFUSED"
+      ? "nothing is listening at that address and port"
+      : code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT"
+        ? "the connection timed out"
+        : code === "ERR_SSL_WRONG_VERSION_NUMBER" || /wrong version number/i.test(detail ?? "")
+          ? "the URL uses https:// but the server speaks plain http:// (try http://)"
+          : code === "DEPTH_ZERO_SELF_SIGNED_CERT" || code === "SELF_SIGNED_CERT_IN_CHAIN" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
+            ? "the server's certificate isn't trusted"
+            : null;
+  return ["fetch failed", hint ?? detail ?? code].filter(Boolean).join(": ");
+}
+
 function logAttempt(
   recordingId: string | null,
   event: WebhookEvent,
@@ -267,7 +291,7 @@ export async function fireRaw(
         null,
         null,
         Date.now() - started,
-        err instanceof Error ? err.message : String(err),
+        describeFetchError(err),
       );
       if (attempt < maxAttempts - 1) {
         await new Promise((r) => setTimeout(r, WEBHOOK_RETRY_BACKOFF_MS[attempt]));
@@ -374,7 +398,7 @@ export async function testWebhook(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: describeFetchError(err),
       durationMs: Date.now() - started,
     };
   }
@@ -413,7 +437,7 @@ export async function testWebhook(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: describeFetchError(err),
       durationMs: Date.now() - started,
     };
   }

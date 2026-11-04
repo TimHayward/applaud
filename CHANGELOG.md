@@ -9,6 +9,7 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 - `APPLAUD_WEBHOOK_ALLOW_PRIVATE` can now be set as a Portainer stack environment variable instead of by editing `docker-compose.yml`.
 
 ### Fixed
+- A webhook test or delivery that couldn't connect said only "fetch failed". It now gives the reason: nothing listening, a timeout, `https://` to a server that speaks plain `http://`, or an untrusted certificate.
 - **Recordings showed a duration of 0s** when Plaud listed them before it knew their length, as with the Plaud One, whose recordings upload in stages. Applaud now takes up the duration once Plaud has it, from the recording list or from the recording's record. Recent recordings correct on the next sync; **Sync Now** corrects older ones.
 
 ### Added
