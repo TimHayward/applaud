@@ -24,8 +24,8 @@ services:
       APPLAUD_ALLOWED_HOSTS: ${APPLAUD_ALLOWED_HOSTS:-}
       # Read on first start only; afterwards change it in Settings → LAN Access.
       APPLAUD_LAN_TOKEN: ${APPLAUD_LAN_TOKEN:-}
-      # Uncomment if a webhook target (e.g. n8n) is on your LAN or this host.
-      # APPLAUD_WEBHOOK_ALLOW_PRIVATE: "1"
+      # Set to 1 if a webhook target (e.g. n8n) is on your LAN or this host.
+      APPLAUD_WEBHOOK_ALLOW_PRIVATE: ${APPLAUD_WEBHOOK_ALLOW_PRIVATE:-}
     volumes:
       - config:/data/config
       - recordings:/data/recordings

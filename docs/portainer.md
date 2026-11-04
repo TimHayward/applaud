@@ -59,6 +59,7 @@ In Portainer: **Stacks → Add stack**.
    | `APPLAUD_PORT` | Host port the stack publishes. Use whatever port you want in `docker.hayward.mx:PORT`. |
    | `APPLAUD_ALLOWED_HOSTS` | Applaud rejects requests addressed to hostnames it doesn't know (a defence against DNS rebinding). IP addresses and `.lan` / `.local` / `.internal` / `.home.arpa` names are always accepted; `docker.hayward.mx` must be listed. Comma-separate several names. |
    | `APPLAUD_LAN_TOKEN` | Pins the access token. **Read on first start only**: once stored, change it in **Settings → LAN Access**, not here. |
+   | `APPLAUD_WEBHOOK_ALLOW_PRIVATE` | Optional. `1` lets Applaud deliver webhooks to a private address, such as n8n on your LAN or on this host. |
 
 7. Click **Deploy the stack**.
 
@@ -89,7 +90,7 @@ The stack creates two volumes, named after the stack:
    - **Connect your Plaud account:** click **Sign in with Plaud**. A new tab opens on Plaud's site; sign in and approve access. The tab returns to Applaud and shows "Plaud connected"; close it, and the wizard shows your account. Click **Continue**.
      Open Applaud on the same address you'll normally use (`docker.hayward.mx:PORT`) when you sign in: Plaud sends you back to the address you started from.
    - **Recordings folder:** enter **`/data/recordings`**. This is the path *inside the container*, backed by the `applaud_recordings` volume. Any other path would be lost when the container is recreated.
-   - **Webhook:** optional. A target on your LAN (for example n8n) also needs `APPLAUD_WEBHOOK_ALLOW_PRIVATE=1`; uncomment it in the compose file (see [Changing settings](#changing-settings)).
+   - **Webhook:** optional. A target on your LAN or on the same host (for example n8n) also needs the stack environment variable `APPLAUD_WEBHOOK_ALLOW_PRIVATE=1`. Set **Public URL** to the address other machines use for Applaud (for example `http://docker.example.lan:44471`) so the links in webhook payloads work as they are.
    - **Review:** set **days of history** (default 30). Recordings from that many days before today onwards download in full; older ones are listed as *details only* and can be downloaded individually with **Download**.
 
 3. Click **Save & start syncing**. The first sync indexes your whole Plaud library and downloads the recordings inside the history window.
@@ -141,7 +142,7 @@ Your settings, sign-in and recordings live in the volumes and survive both.
 
 - Most settings (history window, poll interval, webhook, LAN token) are in Applaud's **Settings** page.
 - Environment variables: **Stacks → applaud → Environment variables** → change → **Update the stack**. Remember that `APPLAUD_LAN_TOKEN` is only read on first start.
-- Compose-file changes (publishing on one IP, `APPLAUD_WEBHOOK_ALLOW_PRIVATE`) need to be in the repository the stack builds from. Commit them to the repository, or switch the stack to Portainer's **Web editor** with the same content if you want local-only changes (note that the web editor can't build from the repository, so this only works once there is a published image to use instead of `build:`).
+- Compose-file changes (such as publishing on one IP) need to be in the repository the stack builds from. Commit them to the repository, or switch the stack to Portainer's **Web editor** with the same content if you want local-only changes (note that the web editor can't build from the repository, so this only works once there is a published image to use instead of `build:`).
 
 ## Speaker identification
 

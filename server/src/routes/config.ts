@@ -91,6 +91,8 @@ const PatchSchema = z.object({
       suggestThreshold: z.number().min(0).max(1).optional(),
       /** Let a paired browser extension send confirmed names to Plaud. */
       sendToPlaud: z.boolean().optional(),
+      /** Fire transcript_ready again once a recording's names are in Plaud. */
+      webhookWhenNamed: z.boolean().optional(),
     })
     .optional(),
 });
@@ -154,6 +156,9 @@ configRouter.post("/", (req, res) => {
             ...(speakersPatch.enabled !== undefined ? { enabled: speakersPatch.enabled } : {}),
             ...(speakersPatch.ownerName !== undefined ? { ownerName: speakersPatch.ownerName || null } : {}),
             ...(speakersPatch.sendToPlaud !== undefined ? { sendToPlaud: speakersPatch.sendToPlaud } : {}),
+            ...(speakersPatch.webhookWhenNamed !== undefined
+              ? { webhookWhenNamed: speakersPatch.webhookWhenNamed }
+              : {}),
             ...thresholds,
           },
         }

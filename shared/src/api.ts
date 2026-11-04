@@ -144,6 +144,8 @@ export interface SpeakerStatusResponse extends SpeakerStatus {
   thresholds: SpeakerThresholds;
   /** Settings → Speakers → "Send names to Plaud". */
   sendToPlaud: boolean;
+  /** Fire `transcript_ready` again once a recording's names are in Plaud. */
+  webhookWhenNamed: boolean;
 }
 
 export interface SpeakerThresholds {
@@ -159,6 +161,7 @@ export interface SpeakerSettingsPatch extends Partial<SpeakerThresholds> {
   /** "" or null falls back to the Plaud nickname. */
   ownerName?: string | null;
   sendToPlaud?: boolean;
+  webhookWhenNamed?: boolean;
 }
 
 export type SpeakerLabelStatus = "confirmed" | "auto" | "suggested" | "unknown" | "ignored";

@@ -262,6 +262,39 @@ describe("poller", () => {
       expect(webhookMocks.fireWebhookForRecording.mock.calls.length).toBe(fired);
     });
 
+    it("sends transcript_ready again once names are in Plaud, when asked to", async () => {
+      const withHook = (webhookWhenNamed: boolean): AppConfig => ({
+        ...baseConfig,
+        webhook: { url: "https://hook.example/x", enabled: true, enabledAt: 0 },
+        speakers: { ...DEFAULT_SPEAKER_CONFIG, webhookWhenNamed },
+      });
+      const transcriptFires = () =>
+        webhookMocks.fireWebhookForRecording.mock.calls.filter((c) => c[0] === "transcript_ready").length;
+      const writeback = (pending: number) =>
+        db
+          .prepare(
+            `INSERT INTO plaud_writeback (recording_id, pending_segments, changes, updated_at) VALUES (?, ?, '[]', 0)
+             ON CONFLICT(recording_id) DO UPDATE SET pending_segments = excluded.pending_segments`,
+          )
+          .run(ID, pending);
+
+      loadConfig.mockReturnValue(withHook(true));
+      await poller.trigger();
+      const first = transcriptFires();
+
+      writeback(3); // Plaud doesn't have the names yet: stay quiet
+      await poller.confirmRecording(ID);
+      expect(transcriptFires()).toBe(first);
+
+      writeback(0); // every confirmed name is in Plaud
+      await poller.confirmRecording(ID);
+      expect(transcriptFires()).toBe(first + 1);
+
+      loadConfig.mockReturnValue(withHook(false)); // the setting is off by default
+      await poller.confirmRecording(ID);
+      expect(transcriptFires()).toBe(first + 1);
+    });
+
     it("records an error and retries later when Plaud has no audio link yet", async () => {
       clientMocks.getFile.mockResolvedValue(detail(ID, START, { presigned_url: null }));
       await poller.trigger();
