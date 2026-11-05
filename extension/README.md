@@ -27,6 +27,10 @@ Sends the speaker names you have confirmed in your own Applaud to Plaud, so that
 
 To update, replace the folder's contents with the new release and choose **Reload** on the extension. The pairing is kept.
 
+## Summary cards
+
+Plaud makes an image card for each summary. Its official API, which Applaud syncs from, doesn't provide it, so the extension fetches it from the Plaud tab: whenever it reads a recording for a dry run or send, and for the rest with **Fetch summary cards**. Applaud saves it as `summary_card.png` beside the recording's other files and links it at the top of `summary.md`. This only reads from Plaud.
+
 ## What it can reach
 
 | Permission | Why |

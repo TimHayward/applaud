@@ -30,6 +30,7 @@ import {
   recordResults,
 } from "../plaud-writeback/store.js";
 import { scheduleConfirmation } from "../plaud-writeback/confirm.js";
+import { cardsNeeded, markNoCard, saveCard } from "../plaud-writeback/cards.js";
 import { clientKey, createRateLimiter } from "../security/rate-limit.js";
 import { getRecordingById } from "../sync/state.js";
 
@@ -159,6 +160,47 @@ plaudWritebackRouter.get("/pending", (_req, res) => {
     recordings: s.enabled ? listPending() : [],
   };
   res.json(body);
+});
+
+plaudWritebackRouter.get("/cards/needed", (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100);
+  res.json({ recordings: cardsNeeded(limit) });
+});
+
+const CardBody = z.discriminatedUnion("status", [
+  // Base64 of a PNG of at most 10 MB.
+  z.object({ status: z.literal("found"), png: z.string().min(1).max(14 * 1024 * 1024) }),
+  z.object({ status: z.literal("none") }),
+]);
+
+/** A summary card the extension fetched from Plaud's web app, or word that there is none yet. */
+plaudWritebackRouter.post("/cards/:id", extensionOnly, (req, res) => {
+  const id = req.params.id ?? "";
+  const parsed = CardBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  if (!getRecordingById(id)) {
+    res.status(404).json({ error: "recording not found" });
+    return;
+  }
+  if (parsed.data.status === "none") {
+    markNoCard(id);
+    res.json({ ok: true });
+    return;
+  }
+  const dir = loadConfig().recordingsDir;
+  if (!dir) {
+    res.status(409).json({ error: "no recordings folder is set" });
+    return;
+  }
+  const out = saveCard(dir, id, Buffer.from(parsed.data.png, "base64"));
+  if (!out.ok) {
+    res.status(out.code).json({ error: out.error });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 plaudWritebackRouter.get("/undoable", (_req, res) => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import express from "express";
 import type { Server } from "node:http";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type Database from "better-sqlite3";
@@ -221,6 +221,56 @@ describe("plaudWritebackRouter", () => {
     const res = await call("GET", "/not-a-route", { token });
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error: string }).error).toMatch(/Update Applaud/);
+  });
+
+  it("takes a summary card from the extension and links it from the summary", async () => {
+    const token = await pairExtension();
+    db.prepare("UPDATE recordings SET summary_downloaded_at = 1 WHERE id = 'f_1'").run();
+    writeFileSync(path.join(dir, "f1", "summary.md"), "## Summary\nIt went well.");
+    const needed = async () =>
+      (
+        (await (await call("GET", "/cards/needed", { token })).json()) as {
+          recordings: { recordingId: string }[];
+        }
+      ).recordings.map((r) => r.recordingId);
+    expect(await needed()).toEqual(["f_1"]);
+
+    expect(
+      (await call("POST", "/cards/f_1", { token: LAN, body: { status: "none" } })).status,
+    ).toBe(403);
+    const notPng = Buffer.from("<svg/>").toString("base64");
+    expect(
+      (await call("POST", "/cards/f_1", { token, body: { status: "found", png: notPng } })).status,
+    ).toBe(400);
+
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from("rest"),
+    ]);
+    const res = await call("POST", "/cards/f_1", {
+      token,
+      body: { status: "found", png: png.toString("base64") },
+    });
+    expect(res.status).toBe(200);
+    expect(readFileSync(path.join(dir, "f1", "summary_card.png"))).toEqual(png);
+    expect(readFileSync(path.join(dir, "f1", "summary.md"), "utf8")).toBe(
+      "![](summary_card.png)\n\n## Summary\nIt went well.",
+    );
+    expect(await needed()).toEqual([]);
+  });
+
+  it("stops asking for a card Plaud doesn't have, until the summary changes", async () => {
+    const token = await pairExtension();
+    db.prepare("UPDATE recordings SET summary_downloaded_at = 1 WHERE id = 'f_1'").run();
+    await call("POST", "/cards/f_1", { token, body: { status: "none" } });
+    const needed = async () =>
+      ((await (await call("GET", "/cards/needed", { token })).json()) as { recordings: unknown[] })
+        .recordings;
+    expect(await needed()).toEqual([]);
+    db.prepare("UPDATE recordings SET summary_downloaded_at = ? WHERE id = 'f_1'").run(
+      Date.now() + 1000,
+    );
+    expect(await needed()).toHaveLength(1);
   });
 
   it("plans only for a paired extension speaking the same protocol, with writing switched on", async () => {

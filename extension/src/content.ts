@@ -4,7 +4,13 @@
  * and never stored or passed on. It writes only documents Applaud planned.
  */
 import type { ContentRequest, Reply } from "./messages.js";
-import { diagnose, readDocuments, writeDocuments, type PageContext } from "./plaud.js";
+import {
+  diagnose,
+  readDocuments,
+  readSummaryCard,
+  writeDocuments,
+  type PageContext,
+} from "./plaud.js";
 
 const ctx: PageContext = {
   storage: localStorage,
@@ -31,6 +37,8 @@ function listen(): void {
           return readDocuments(ctx, msg.fileId);
         case "plaud.write":
           return writeDocuments(ctx, msg.fileId, msg.writes);
+        case "plaud.card":
+          return readSummaryCard(ctx, msg.fileId);
         case "plaud.diagnose":
           return diagnose(ctx);
         default:

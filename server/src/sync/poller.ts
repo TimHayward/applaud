@@ -47,6 +47,7 @@ import {
 import { fireWebhookForRecording, type FireOptions } from "../webhook/post.js";
 import { speakers } from "../speakers/service.js";
 import { namesInPlaud } from "../plaud-writeback/pending.js";
+import { withSummaryCard } from "../plaud-writeback/cards.js";
 import { emit } from "./events.js";
 import type { RecordingRow } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown, speakerConfig } from "@applaud/shared";
@@ -534,11 +535,14 @@ class Poller {
         const isSummary = note.data_type === "auto_sum_note";
         if (isSummary) hasSummary = true;
         const dest = isSummary ? paths.summaryMdPath : path.join(paths.folder, noteFileName(note));
-        const toMarkdown = (raw: string): string =>
-          sanitizePlaudSummaryMarkdown(extractMarkdownFromSummaryPayload(raw) ?? raw, {
+        const toMarkdown = (raw: string): string => {
+          const md = sanitizePlaudSummaryMarkdown(extractMarkdownFromSummaryPayload(raw) ?? raw, {
             startTimeMs: row.startTime,
             endTimeMs: row.endTime,
           });
+          // Keep the summary card (fetched by the extension) linked across re-downloads.
+          return isSummary ? withSummaryCard(paths.folder, md) : md;
+        };
         const wrote = await this.saveBlock(note, dest, force || (isSummary && !row.summaryDownloadedAt), toMarkdown, row.id);
         if (isSummary && wrote) markSummaryDownloaded(row.id);
       }

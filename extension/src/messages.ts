@@ -6,7 +6,7 @@ import type {
   PlaudWritebackUndoable,
 } from "@applaud/shared";
 import type { BatchItem, BatchState } from "./batch.js";
-import type { Diagnosis, ReadResult } from "./plaud.js";
+import type { CardResult, Diagnosis, ReadResult } from "./plaud.js";
 
 /** Popup → service worker. */
 export type PopupRequest =
@@ -21,6 +21,8 @@ export type PopupRequest =
   | { type: "sendAll"; items: BatchItem[] }
   | { type: "batchStatus" }
   | { type: "stopBatch" }
+  | { type: "cardsNeeded" }
+  | { type: "fetchCards" }
   | { type: "diagnose" };
 
 export interface StatusReply {
@@ -65,17 +67,31 @@ export interface PopupReplies {
   sendAll: BatchState;
   batchStatus: BatchState | null;
   stopBatch: BatchState | null;
+  cardsNeeded: number;
+  fetchCards: CardsReply;
   diagnose: Diagnosis;
+}
+
+/** What fetching summary cards did. */
+export interface CardsReply {
+  found: number;
+  none: number;
+  notReady: number;
+  failed: number;
+  /** The first problem, when one stopped or failed a fetch. */
+  error: string | null;
 }
 
 /** Service worker → content script in a Plaud tab. */
 export type ContentRequest =
   | { type: "plaud.read"; fileId: string }
   | { type: "plaud.write"; fileId: string; writes: PlaudDocumentWrite[] }
+  | { type: "plaud.card"; fileId: string }
   | { type: "plaud.diagnose" };
 
 export interface ContentReplies {
   "plaud.read": ReadResult;
   "plaud.write": PlaudWritebackResult[];
+  "plaud.card": CardResult;
   "plaud.diagnose": Diagnosis;
 }

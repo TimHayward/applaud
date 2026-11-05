@@ -84,6 +84,15 @@ const MIGRATIONS: Migration[] = [
     // Null on existing rows until the next rebuild, which reads as "not yet counted".
     up: (d) => addColumn(d, "plaud_writeback", "pending_transcript_at", "INTEGER"),
   },
+  {
+    version: 8,
+    name: "summary cards fetched through the browser extension",
+    up: (d) => {
+      // When the card image was saved, and when the extension last found Plaud had none.
+      addColumn(d, "recordings", "summary_card_at", "INTEGER");
+      addColumn(d, "recordings", "summary_card_checked_at", "INTEGER");
+    },
+  },
 ];
 
 /** Schema version this build writes. */
