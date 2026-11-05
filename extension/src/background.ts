@@ -15,6 +15,7 @@ import type {
 } from "./messages.js";
 import { MAX_BATCH, newBatch, runBatch, type BatchItem, type BatchState } from "./batch.js";
 import { send, undo, type SendDeps } from "./send.js";
+import { fetchCardIfNeeded, fetchCards, type CardDeps } from "./cards.js";
 
 interface Stored {
   applaudUrl?: string;
@@ -103,13 +104,17 @@ async function startBatch(items: BatchItem[]): Promise<BatchState> {
     .map((i) => ({ recordingId: i.recordingId, title: String(i.title ?? "").slice(0, 200) }));
   if (clean.length === 0) throw new Error("Nothing to send");
   const deps = await sendDeps();
+  const cards = await cardDeps();
   const state = newBatch(clean, Date.now());
   await chrome.storage.session.set({ batch: state });
   busy = true;
   batchActive = true;
   batchStop = false;
   void runBatch(state, {
-    send: (id) => send(deps, id),
+    send: async (id) => {
+      await fetchCardIfNeeded(cards, id);
+      return send(deps, id);
+    },
     save: (s) => chrome.storage.session.set({ batch: s }),
     stopRequested: () => batchStop,
   }).finally(() => {
@@ -117,6 +122,15 @@ async function startBatch(items: BatchItem[]): Promise<BatchState> {
     batchActive = false;
   });
   return state;
+}
+
+async function cardDeps(): Promise<CardDeps> {
+  const app = await client();
+  return {
+    needed: async () => (await app.cardsNeeded()).recordings.map((r) => r.recordingId),
+    readCard: (fileId) => askPlaud({ type: "plaud.card", fileId }),
+    save: (id, body) => app.card(id, body),
+  };
 }
 
 async function sendDeps(): Promise<SendDeps> {
@@ -240,13 +254,26 @@ async function handle(msg: PopupRequest): Promise<PopupReplies[PopupRequest["typ
       const app = await client();
       const read = await askPlaud({ type: "plaud.read", fileId: msg.recordingId });
       const plan = await app.dryRun(msg.recordingId, read.documents);
+      // While this recording is open in Plaud anyway: its summary card, if Applaud lacks it.
+      await fetchCardIfNeeded(await cardDeps(), msg.recordingId);
       return { plan, warnings: read.warnings };
     }
     case "undoable":
       return (await (await client()).undoable()).recordings;
     case "apply": {
       const deps = await sendDeps();
-      return exclusive(() => send(deps, msg.recordingId));
+      const cards = await cardDeps();
+      // The card first, so Applaud's re-read and webhook after the send carry it.
+      return exclusive(async () => {
+        await fetchCardIfNeeded(cards, msg.recordingId);
+        return send(deps, msg.recordingId);
+      });
+    }
+    case "cardsNeeded":
+      return (await (await client()).cardsNeeded(100)).recordings.length;
+    case "fetchCards": {
+      const cards = await cardDeps();
+      return exclusive(() => fetchCards(cards));
     }
     case "undo": {
       const deps = await sendDeps();

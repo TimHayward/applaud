@@ -426,6 +426,7 @@ function renderMain(st: StatusReply): void {
   }
   const recent = el("div");
   const batchBox = el("div");
+  const cardsBox = el("div");
   const canWrite = st.plaudTab && st.applaud?.enabled === true;
   show(
     header,
@@ -433,6 +434,7 @@ function renderMain(st: StatusReply): void {
     batchBox,
     recent,
     list,
+    cardsBox,
     el("p", {
       className: "muted small",
       text: "Dry run shows exactly what would change. Nothing is written to Plaud until you choose Send to Plaud or Send all.",
@@ -457,6 +459,7 @@ function renderMain(st: StatusReply): void {
     (err: unknown) =>
       list.replaceChildren(errorLine(err instanceof Error ? err.message : String(err))),
   );
+  if (st.plaudTab) void showCards(cardsBox);
   send({ type: "undoable" }).then(
     (items) => renderRecent(recent, items, st.plaudTab && st.applaud?.enabled === true),
     (err: unknown) =>
@@ -658,6 +661,61 @@ function confirmUnpair(target: HTMLElement, st: StatusReply, batchRunning: boole
   target.firstElementChild?.setAttribute("role", "alertdialog");
   no.focus();
   target.scrollIntoView({ block: "end" });
+}
+
+/**
+ * Summary cards Applaud still needs. They come from the Plaud web app (Plaud's
+ * official API doesn't provide them); sends fetch a recording's card on the
+ * way, and this fetches the rest.
+ */
+async function showCards(target: HTMLElement): Promise<void> {
+  const count = await send({ type: "cardsNeeded" }).catch(() => 0);
+  if (count === 0) {
+    target.replaceChildren();
+    return;
+  }
+  const go = button(
+    "Fetch summary cards",
+    () => {
+      go.disabled = true;
+      target.replaceChildren(
+        el("p", { className: "muted small", text: "Fetching summary cards from Plaud…" }),
+      );
+      send({ type: "fetchCards" }).then(
+        (r) => {
+          const parts = [
+            `${r.found} card${r.found === 1 ? "" : "s"} saved`,
+            r.notReady ? `${r.notReady} not made by Plaud yet` : "",
+            r.none ? `${r.none} without a card` : "",
+            r.failed ? `${r.failed} failed${r.error ? ` (${r.error})` : ""}` : "",
+          ].filter(Boolean);
+          target.replaceChildren(
+            el("p", {
+              className: r.failed ? "error small" : "ok small",
+              text: `${parts.join(", ")}.`,
+            }),
+            el("p", {
+              className: "muted small",
+              text: "To send them to your webhook, use Redeliver in Applaud for those recordings.",
+            }),
+          );
+        },
+        (err: unknown) => target.replaceChildren(errorLine(message(err))),
+      );
+    },
+    "link",
+  );
+  target.replaceChildren(
+    el(
+      "div",
+      { className: "row" },
+      el("span", {
+        className: "muted small",
+        text: `${count === 100 ? "100+" : count} recording${count === 1 ? "" : "s"} may have a summary card to fetch`,
+      }),
+      go,
+    ),
+  );
 }
 
 /** Sends that can still be undone, newest first: collapsed at the top. */

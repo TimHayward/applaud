@@ -7,6 +7,7 @@ import {
   readDocuments,
   readDeviceId,
   readToken,
+  readSummaryCard,
   readWorkspaceId,
   VERSION_CONFLICT,
   writeDocuments,
@@ -378,5 +379,70 @@ describe("finding the session token", () => {
       readToken(storage({ "pld_session.tokens": JSON.stringify({ user: "someone" }) })),
     ).toBeNull();
     expect(readToken(storage({ pld_tokenstr: "abc" }))).toBeNull();
+  });
+});
+
+describe("readSummaryCard", () => {
+  const API = "https://api-euc1.plaud.ai";
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const cardId = "c_01a1a6b64bfe7828b02b1c7d4b230986";
+
+  function tab(opts: { summary?: string; mapping?: Record<string, string>; card?: Response }) {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/files/detail/")) {
+        return new Response(
+          JSON.stringify({
+            status: 0,
+            data: {
+              objects: [object("TRANSCRIPT", 1), object("SUMMARY", 2)],
+              relation_content_mapping: opts.mapping ?? {},
+            },
+          }),
+        );
+      }
+      if (url.startsWith("https://store.example/SUMMARY")) return new Response(opts.summary ?? "");
+      if (url.startsWith("https://cards.example/")) return opts.card ?? new Response(PNG);
+      return new Response("", { status: 404 });
+    });
+    const c: PageContext = {
+      storage: storage({ pld_tokenstr: TOKEN, pld_plaud_user_api_domain: API }),
+      resourceUrls: () => [],
+      fetch: fetchImpl as unknown as typeof fetch,
+      language: "en",
+    };
+    return { c, fetchImpl };
+  }
+  const withRef = `[](plaud://image?type=summaryCard&id=${cardId})\n\n## Summary`;
+
+  it("downloads the card the summary refers to, without credentials", async () => {
+    const { c, fetchImpl } = tab({
+      summary: withRef,
+      mapping: { [cardId]: "https://cards.example/card_1.png?sig=1" },
+    });
+    const out = await readSummaryCard(c, "f_1");
+    expect(out).toEqual({ status: "found", png: Buffer.from(PNG).toString("base64") });
+    const cardCall = (fetchImpl.mock.calls as unknown as [string, RequestInit][]).find(([u]) =>
+      u.startsWith("https://cards.example/"),
+    );
+    expect(cardCall?.[1].credentials).toBe("omit");
+  });
+
+  it("tells a summary without a card from a card Plaud hasn't made yet", async () => {
+    expect(await readSummaryCard(tab({ summary: "## Summary" }).c, "f_1")).toEqual({
+      status: "none",
+    });
+    expect(await readSummaryCard(tab({ summary: withRef }).c, "f_1")).toEqual({
+      status: "not_ready",
+    });
+  });
+
+  it("refuses anything that isn't a PNG", async () => {
+    const t = tab({
+      summary: withRef,
+      mapping: { [cardId]: "https://cards.example/x" },
+      card: new Response("<svg/>"),
+    });
+    await expect(readSummaryCard(t.c, "f_1")).rejects.toThrow(/PNG/);
   });
 });

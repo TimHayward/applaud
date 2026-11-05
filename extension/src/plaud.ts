@@ -178,9 +178,18 @@ interface DetailObject {
 }
 
 /** The documents in a `files/detail` response, checked. */
-export function parseDetail(body: unknown): { objects: DetailObject[]; warnings: string[] } {
+export function parseDetail(body: unknown): {
+  objects: DetailObject[];
+  warnings: string[];
+  /** Content id → signed link, for content a document refers to (such as the summary card). */
+  relations: Record<string, string>;
+} {
   if (!body || typeof body !== "object") throw new PlaudError("Plaud's reply was not JSON");
-  const b = body as { status?: unknown; msg?: unknown; data?: { objects?: unknown } };
+  const b = body as {
+    status?: unknown;
+    msg?: unknown;
+    data?: { objects?: unknown; relation_content_mapping?: unknown };
+  };
   if (b.status !== 0) {
     throw new PlaudError(
       `Plaud refused the request (${String(b.status)}${typeof b.msg === "string" ? `: ${b.msg}` : ""})`,
@@ -210,7 +219,14 @@ export function parseDetail(body: unknown): { objects: DetailObject[]; warnings:
     if (n > 1)
       warnings.push(`Plaud has ${n} ${OBJECT_KINDS[type]} documents; they are left as they are`);
   }
-  return { objects: objects.filter((o) => seen.get(o.object_type) === 1), warnings };
+  const relations: Record<string, string> = {};
+  const mapping = b.data.relation_content_mapping;
+  if (mapping && typeof mapping === "object") {
+    for (const [id, url] of Object.entries(mapping as Record<string, unknown>)) {
+      if (/^c_[A-Za-z0-9]{8,64}$/.test(id) && typeof url === "string") relations[id] = url;
+    }
+  }
+  return { objects: objects.filter((o) => seen.get(o.object_type) === 1), warnings, relations };
 }
 
 export interface ReadResult {
@@ -233,7 +249,7 @@ async function fetchDetail(
   origin: string,
   token: string,
   fileId: string,
-): Promise<{ objects: DetailObject[]; warnings: string[] }> {
+): Promise<ReturnType<typeof parseDetail>> {
   const res = await ctx.fetch(`${origin}/file-app/v4/files/detail/${encodeURIComponent(fileId)}`, {
     headers: headers(ctx, token),
   });
@@ -268,6 +284,57 @@ export async function readDocuments(ctx: PageContext, fileId: string): Promise<R
     });
   }
   return { documents, warnings };
+}
+
+/** The summary's reference to its card, as Plaud writes it at the top of the summary. */
+const CARD_REF = /plaud:\/\/image\?type=summaryCard&id=(c_[A-Za-z0-9]{8,64})/;
+const CARD_MAX_BYTES = 10 * 1024 * 1024;
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/**
+ * - `found`: the card, as base64 PNG.
+ * - `none`: the summary refers to no card.
+ * - `not_ready`: it refers to one Plaud hasn't produced yet.
+ */
+export type CardResult =
+  { status: "found"; png: string } | { status: "none" } | { status: "not_ready" };
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/**
+ * The summary card Plaud's web app shows for a recording. Plaud's official
+ * API names the card but never provides it; the web app's file detail maps
+ * its id to a signed link to the PNG. Read only.
+ */
+export async function readSummaryCard(ctx: PageContext, fileId: string): Promise<CardResult> {
+  const { token, origin } = session(ctx, fileId);
+  const { objects, relations } = await fetchDetail(ctx, origin, token, fileId);
+  const summary = objects.find((o) => o.object_type === "SUMMARY");
+  if (!summary) return { status: "none" };
+  const res = await ctx.fetch(summary.content_url, { credentials: "omit" });
+  if (!res.ok) throw new PlaudError(`Couldn't download Plaud's summary (HTTP ${res.status})`);
+  const ref = CARD_REF.exec(await res.text());
+  if (!ref) return { status: "none" };
+  const url = relations[ref[1]!];
+  if (!url) return { status: "not_ready" };
+  if (!/^https:\/\//.test(url))
+    throw new PlaudError("Plaud's link to the summary card isn't https");
+
+  const card = await ctx.fetch(url, { credentials: "omit" });
+  if (card.status === 403 || card.status === 404) return { status: "not_ready" };
+  if (!card.ok) throw new PlaudError(`Couldn't download the summary card (HTTP ${card.status})`);
+  const bytes = new Uint8Array(await card.arrayBuffer());
+  if (bytes.length === 0 || bytes.length > CARD_MAX_BYTES)
+    throw new PlaudError("The summary card is empty or too large");
+  if (!PNG_SIGNATURE.every((b, i) => bytes[i] === b))
+    throw new PlaudError("The summary card isn't a PNG image");
+  return { status: "found", png: toBase64(bytes) };
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));

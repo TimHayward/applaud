@@ -5,6 +5,7 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 ## [Unreleased]
 
 ### Added
+- **Summary cards are back**, through the browser extension. Plaud's official API names a summary's card image but doesn't provide it, so the extension fetches it from your signed-in Plaud tab: on the way when it reads a recording for a dry run or send, and for the rest with **Fetch summary cards** (up to 25 at a time). Applaud saves it as `summary_card.png` and links it at the top of `summary.md`, so webhook receivers get it as an image asset. A recording without a card is not asked about again until its summary changes; a recent one is re-checked, since Plaud makes cards some time after the summary.
 - **Send the webhook again once names are in Plaud** (Settings → Speaker identification → Send names to Plaud; off by default). After a send, once Applaud's re-read confirms Plaud has every confirmed name, it fires `transcript_ready` again, so receivers such as n8n get the transcript and summary with names. The receiver gets the recording twice; the second replaces the first if it saves by file name.
 - **Settings → Webhook Outbound → Don't check the target's certificate** (off by default), for an `https://` receiver with a self-signed or private-CA certificate, such as n8n on your network. The connection stays encrypted; the receiver's identity isn't checked.
 - `APPLAUD_WEBHOOK_ALLOW_PRIVATE` can now be set as a Portainer stack environment variable instead of by editing `docker-compose.yml`.

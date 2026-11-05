@@ -507,3 +507,11 @@ export interface PlaudWritebackPairResponse {
   clientId: number;
   protocol: number;
 }
+
+/** `GET /api/plaud-writeback/cards/needed`: recordings whose summary card the extension can fetch. */
+export interface PlaudCardsNeededResponse {
+  recordings: { recordingId: string; title: string }[];
+}
+
+/** `POST /api/plaud-writeback/cards/:id`: a card the extension fetched, or that Plaud has none (yet). */
+export type PlaudCardRequest = { status: "found"; png: string } | { status: "none" };

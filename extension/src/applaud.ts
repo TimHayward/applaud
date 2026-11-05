@@ -11,6 +11,8 @@ import {
   type PlaudWritebackPlanResponse,
   type PlaudWritebackResult,
   type PlaudWritebackUndoable,
+  type PlaudCardRequest,
+  type PlaudCardsNeededResponse,
 } from "@applaud/shared";
 
 export class ApplaudError extends Error {
@@ -115,5 +117,14 @@ export class ApplaudClient {
 
   undoable(): Promise<{ recordings: PlaudWritebackUndoable[] }> {
     return this.call("GET", "/undoable");
+  }
+
+  /** Recordings whose summary card is worth fetching, newest first. */
+  cardsNeeded(limit = 25): Promise<PlaudCardsNeededResponse> {
+    return this.call("GET", `/cards/needed?limit=${limit}`);
+  }
+
+  card(recordingId: string, body: PlaudCardRequest): Promise<{ ok: boolean }> {
+    return this.call("POST", `/cards/${encodeURIComponent(recordingId)}`, body);
   }
 }
