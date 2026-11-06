@@ -245,6 +245,45 @@ describe("planRecording", () => {
     expect(plan).toMatchObject({ status: "ready", summaryReplacements: 0 });
   });
 
+  it("checks the polished transcript against its own synced copy after an undo in Plaud", () => {
+    // The undo restored the transcript's generic names but left the polished
+    // transcript with the earlier, wrong ones.
+    const wrong = plaudTranscript().map((s) =>
+      s.original_speaker === "Speaker 2" ? { ...s, speaker: "Wrong Name" } : s,
+    );
+    const [t, , s] = docs();
+    const polished = { kind: "polished" as const, content: JSON.stringify(wrong) };
+    const stale = planRecording(desired(), [t!, polished, s!]);
+    expect(stale).toMatchObject({ status: "stale" });
+    if (stale.status === "stale") expect(stale.reason).toContain('Plaud has "Wrong Name"');
+
+    const synced = new Map(wrong.map((x) => [x.segment_uid, x.speaker]));
+    const plan = planRecording(desired(), [t!, polished, s!], { polishedSynced: synced });
+    if (plan.status === "stale") throw new Error(plan.reason);
+    const out = JSON.parse(plan.documents.get("polished")!) as { speaker: string }[];
+    expect(out.map((x) => x.speaker)).toEqual([
+      "Speaker 1",
+      "Ben Example",
+      "Speaker 1",
+      "Tim Hayward",
+      "Ben Example",
+    ]);
+  });
+
+  it("still refuses a polished name that matches neither synced copy", () => {
+    const [t, , s] = docs();
+    const other = plaudTranscript().map((s) =>
+      s.original_speaker === "Speaker 2" ? { ...s, speaker: "Someone Else" } : s,
+    );
+    const synced = new Map(plaudTranscript().map((x) => [x.segment_uid, "Wrong Name"]));
+    const plan = planRecording(
+      desired(),
+      [t!, { kind: "polished", content: JSON.stringify(other) }, s!],
+      { polishedSynced: synced },
+    );
+    expect(plan).toMatchObject({ status: "stale" });
+  });
+
   it("has nothing to do when Plaud already has the names", () => {
     const written = plaudTranscript().map((s) =>
       s.original_speaker === "Speaker 2" ? { ...s, speaker: "Ben Example" } : s,
