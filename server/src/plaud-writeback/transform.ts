@@ -128,6 +128,7 @@ export type TranscriptRewrite =
 export function rewriteTranscript(
   content: string,
   desired: ReadonlyMap<string, DesiredName>,
+  synced?: ReadonlyMap<string, string>,
 ): TranscriptRewrite {
   let doc: unknown;
   try {
@@ -159,10 +160,14 @@ export function rewriteTranscript(
         return { ok: false, reason: `segment ${uid} now has label ${label}, not ${d.label}` };
       }
       if (before !== d.name) {
-        if (before !== d.expected) {
+        // `synced`: this document's own name for the segment when Applaud last
+        // synced. Plaud's transcript and polished transcript can disagree (an
+        // undo in Plaud restores one and not the other), so each is checked
+        // against its own synced copy as well as the transcript's.
+        if (before !== d.expected && before !== synced?.get(uid)) {
           return {
             ok: false,
-            reason: `segment ${uid} was renamed in Plaud since Applaud last synced`,
+            reason: `segment ${uid} was renamed in Plaud since Applaud last synced (Plaud has "${before}", Applaud expected "${d.expected}")`,
           };
         }
         seg.speaker = d.name;
@@ -254,6 +259,7 @@ export type RecordingPlan =
 export function planRecording(
   desired: ReadonlyMap<string, DesiredName>,
   docs: PlaudDocumentIn[],
+  opts: { polishedSynced?: ReadonlyMap<string, string> } = {},
 ): RecordingPlan {
   const transcript = docs.find((d) => d.kind === "transcript");
   if (!transcript) return { status: "stale", reason: "Plaud returned no transcript" };
@@ -265,7 +271,7 @@ export function planRecording(
 
   const polished = docs.find((d) => d.kind === "polished");
   if (polished) {
-    const p = rewriteTranscript(polished.content, desired);
+    const p = rewriteTranscript(polished.content, desired, opts.polishedSynced);
     if (!p.ok) return { status: "stale", reason: `polished transcript: ${p.reason}` };
     if (p.content !== null) documents.set("polished", p.content);
   }

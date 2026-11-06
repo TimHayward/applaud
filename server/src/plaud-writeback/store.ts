@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type {
   PlaudDocument,
   PlaudDocumentKind,
@@ -197,6 +199,27 @@ function validateDocuments(docs: PlaudDocument[]): string | null {
  * Build the documents to write for one recording from Plaud's current ones
  * (section 3, step 3), and log them as planned with their previous content.
  */
+/**
+ * `speaker` by `segment_uid` from a transcript document Applaud synced, or
+ * an empty map when it is missing or not in the expected shape.
+ */
+export function syncedSpeakers(path: string): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    if (!existsSync(path)) return out;
+    const doc: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!Array.isArray(doc)) return out;
+    for (const item of doc as unknown[]) {
+      const seg = item as Record<string, unknown> | null;
+      if (seg && typeof seg.segment_uid === "string" && typeof seg.speaker === "string")
+        out.set(seg.segment_uid, seg.speaker);
+    }
+  } catch {
+    /* unreadable: check against the transcript alone */
+  }
+  return out;
+}
+
 export function createPlan(
   recordingsDir: string,
   recordingId: string,
@@ -221,7 +244,11 @@ export function createPlan(
   }
 
   if (!opts.dryRun) prune(now);
-  const plan = planRecording(desired, docs);
+  const plan = planRecording(desired, docs, {
+    polishedSynced: syncedSpeakers(
+      join(dirname(loaded.paths.transcriptJsonPath), "transcript_polished.json"),
+    ),
+  });
   if (plan.status === "stale") {
     if (!opts.dryRun) setResult(recordingId, "stale", plan.reason, now);
     return { ok: true, body: { planId: null, status: "stale", reason: plan.reason, ...empty } };
