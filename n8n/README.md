@@ -6,6 +6,7 @@ Importable [n8n](https://n8n.io) workflows that consume Applaud webhook events.
 | --- | --- |
 | `applaud-transcript-email.json` | Summarize new transcripts with Claude and email the result |
 | `file-organisation.json` | Mirror each recording's files to an FTP server |
+| `applaud-notes-to-nas-and-vault.json` | Write notes to a NAS folder and copy them into an Obsidian vault |
 
 ## applaud-transcript-email.json
 
@@ -87,3 +88,46 @@ Notes:
 
 - The workflow downloads each file over HTTP from the `http_urls` in the payload, so n8n must be able to reach your Applaud instance. Set **Settings → Webhook Outbound → Public URL** in Applaud to an address n8n can reach (e.g. `http://192.168.1.20:44471`) and the URLs arrive ready to use — the **Rewrite URLs** node then has nothing to rewrite. If you've set a LAN access token, each URL already carries a signed, read-only `?ticket=` for that recording, so there's no need to put the token in n8n. (Older setups that rewrite `127.0.0.1` and append `?token=<your token>` keep working; that form is deprecated.)
 - `audio_ready` events are filtered out (**Drop Audio Only**) so files are uploaded once, when the transcript is complete.
+
+## applaud-notes-to-nas-and-vault.json
+
+Writes each recording's summary, summary image, transcript and other Plaud markdown to a mounted folder (`/data/applaud/YYYY/MM/`), then copies each file into an Obsidian vault. It replaces a scheduled script that moved files from a synced folder into the vault.
+
+```
+Webhook → Drop Audio Only → Config → Make folders → Rewrite URLs → (download/format) → Write (NAS) → Vault Paths → Copy to Vault
+```
+
+Vault layout, by recording date in Europe/London (Config → `vault_root`, default `/vault/003. Meetings`):
+
+```
+<vault_root>/YYYY/MM/
+  Summary/          <name> - Summary.md
+  Summary/images/   <name> - Summary.png   (linked from the summary as images/…)
+  Transcript/       <name> - Transcript.md
+  Other/            Speech Summary and other Plaud markdown
+```
+
+The NAS layout stays as it was: the summary sits in `YYYY/MM/` and links to `Summary/images/…`. When **Copy to Vault** copies a summary, it changes that link to `images/…` so it still resolves from inside `Summary/`.
+
+**Existing files are never overwritten.** If the vault already holds the file with identical content, it's left alone. If the content differs (for example you've edited the note, or Applaud sent the recording again), the existing note is kept and the new version is saved alongside it as `<name>-YYYYMMDD-HHMMSS.md`. The NAS copy is always overwritten with the latest version.
+
+### Setup
+
+1. Mount the vault into the n8n container at `/vault`. When the vault is a named volume from another compose project, declare it as external:
+
+   ```yaml
+   services:
+     n8n:
+       volumes:
+         - obsidian_vault:/vault
+   volumes:
+     obsidian_vault:
+       external: true
+       name: mcp-obsidian_vault
+   ```
+
+2. Make sure n8n writes as the same user that owns the vault, otherwise Obsidian (and Obsidian Sync) may be unable to edit or rename the files. Compare `docker exec n8n id` with the owner of the vault folder; the `n8nio/n8n` image runs as `node` (UID 1000).
+3. **Make folders** and **Copy to Vault** are Execute Command nodes, which n8n 2.x disables by default. Set `NODES_EXCLUDE=[]` on the n8n container. **Copy to Vault** creates its folders itself, so you don't need to add the vault to `N8N_RESTRICT_FILE_ACCESS_TO`.
+4. Import the workflow, set `vault_root` in **Config** if your meetings folder differs, and activate it.
+
+The vault copy is made from the file just written to the NAS, so if a NAS write fails, that file isn't copied to the vault either. The execution shows the error.
