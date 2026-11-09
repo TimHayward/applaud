@@ -4,21 +4,31 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
-### Added
-- **Summary cards are back**, through the browser extension. Plaud's official API names a summary's card image but doesn't provide it, so the extension fetches it from your signed-in Plaud tab: on the way when it reads a recording for a dry run or send, and for the rest with **Fetch summary cards** (up to 25 at a time). Applaud saves it as `summary_card.png` and links it at the top of `summary.md`, so webhook receivers get it as an image asset. A recording without a card is not asked about again until its summary changes; a recent one is re-checked, since Plaud makes cards some time after the summary.
-- **Send the webhook again once names are in Plaud** (Settings → Speaker identification → Send names to Plaud; off by default). After a send, once Applaud's re-read confirms Plaud has every confirmed name, it fires `transcript_ready` again, so receivers such as n8n get the transcript and summary with names. The receiver gets the recording twice; the second replaces the first if it saves by file name.
-- **Settings → Webhook Outbound → Don't check the target's certificate** (off by default), for an `https://` receiver with a self-signed or private-CA certificate, such as n8n on your network. The connection stays encrypted; the receiver's identity isn't checked.
-- `APPLAUD_WEBHOOK_ALLOW_PRIVATE` can now be set as a Portainer stack environment variable instead of by editing `docker-compose.yml`.
-
-### Fixed
-- A webhook test or delivery that couldn't connect said only "fetch failed". It now gives the reason: nothing listening, a timeout, `https://` to a server that speaks plain `http://`, or an untrusted certificate.
-- **Recordings showed a duration of 0s** when Plaud listed them before it knew their length, as with the Plaud One, whose recordings upload in stages. Applaud now takes up the duration once Plaud has it, from the recording list or from the recording's record. Recent recordings correct on the next sync; **Sync Now** corrects older ones.
+## [0.6.1] - 2026-11-09
 
 ### Added
 - **Names to send to Plaud.** Plaud AI only uses speaker names held in Plaud. A recording's page now lists the confirmed names Plaud is still missing, by speaker or by line, with a button to copy each name for entering in Plaud. The Recordings list marks recordings with names to send. Only names you have confirmed are listed; automatic matches are not.
 - Groundwork for a browser extension that sends those names to Plaud for you (**Settings → Speaker identification → Send names to Plaud**, off by default, with pairing). API: `/api/plaud-writeback/*` (see `docs/api.md`).
 - **Browser extension** (`extension/`, Chromium browsers, load unpacked; see `extension/README.md`). It pairs with Applaud, reads your recordings through your own signed-in Plaud tab, shows a dry run of the names it would send, and on **Send to Plaud** writes them, one recording at a time. Plaud refuses any write to a document that changed since it was read; a send that stops part-way is completed by sending again; **Undo** restores what the last send replaced. **Send all** sends up to 25 recordings after one confirmation, carrying on past a recording that changed and stopping at a problem that would affect them all. Each release attaches the extension as `applaud-extension-<version>.zip`. Unofficial and not affiliated with Plaud.
 - After a send, Applaud re-reads the recording from Plaud by itself to confirm it (keeping a local title, and without firing a webhook).
+- **Summary cards are back**, through the browser extension. Plaud's official API names a summary's card image but doesn't provide it, so the extension fetches it from your signed-in Plaud tab: on the way when it reads a recording for a dry run or send, and for the rest with **Fetch summary cards** (up to 25 at a time). Applaud saves it as `summary_card.png` and links it at the top of `summary.md`, so webhook receivers get it as an image asset. A recording without a card is not asked about again until its summary changes; a recent one is re-checked, since Plaud makes cards some time after the summary.
+- **Send the webhook again once names are in Plaud** (Settings → Speaker identification → Send names to Plaud; off by default). After a send, once Applaud's re-read confirms Plaud has every confirmed name, it fires `transcript_ready` again, so receivers such as n8n get the transcript and summary with names. The receiver gets the recording twice; the second replaces the first if it saves by file name.
+- **Settings → Webhook Outbound → Don't check the target's certificate** (off by default), for an `https://` receiver with a self-signed or private-CA certificate, such as n8n on your network. The connection stays encrypted; the receiver's identity isn't checked.
+- `APPLAUD_WEBHOOK_ALLOW_PRIVATE` can now be set as a Portainer stack environment variable instead of by editing `docker-compose.yml`.
+- **Speaker status** on the Recordings list, beside the audio, transcript and summary marks: speakers to label, to confirm, to sync to Plaud, or synced. Speakers named automatically are counted as **to confirm**, since only confirmed names are sent to Plaud; the Speakers panel says so and offers **Confirm all**.
+- **Recordings sidebar** on a recording's page, with each recording's speaker status, to move between recordings. Drag its edge to resize it, or hide it; both are remembered.
+- **Recordings per page** (10, 20, 50 or 100) at the bottom of the Recordings list, remembered.
+- A favicon, also used as the extension's icon.
+
+### Changed
+- The GitHub link in the header points to this repository.
+
+### Fixed
+- A webhook test or delivery that couldn't connect said only "fetch failed". It now gives the reason: nothing listening, a timeout, `https://` to a server that speaks plain `http://`, or an untrusted certificate.
+- **Recordings showed a duration of 0s** when Plaud listed them before it knew their length, as with the Plaud One, whose recordings upload in stages. Applaud now takes up the duration once Plaud has it, from the recording list or from the recording's record. Recent recordings correct on the next sync; **Sync Now** corrects older ones.
+- After undoing speaker names in Plaud, a send could fail for good with "polished transcript: segment … was renamed in Plaud since Applaud last synced", as Plaud's undo restores the transcript but not the polished transcript. Each document is now checked against its own synced copy.
+- After a transcription is retried in Plaud, the extension refused the recording ("Plaud's POLISHED_TRANSCRIPT entry is not in the expected shape"), so its summary card and sends failed. A polished transcript or summary Plaud hasn't produced yet is now left alone, with a warning.
+- A recording renamed in Plaud long after it was first listed kept its old title until a full **Sync Now**. Applaud now takes Plaud's current name whenever it fetches the recording, including **Resync Recording**.
 
 ## [0.6.0] - 2026-10-30
 

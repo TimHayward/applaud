@@ -2,18 +2,47 @@
   "manifest_version": 3,
   "name": "Applaud: speaker names to Plaud",
   "short_name": "Applaud",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Sends the speaker names you confirmed in your own Applaud to Plaud. Unofficial; not affiliated with Plaud.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "minimum_chrome_version": "116",
-  "action": { "default_title": "Applaud", "default_popup": "popup.html" },
-  "background": { "service_worker": "background.js", "type": "module" },
-  "permissions": ["storage", "scripting"],
-  "host_permissions": ["https://web.plaud.ai/*"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_title": "Applaud",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://web.plaud.ai/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://web.plaud.ai/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://web.plaud.ai/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
