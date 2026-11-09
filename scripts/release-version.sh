@@ -87,6 +87,18 @@ for p in "${PACKAGES[@]}"; do
   ' "$p" "$NEW_NO_V"
 done
 
+# The extension's manifest carries its own version: keep it with the release.
+MANIFEST="extension/static/manifest.json"
+if [ -f "$MANIFEST" ]; then
+  node -e '
+    const fs = require("fs");
+    const [path, version] = [process.argv[1], process.argv[2]];
+    const text = fs.readFileSync(path, "utf8");
+    const next = text.replace(/("version":\s*")[^"]+(")/, `$1${version}$2`);
+    if (next !== text) { fs.writeFileSync(path, next); console.log(`  ${path}: → ${version}`); }
+  ' "$MANIFEST" "$NEW_NO_V"
+fi
+
 echo
 echo "==> diff summary"
 git --no-pager diff --stat

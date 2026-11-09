@@ -29,12 +29,12 @@ First, you should never run commands you find on the internet that end in `| sh`
 
 **macOS / Linux / WSL:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TimHayward/applaud/v0.6.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/TimHayward/applaud/v0.6.1/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/TimHayward/applaud/v0.6.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/TimHayward/applaud/v0.6.1/install.ps1 | iex
 ```
 
 The installer does everything needed to install Applaud into a subfolder named `./applaud`. To run it:
@@ -207,7 +207,7 @@ The `n8n/` folder contains importable n8n workflow templates. To use one, open n
 
 > **Portainer:** see [`docs/portainer.md`](docs/portainer.md) for a step-by-step guide (stack built from this repository, LAN-only access, network requirements, updates and backups).
 
-Each release publishes an image for linux/amd64 and linux/arm64 as `ghcr.io/timhayward/applaud:v0.6.0` and `:latest`. To build from source instead:
+Each release publishes an image for linux/amd64 and linux/arm64 as `ghcr.io/timhayward/applaud:v0.6.1` and `:latest`. To build from source instead:
 
 ```bash
 git clone https://github.com/TimHayward/applaud.git

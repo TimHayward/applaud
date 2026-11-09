@@ -210,4 +210,4 @@ Files are served by Applaud itself (player, downloads, webhook URLs). On the Doc
 
 ## Switching to a released image
 
-Each tagged release publishes a multi-architecture image, for example `ghcr.io/timhayward/applaud:v0.6.0`. To switch, replace `build: .`, `image: applaud:local` and `pull_policy: build` in the stack with `image: ghcr.io/timhayward/applaud:v0.6.0` and redeploy. The volumes, and therefore your sign-in and library, carry over.
+Each tagged release publishes a multi-architecture image, for example `ghcr.io/timhayward/applaud:v0.6.1`. To switch, replace `build: .`, `image: applaud:local` and `pull_policy: build` in the stack with `image: ghcr.io/timhayward/applaud:v0.6.1` and redeploy. The volumes, and therefore your sign-in and library, carry over.

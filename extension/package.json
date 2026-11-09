@@ -1,6 +1,6 @@
 {
   "name": "@applaud/extension",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "description": "Browser extension that sends confirmed speaker names from Applaud to Plaud (docs/plans/plaud-write-back-extension.md).",
