@@ -7,7 +7,7 @@ vi.mock("../logger.js", () => ({
 
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 import { addVoiceprint, deleteVoiceprint, VOICEPRINT_CAP } from "./library.js";
-import { deletePerson, labelsToConfirm, labelsToReview, listPeople, listVoiceprints, mergePeople, renamePerson } from "./people.js";
+import { deletePerson, labelsConfirmed, labelsToConfirm, labelsToReview, listPeople, listVoiceprints, mergePeople, renamePerson } from "./people.js";
 
 let db: Database.Database;
 
@@ -148,5 +148,7 @@ describe("people", () => {
     label("r2", "S2", null, "auto");
     expect(labelsToReview()).toEqual({ r1: 2 });
     expect(labelsToConfirm()).toEqual({ r1: 2 });
+    label("r1", "S6", null, "confirmed");
+    expect(labelsConfirmed()).toEqual({ r1: 1 });
   });
 });

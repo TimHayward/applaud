@@ -21,6 +21,7 @@ import { rankCandidates } from "../speakers/matcher.js";
 import { applaudSegments, loadSegments } from "../speakers/outputs.js";
 import {
   deletePerson,
+  labelsConfirmed,
   labelsToConfirm,
   labelsToReview,
   listPeople,
@@ -81,6 +82,7 @@ speakersRouter.get("/speakers/review", (_req, res) => {
     enabled,
     recordings: enabled ? labelsToReview() : {},
     toConfirm: enabled ? labelsToConfirm() : {},
+    confirmed: enabled ? labelsConfirmed() : {},
   };
   res.json(body);
 });

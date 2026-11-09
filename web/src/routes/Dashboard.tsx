@@ -8,8 +8,21 @@ import { useRecordingActions } from "../hooks/useRecordingActions.js";
 import { useToast } from "../components/Toast.js";
 import { formatDurationClock, formatDateShort, formatBytes } from "../lib/format.js";
 import type { RecordingRow, RecordingsSort } from "@applaud/shared";
+import { SpeakerStatusPill, useSpeakerStatuses } from "../components/SpeakerStatus.js";
+import type { SpeakerStatus } from "../lib/speakerStatus.js";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZES = [10, 20, 50, 100] as const;
+const PAGE_SIZE_KEY = "applaud-page-size";
+const DEFAULT_PAGE_SIZE = 50;
+
+function savedPageSize(): number {
+  try {
+    const n = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return (PAGE_SIZES as readonly number[]).includes(n) ? n : DEFAULT_PAGE_SIZE;
+  } catch {
+    return DEFAULT_PAGE_SIZE;
+  }
+}
 
 const SORT_OPTIONS: { value: RecordingsSort; label: string }[] = [
   { value: "date_desc", label: "Newest first" },
@@ -32,7 +45,7 @@ function dateStringToToMs(s: string): number | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.getTime();
 }
 
-function StatusDots({ row }: { row: RecordingRow }): JSX.Element {
+function StatusDots({ row, speakers }: { row: RecordingRow; speakers: SpeakerStatus | null }): JSX.Element {
   if (row.status === "metadata_only") {
     return (
       <div className="flex items-center gap-2 text-[10px] font-label font-bold uppercase tracking-widest">
@@ -50,10 +63,13 @@ function StatusDots({ row }: { row: RecordingRow }): JSX.Element {
   const hasSummary =
     !!row.summaryDownloadedAt && (row.isTrash || hasTranscript);
   return (
-    <div className="flex items-center gap-2 text-[10px] font-label font-bold uppercase tracking-widest">
-      <StatusPill on={hasAudio} label="audio" color="secondary" />
-      <StatusPill on={hasTranscript} label="transcript" color="primary" />
-      <StatusPill on={hasSummary} label="summary" color="primary" />
+    <div className="flex flex-col items-end gap-2 text-[10px] font-label font-bold uppercase tracking-widest">
+      <div className="flex items-center gap-2">
+        <StatusPill on={hasAudio} label="audio" color="secondary" />
+        <StatusPill on={hasTranscript} label="transcript" color="primary" />
+        <StatusPill on={hasSummary} label="summary" color="primary" />
+      </div>
+      {speakers && <SpeakerStatusPill status={speakers} />}
     </div>
   );
 }
@@ -120,6 +136,7 @@ export function Dashboard(): JSX.Element {
   const [toDate, setToDate] = useState("");
   const [starredOnly, setStarredOnly] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(savedPageSize);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [triggering, setTriggering] = useState(false);
   const [resyncingIds, setResyncingIds] = useState<Set<string>>(new Set());
@@ -135,13 +152,13 @@ export function Dashboard(): JSX.Element {
   useEffect(() => {
     setSelected(new Set());
     setResyncErrors({});
-  }, [debouncedSearch, sort, fromDate, toDate, starredOnly, page]);
+  }, [debouncedSearch, sort, fromDate, toDate, starredOnly, page, pageSize]);
   const list = useQuery({
-    queryKey: ["recordings", { search: debouncedSearch, sort, fromDate, toDate, starredOnly, page }],
+    queryKey: ["recordings", { search: debouncedSearch, sort, fromDate, toDate, starredOnly, page, pageSize }],
     queryFn: () =>
       api.listRecordings({
-        limit: PAGE_SIZE,
-        offset: page * PAGE_SIZE,
+        limit: pageSize,
+        offset: page * pageSize,
         search: debouncedSearch || undefined,
         sort,
         from: dateStringToFromMs(fromDate),
@@ -153,15 +170,8 @@ export function Dashboard(): JSX.Element {
     // keystroke and page turn. `isPlaceholderData` dims them meanwhile.
     placeholderData: keepPreviousData,
   });
-  // Speaker identification: recordings with speakers still to name (empty while it's off).
-  const review = useQuery({ queryKey: ["speaker-review"], queryFn: api.speakerReview, staleTime: 30_000 });
-  const toSend = useQuery({
-    queryKey: ["plaud-writeback", "pending"],
-    queryFn: api.plaudWritebackPending,
-    staleTime: 30_000,
-    enabled: review.data?.enabled === true,
-  });
-  const toSendById = new Map((toSend.data?.recordings ?? []).map((w) => [w.recordingId, w]));
+  // Speaker identification: where each recording's speakers stand (nothing while it's off).
+  const speakerStatusOf = useSpeakerStatuses();
 
   const resyncRecording = async (id: string, e: MouseEvent): Promise<void> => {
     e.preventDefault();
@@ -471,31 +481,6 @@ export function Dashboard(): JSX.Element {
                         <span>{formatBytes(r.filesizeBytes)}</span>
                       </>
                     )}
-                    {review.data?.recordings[r.id] ? (
-                      <>
-                        <span className="w-1 h-1 rounded-full bg-outline-variant" />
-                        <span className="text-tertiary normal-case tracking-normal font-semibold">
-                          {review.data.recordings[r.id]} speaker{review.data.recordings[r.id] === 1 ? "" : "s"} to name
-                        </span>
-                      </>
-                    ) : null}
-                    {review.data?.toConfirm?.[r.id] ? (
-                      <>
-                        <span className="w-1 h-1 rounded-full bg-outline-variant" />
-                        <span
-                          className="text-tertiary normal-case tracking-normal font-semibold"
-                          title="Named automatically. Only confirmed names are sent to Plaud"
-                        >
-                          {review.data.toConfirm[r.id]} speaker{review.data.toConfirm[r.id] === 1 ? "" : "s"} to confirm
-                        </span>
-                      </>
-                    ) : null}
-                    {toSendById.get(r.id)?.state === "to_send" || toSendById.get(r.id)?.state === "partial" ? (
-                      <>
-                        <span className="w-1 h-1 rounded-full bg-outline-variant" />
-                        <span className="text-tertiary normal-case tracking-normal font-semibold">Names to send to Plaud</span>
-                      </>
-                    ) : null}
                   </div>
                   {resyncErrors[r.id] && (
                     <p className="mt-1 text-xs text-error">
@@ -505,7 +490,7 @@ export function Dashboard(): JSX.Element {
                 </div>
               </div>
               <div className="relative flex items-center gap-3">
-                <StatusDots row={r} />
+                <StatusDots row={r} speakers={r.isTrash ? null : speakerStatusOf(r.id)} />
                 {r.status === "metadata_only" ? (
                   <button
                     className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-primary text-on-primary hover:bg-primary/90 transition-all active:scale-95 shadow-sm"
@@ -541,8 +526,8 @@ export function Dashboard(): JSX.Element {
         </div>
       )}
 
-      {list.data && list.data.total > PAGE_SIZE && (
-        <div className="mt-6 flex items-center justify-between font-label text-xs text-on-surface-variant">
+      {list.data && list.data.total > 0 && (
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 font-label text-xs text-on-surface-variant">
           <button
             type="button"
             className="btn-ghost px-4 py-2 text-sm disabled:opacity-40 disabled:pointer-events-none"
@@ -551,14 +536,41 @@ export function Dashboard(): JSX.Element {
           >
             ← Previous
           </button>
-          <span>
-            Page {page + 1} of {Math.max(1, Math.ceil(list.data.total / PAGE_SIZE))}
-          </span>
+          <div className="flex flex-wrap items-center gap-4">
+            <span>
+              Page {page + 1} of {Math.max(1, Math.ceil(list.data.total / pageSize))}
+            </span>
+            <label className="flex items-center gap-2">
+              <span>Show</span>
+              <select
+                className="input py-1 text-xs w-auto"
+                value={pageSize}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setPageSize(n);
+                  setPage(0);
+                  try {
+                    localStorage.setItem(PAGE_SIZE_KEY, String(n));
+                  } catch {
+                    /* remembered for this visit only */
+                  }
+                }}
+                aria-label="Recordings per page"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <span>per page</span>
+            </label>
+          </div>
           <button
             type="button"
             className="btn-ghost px-4 py-2 text-sm disabled:opacity-40 disabled:pointer-events-none"
             onClick={() => setPage((p) => p + 1)}
-            disabled={(page + 1) * PAGE_SIZE >= list.data.total}
+            disabled={(page + 1) * pageSize >= list.data.total}
           >
             Next →
           </button>

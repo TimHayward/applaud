@@ -1,7 +1,37 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet, NavLink, useLocation } from "react-router-dom";
+import { Outlet, NavLink, useLocation, useMatch } from "react-router-dom";
 import { SyncStatusBadge } from "./SyncStatusBadge.js";
 import { ThemeToggle } from "./ThemeToggle.js";
+import { RecordingsSidebar, SIDEBAR_MAX, SIDEBAR_MIN } from "./RecordingsSidebar.js";
+
+const REPO_URL = "https://github.com/TimHayward/applaud";
+const SIDEBAR_KEY = "applaud-sidebar";
+const SIDEBAR_DEFAULT = 280;
+
+/** The recordings sidebar's width and whether it's hidden, remembered in this browser. */
+function useSidebar(): { width: number; hidden: boolean; setWidth: (w: number) => void; setHidden: (h: boolean) => void } {
+  const [state, setState] = useState<{ width: number; hidden: boolean }>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(SIDEBAR_KEY) ?? "{}") as { width?: unknown; hidden?: unknown };
+      const width = typeof v.width === "number" ? Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, v.width)) : SIDEBAR_DEFAULT;
+      return { width, hidden: v.hidden === true };
+    } catch {
+      return { width: SIDEBAR_DEFAULT, hidden: false };
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_KEY, JSON.stringify(state));
+    } catch {
+      /* remembered for this visit only */
+    }
+  }, [state]);
+  return {
+    ...state,
+    setWidth: (width) => setState((s) => ({ ...s, width })),
+    setHidden: (hidden) => setState((s) => ({ ...s, hidden })),
+  };
+}
 
 function useStarNudge(): { show: boolean; dismiss: () => void } {
   const [show, setShow] = useState(false);
@@ -43,6 +73,9 @@ export function AppShell(): JSX.Element {
   const ghRef = useRef<HTMLAnchorElement>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
+  const recordingMatch = useMatch("/recordings/:id");
+  const sidebar = useSidebar();
+  const showSidebar = recordingMatch?.params.id !== undefined && !sidebar.hidden;
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -73,7 +106,7 @@ export function AppShell(): JSX.Element {
             <div className="relative">
               <a
                 ref={ghRef}
-                href="https://github.com/rsteckler/applaud"
+                href={REPO_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-lg p-1.5 text-on-surface-variant hover:text-on-surface transition-colors block"
@@ -141,7 +174,36 @@ export function AppShell(): JSX.Element {
           </nav>
         )}
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      {recordingMatch?.params.id !== undefined &&
+        (showSidebar ? (
+          <RecordingsSidebar
+            currentId={recordingMatch.params.id}
+            width={sidebar.width}
+            onResize={sidebar.setWidth}
+            onHide={() => sidebar.setHidden(true)}
+          />
+        ) : (
+          <button
+            type="button"
+            className="hidden lg:flex fixed left-0 top-24 z-[5] items-center rounded-r-lg border border-l-0 border-outline-variant/30 bg-surface-container px-1.5 py-3 text-on-surface-variant hover:text-on-surface"
+            onClick={() => sidebar.setHidden(false)}
+            title="Show the recordings list"
+            aria-label="Show the recordings list"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+        ))}
+      <main
+        className={`mx-auto max-w-6xl px-6 py-8 ${showSidebar ? "lg:pl-[var(--sidebar-pad)]" : ""}`}
+        // Room for the sidebar where the page's side margin is narrower than it.
+        style={
+          showSidebar
+            ? ({ "--sidebar-pad": `max(1.5rem, calc(${sidebar.width}px + 3rem - (100vw - 72rem) / 2))` } as React.CSSProperties)
+            : undefined
+        }
+      >
         <Outlet />
       </main>
     </div>

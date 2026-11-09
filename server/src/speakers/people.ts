@@ -225,6 +225,11 @@ export function labelsToConfirm(): Record<string, number> {
   return labelsWithStatus(["auto"]);
 }
 
+/** Labels confirmed as a person (not ignored), by recording. */
+export function labelsConfirmed(): Record<string, number> {
+  return labelsWithStatus(["confirmed"]);
+}
+
 function labelsWithStatus(statuses: string[]): Record<string, number> {
   const rows = getDb()
     .prepare(
