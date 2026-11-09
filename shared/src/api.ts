@@ -226,7 +226,10 @@ export interface SpeakerPeopleResponse {
 /** `GET /api/speakers/review`: labels still to name or confirm, by recording id. */
 export interface SpeakerReviewResponse {
   enabled: boolean;
+  /** Labels to name (unknown or suggested). */
   recordings: Record<string, number>;
+  /** Labels named automatically but not confirmed: not sent to Plaud until confirmed. */
+  toConfirm: Record<string, number>;
 }
 
 /** One Plaud speaker label in a recording, and who Applaud thinks it is. */

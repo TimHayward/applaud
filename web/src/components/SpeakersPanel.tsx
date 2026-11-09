@@ -35,7 +35,11 @@ function StatusBadge({ label }: { label: RecordingSpeakerLabel }): JSX.Element {
         </span>
       );
     case "auto":
-      return <span className={`${base} bg-primary/15 text-primary`}>Named automatically · {pct(label.confidence)}</span>;
+      return (
+        <span className={`${base} bg-primary/15 text-primary`} title="Not sent to Plaud until you confirm it">
+          Named automatically · {pct(label.confidence)} · to confirm
+        </span>
+      );
     case "suggested":
       return <span className={`${base} bg-tertiary/15 text-tertiary`}>Suggestion · {pct(label.confidence)}</span>;
     case "ignored":
@@ -270,6 +274,22 @@ export function SpeakersPanel({
   const ignored = labels.filter((l) => l.status === "ignored");
   const shown = showIgnored ? labels : labels.filter((l) => l.status !== "ignored");
   const toReview = labels.filter((l) => l.status === "suggested" || l.status === "unknown").length;
+  const toConfirm = labels.filter((l) => l.status === "auto" && l.speakerId !== null);
+  const [confirmingAll, setConfirmingAll] = useState(false);
+  const confirmAll = async (): Promise<void> => {
+    setConfirmingAll(true);
+    try {
+      for (const l of toConfirm) {
+        if (!(await onSet(l.plaudLabel, { status: "confirmed", person: { speakerId: l.speakerId! } }))) break;
+      }
+    } finally {
+      setConfirmingAll(false);
+    }
+  };
+  const summary = [
+    toReview > 0 ? `${toReview} to name` : null,
+    toConfirm.length > 0 ? `${toConfirm.length} named automatically, to confirm` : null,
+  ].filter(Boolean);
 
   return (
     <section className="card p-6 space-y-4">
@@ -278,15 +298,28 @@ export function SpeakersPanel({
           <h2 className="text-sm font-semibold uppercase tracking-widest text-on-surface-variant font-label">Speakers</h2>
           {data.analysed && (
             <p className="text-xs text-on-surface-variant mt-1">
-              {toReview > 0
-                ? `${toReview} to name. Listen to a clip, then confirm who it is; confirmed voices are recognised in other recordings.`
-                : "Everyone here is named or ignored."}
+              {summary.length > 0
+                ? `${summary.join("; ")}. Listen to a clip, then confirm who it is. Only confirmed names are sent to Plaud, and confirmed voices are recognised in other recordings.`
+                : "Everyone here is confirmed or ignored."}
             </p>
           )}
         </div>
-        <button type="button" className="btn-ghost text-xs" onClick={onReanalyse} disabled={busy}>
-          Re-analyse
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {data.analysed && toConfirm.length > 1 && (
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => void confirmAll()}
+              disabled={busy || confirmingAll}
+              title={toConfirm.map((l) => `${l.plaudLabel}: ${l.speakerName ?? ""}`).join("\n")}
+            >
+              Confirm all {toConfirm.length}
+            </button>
+          )}
+          <button type="button" className="btn-ghost text-xs" onClick={onReanalyse} disabled={busy}>
+            Re-analyse
+          </button>
+        </div>
       </div>
 
       {!data.analysed ? (

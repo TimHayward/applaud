@@ -479,6 +479,17 @@ export function Dashboard(): JSX.Element {
                         </span>
                       </>
                     ) : null}
+                    {review.data?.toConfirm?.[r.id] ? (
+                      <>
+                        <span className="w-1 h-1 rounded-full bg-outline-variant" />
+                        <span
+                          className="text-tertiary normal-case tracking-normal font-semibold"
+                          title="Named automatically. Only confirmed names are sent to Plaud"
+                        >
+                          {review.data.toConfirm[r.id]} speaker{review.data.toConfirm[r.id] === 1 ? "" : "s"} to confirm
+                        </span>
+                      </>
+                    ) : null}
                     {toSendById.get(r.id)?.state === "to_send" || toSendById.get(r.id)?.state === "partial" ? (
                       <>
                         <span className="w-1 h-1 rounded-full bg-outline-variant" />

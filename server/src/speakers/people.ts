@@ -214,13 +214,25 @@ export function listVoiceprints(speakerId: number): VoiceprintSummary[] {
 
 /** Labels still to be named or confirmed, per recording (not in Trash). */
 export function labelsToReview(): Record<string, number> {
+  return labelsWithStatus(["unknown", "suggested"]);
+}
+
+/**
+ * Labels Applaud named automatically and nobody has confirmed, by recording.
+ * Only confirmed names are sent to Plaud, so these still need the user.
+ */
+export function labelsToConfirm(): Record<string, number> {
+  return labelsWithStatus(["auto"]);
+}
+
+function labelsWithStatus(statuses: string[]): Record<string, number> {
   const rows = getDb()
     .prepare(
       `SELECT rs.recording_id AS id, COUNT(*) AS n FROM recording_speakers rs
        JOIN recordings r ON r.id = rs.recording_id
-       WHERE rs.status IN ('unknown', 'suggested') AND r.user_deleted_at IS NULL
+       WHERE rs.status IN (${statuses.map(() => "?").join(", ")}) AND r.user_deleted_at IS NULL
        GROUP BY rs.recording_id`,
     )
-    .all() as { id: string; n: number }[];
+    .all(...statuses) as { id: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.id, r.n]));
 }

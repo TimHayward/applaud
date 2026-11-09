@@ -21,6 +21,7 @@ import { rankCandidates } from "../speakers/matcher.js";
 import { applaudSegments, loadSegments } from "../speakers/outputs.js";
 import {
   deletePerson,
+  labelsToConfirm,
   labelsToReview,
   listPeople,
   listVoiceprints,
@@ -76,7 +77,11 @@ speakersRouter.get("/speakers/people", (_req, res) => {
 /** Labels still to name or confirm, per recording: the dashboard's "needs labelling" marks. */
 speakersRouter.get("/speakers/review", (_req, res) => {
   const enabled = speakerConfig(loadConfig()).enabled;
-  const body: SpeakerReviewResponse = { enabled, recordings: enabled ? labelsToReview() : {} };
+  const body: SpeakerReviewResponse = {
+    enabled,
+    recordings: enabled ? labelsToReview() : {},
+    toConfirm: enabled ? labelsToConfirm() : {},
+  };
   res.json(body);
 });
 
