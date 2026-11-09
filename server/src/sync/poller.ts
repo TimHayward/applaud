@@ -18,6 +18,7 @@ import {
 import { flattenTranscript, extractMarkdownFromSummaryPayload, type TranscriptSegment } from "../plaud/transcript.js";
 import {
   upsertFromPlaud,
+  applyPlaudName,
   markAudioDownloaded,
   markTranscriptDownloaded,
   markSummaryDownloaded,
@@ -470,6 +471,8 @@ class Poller {
 
       // A recording first listed mid-upload had no duration yet; the record has it now.
       if (updateDuration(row.id, detail.duration)) row = getRecordingById(row.id) ?? row;
+      // Renamed in Plaud since it was listed (a title Plaud wrote after a late transcript, say).
+      if (applyPlaudName(row.id, detail.name)) row = getRecordingById(row.id) ?? row;
 
       // Signed links expire after an hour, so everything below runs straight
       // after the record is fetched.
