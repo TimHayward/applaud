@@ -230,6 +230,8 @@ export interface SpeakerReviewResponse {
   recordings: Record<string, number>;
   /** Labels named automatically but not confirmed: not sent to Plaud until confirmed. */
   toConfirm: Record<string, number>;
+  /** Labels confirmed as a person, so a recording with none still to do can show as synced. */
+  confirmed: Record<string, number>;
 }
 
 /** One Plaud speaker label in a recording, and who Applaud thinks it is. */

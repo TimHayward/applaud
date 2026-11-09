@@ -158,7 +158,7 @@ describe("speakersRouter", () => {
   });
 
   it("counts labels to review and to confirm", async () => {
-    expect(await (await call("GET", "/speakers/review")).json()).toEqual({ enabled: true, recordings: { r1: 1 }, toConfirm: {} });
+    expect(await (await call("GET", "/speakers/review")).json()).toEqual({ enabled: true, recordings: { r1: 1 }, toConfirm: {}, confirmed: {} });
   });
 
   it("validates label changes", async () => {
