@@ -136,6 +136,22 @@ describe("parseDetail", () => {
     expect(out.warnings).toEqual(["Plaud has 2 summary documents; they are left as they are"]);
   });
 
+  it("leaves a polished transcript or summary with no content yet, with a warning", () => {
+    // After a transcription is retried in Plaud, its polished transcript can be listed empty.
+    const out = parseDetail(
+      detail([
+        object("TRANSCRIPT", 1),
+        { ...object("POLISHED_TRANSCRIPT", 2), content_id: null, content_url: null },
+        object("SUMMARY", 3),
+      ]),
+    );
+    expect(out.objects.map((o) => o.object_type)).toEqual(["TRANSCRIPT", "SUMMARY"]);
+    expect(out.incomplete).toEqual(["POLISHED_TRANSCRIPT"]);
+    expect(out.warnings).toEqual([
+      "Plaud's polished transcript isn't ready (it has no content yet), so it is left as it is",
+    ]);
+  });
+
   it("refuses Plaud errors and unexpected shapes", () => {
     expect(() => parseDetail({ status: -1, msg: "nope" })).toThrow(/nope/);
     expect(() => parseDetail({ status: 0, data: {} })).toThrow(PlaudError);

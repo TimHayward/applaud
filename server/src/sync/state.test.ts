@@ -20,6 +20,7 @@ vi.mock("../logger.js", () => ({
 }));
 
 import {
+  applyPlaudName,
   upsertFromPlaud,
   softDeleteRecording,
   purgeExpiredSoftDeletes,
@@ -124,6 +125,22 @@ describe("upsertFromPlaud", () => {
     expect(later.endTime).toBe(later.startTime + 577_440);
     // A listing without a duration never erases a known one.
     expect(upsertFromPlaud(makePlaudItem({ durationMs: 0 })).durationMs).toBe(577_440);
+  });
+
+  it("applies a name Plaud gave the recording after it was listed", () => {
+    upsertFromPlaud(makePlaudItem({ filename: "2026-04-11 12:00:00" }));
+    fsMocks.renameSync.mockClear();
+    expect(applyPlaudName("abcdef0123456789", "  Standup renamed ")).toBe(true);
+    const row = db
+      .prepare<[string], { filename: string; folder: string }>("SELECT filename, folder FROM recordings WHERE id = ?")
+      .get("abcdef0123456789");
+    expect(row).toEqual({ filename: "Standup renamed", folder: "2026-04-11_Standup_renamed__23456789" });
+    expect(fsMocks.renameSync).toHaveBeenCalledTimes(1);
+    // Same name, no name, or an unknown recording: nothing to do.
+    expect(applyPlaudName("abcdef0123456789", "Standup renamed")).toBe(false);
+    expect(applyPlaudName("abcdef0123456789", "  ")).toBe(false);
+    expect(applyPlaudName("abcdef0123456789", undefined)).toBe(false);
+    expect(applyPlaudName("nope", "x")).toBe(false);
   });
 
   it("keeps the audio filename set from the download URL across a folder rename", () => {

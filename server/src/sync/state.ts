@@ -173,6 +173,22 @@ export function knownRecordingIds(ids: string[]): Set<string> {
   return new Set(rows.map((r) => r.id));
 }
 
+/**
+ * Apply Plaud's current name for a known recording, read from its full record
+ * (a resync, or any fetch of the record). Routine polls stop listing at the
+ * first page with nothing new, so a recording renamed in Plaud long after it
+ * was first listed is otherwise only renamed by a full walk (Sync Now).
+ * Returns whether the name changed.
+ */
+export function applyPlaudName(id: string, name: string | null | undefined): boolean {
+  const next = name?.trim();
+  if (!next) return false;
+  const row = getDb().prepare<[string], RecordingDbRow>("SELECT * FROM recordings WHERE id = ?").get(id);
+  if (!row || row.filename === next) return false;
+  renameRecordingFolder(row, next);
+  return true;
+}
+
 function renameRecordingFolder(row: RecordingDbRow, newFilename: string): void {
   const cfg = loadConfig();
   if (!cfg.recordingsDir) return;

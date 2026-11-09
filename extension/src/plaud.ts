@@ -35,6 +35,13 @@ const OBJECT_KINDS: Record<string, PlaudDocumentKind> = {
   SUMMARY: "summary",
 };
 
+/** How warnings name each kind. */
+const KIND_LABEL: Record<string, string> = {
+  TRANSCRIPT: "transcript",
+  POLISHED_TRANSCRIPT: "polished transcript",
+  SUMMARY: "summary",
+};
+
 export interface PageContext {
   storage: Pick<Storage, "getItem" | "length" | "key">;
   /** URLs the page has requested, newest last (`performance.getEntriesByType("resource")`). */
@@ -183,6 +190,8 @@ export function parseDetail(body: unknown): {
   warnings: string[];
   /** Content id → signed link, for content a document refers to (such as the summary card). */
   relations: Record<string, string>;
+  /** Kinds Plaud lists without usable content yet (a polished transcript still being redone, say). */
+  incomplete: string[];
 } {
   if (!body || typeof body !== "object") throw new PlaudError("Plaud's reply was not JSON");
   const b = body as {
@@ -199,6 +208,7 @@ export function parseDetail(body: unknown): {
   const warnings: string[] = [];
   const objects: DetailObject[] = [];
   const seen = new Map<string, number>();
+  const incomplete: string[] = [];
   for (const o of b.data.objects as unknown[]) {
     if (!o || typeof o !== "object") continue;
     const x = o as Record<string, unknown>;
@@ -209,7 +219,17 @@ export function parseDetail(body: unknown): {
       typeof x.content_url !== "string" ||
       typeof x.version_ms !== "number"
     ) {
-      throw new PlaudError(`Plaud's ${x.object_type} entry is not in the expected shape`);
+      // The transcript is what every send rests on: without it, stop. Plaud
+      // lists a polished transcript or summary with no content while it is
+      // (re)making them, for example after a transcription is retried; leave
+      // that one alone and carry on with the rest.
+      if (x.object_type === "TRANSCRIPT")
+        throw new PlaudError(`Plaud's ${x.object_type} entry is not in the expected shape`);
+      incomplete.push(x.object_type);
+      warnings.push(
+        `Plaud's ${KIND_LABEL[x.object_type]} isn't ready (it has no content yet), so it is left as it is`,
+      );
+      continue;
     }
     seen.set(x.object_type, (seen.get(x.object_type) ?? 0) + 1);
     objects.push(x as unknown as DetailObject);
@@ -217,7 +237,7 @@ export function parseDetail(body: unknown): {
   // Open question Q3: more than one of a kind is left alone rather than guessed at.
   for (const [type, n] of seen) {
     if (n > 1)
-      warnings.push(`Plaud has ${n} ${OBJECT_KINDS[type]} documents; they are left as they are`);
+      warnings.push(`Plaud has ${n} ${KIND_LABEL[type]} documents; they are left as they are`);
   }
   const relations: Record<string, string> = {};
   const mapping = b.data.relation_content_mapping;
@@ -226,7 +246,12 @@ export function parseDetail(body: unknown): {
       if (/^c_[A-Za-z0-9]{8,64}$/.test(id) && typeof url === "string") relations[id] = url;
     }
   }
-  return { objects: objects.filter((o) => seen.get(o.object_type) === 1), warnings, relations };
+  return {
+    objects: objects.filter((o) => seen.get(o.object_type) === 1),
+    warnings,
+    relations,
+    incomplete,
+  };
 }
 
 export interface ReadResult {
@@ -314,9 +339,9 @@ function toBase64(bytes: Uint8Array): string {
  */
 export async function readSummaryCard(ctx: PageContext, fileId: string): Promise<CardResult> {
   const { token, origin } = session(ctx, fileId);
-  const { objects, relations } = await fetchDetail(ctx, origin, token, fileId);
+  const { objects, relations, incomplete } = await fetchDetail(ctx, origin, token, fileId);
   const summary = objects.find((o) => o.object_type === "SUMMARY");
-  if (!summary) return { status: "none" };
+  if (!summary) return { status: incomplete.includes("SUMMARY") ? "not_ready" : "none" };
   const res = await ctx.fetch(summary.content_url, { credentials: "omit" });
   if (!res.ok) throw new PlaudError(`Couldn't download Plaud's summary (HTTP ${res.status})`);
   const ref = CARD_REF.exec(await res.text());
