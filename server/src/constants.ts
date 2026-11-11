@@ -20,6 +20,13 @@ function envMs(name: string, fallbackMs: number, unitMs: number): number {
   return Number.isFinite(n) && n > 0 ? n * unitMs : fallbackMs;
 }
 
+/** Minutes from the environment, in ms; unlike `envMs`, `0` is a valid value. */
+function envMinutesAllowZero(name: string, fallbackMinutes: number): number {
+  const raw = process.env[name];
+  const n = raw ? Number(raw) : NaN;
+  return (Number.isFinite(n) && n >= 0 ? n : fallbackMinutes) * 60_000;
+}
+
 function envFlag(name: string): boolean {
   const raw = process.env[name];
   return raw === "1" || raw?.toLowerCase() === "true";
@@ -108,6 +115,17 @@ export const WEBHOOK_REDRIVE_BASE_DELAY_MS = envMs("APPLAUD_WEBHOOK_REDRIVE_BASE
 export const WEBHOOK_REDRIVE_MAX_DELAY_MS = envMs("APPLAUD_WEBHOOK_REDRIVE_MAX_HOURS", DAY_MS, HOUR_MS);
 export const WEBHOOK_REDRIVE_MAX_ATTEMPTS = envInt("APPLAUD_WEBHOOK_REDRIVE_MAX_ATTEMPTS", 8);
 export const WEBHOOK_REDRIVE_MAX_PER_POLL = envInt("APPLAUD_WEBHOOK_REDRIVE_MAX_PER_POLL", 10);
+
+/**
+ * How long `transcript_ready` waits for Plaud's summary after the transcript
+ * lands. Plaud writes the transcript first and the summary (and the title it
+ * renames the recording to) a few minutes later; sending straight away gave
+ * receivers a `summary.md` URL with no file behind it, and a folder that was
+ * then renamed under them, so their downloads 404'd. Once the summary is in,
+ * or this wait runs out (some recordings never get one), poller Phase 2b
+ * sends it. `0` sends as soon as the transcript lands, as before.
+ */
+export const WEBHOOK_SUMMARY_WAIT_MS = envMinutesAllowZero("APPLAUD_WEBHOOK_SUMMARY_WAIT_MINUTES", 30);
 
 /**
  * Lifetime of the signed ticket the web UI uses for media links and live

@@ -304,6 +304,7 @@ These are optional and only matter for unusual setups (very large libraries, fla
 | `APPLAUD_WEBHOOK_REDRIVE_MAX_HOURS` | `24` | Upper bound on the automatic re-delivery delay |
 | `APPLAUD_WEBHOOK_REDRIVE_MAX_ATTEMPTS` | `8` | Failed deliveries before automatic re-delivery gives up (manual **Redeliver** still works) |
 | `APPLAUD_WEBHOOK_REDRIVE_MAX_PER_POLL` | `10` | Most webhook re-deliveries attempted in one sync cycle |
+| `APPLAUD_WEBHOOK_SUMMARY_WAIT_MINUTES` | `30` | How long `transcript_ready` waits for Plaud's summary (and final title) before it is sent anyway; `0` sends as soon as the transcript lands |
 | `APPLAUD_WEBHOOK_URL_TTL_HOURS` | `168` | How long the signed `http_urls` in a webhook payload stay valid (LAN token installs) |
 | `APPLAUD_BROWSER_TICKET_TTL_HOURS` | `24` | Lifetime of the signed ticket the web UI uses for media links and live updates |
 | `APPLAUD_TRASH_RETENTION_DAYS` | `7` | Days a soft-deleted recording stays in Trash before local files are purged |

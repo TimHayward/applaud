@@ -19,6 +19,7 @@ import { flattenTranscript, extractMarkdownFromSummaryPayload, type TranscriptSe
 import {
   upsertFromPlaud,
   applyPlaudName,
+  isTranscriptWebhookHeld,
   markAudioDownloaded,
   markTranscriptDownloaded,
   markSummaryDownloaded,
@@ -564,8 +565,17 @@ class Poller {
         emit("recording_downloaded", { recordingId: row.id });
         // Fires on a null→set transition: the first download, or a resync
         // (which clears the transcript state first).
+        // While Plaud is still writing the summary (and the title it renames
+        // the folder to), hold the event: Phase 2b sends it once the summary
+        // is in or the wait runs out, so receivers get URLs that resolve.
         const fresh = getRecordingById(row.id);
-        if (fresh && !opts.quiet) await this.deliverWebhook("transcript_ready", fresh);
+        if (fresh && !opts.quiet) {
+          if (isTranscriptWebhookHeld(fresh)) {
+            logger.info({ id: row.id }, "transcript_ready held until Plaud's summary is in");
+          } else {
+            await this.deliverWebhook("transcript_ready", fresh);
+          }
+        }
         try {
           // After a send to Plaud only the names changed: rebuild the named
           // transcript and its count now, without running the voice model again.

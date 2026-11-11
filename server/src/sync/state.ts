@@ -13,6 +13,7 @@ import {
   WEBHOOK_REDRIVE_BASE_DELAY_MS,
   WEBHOOK_REDRIVE_MAX_DELAY_MS,
   WEBHOOK_REDRIVE_MAX_ATTEMPTS,
+  WEBHOOK_SUMMARY_WAIT_MS,
 } from "../constants.js";
 
 export { SOFT_DELETE_RETENTION_MS };
@@ -540,7 +541,30 @@ function webhookDueSql(p: "audio" | "transcript"): string {
   return `(${p}_downloaded_at IS NOT NULL AND ${p}_downloaded_at >= @cutoff
            AND webhook_${p}_fired_at IS NULL
            AND webhook_${p}_attempts < @maxAttempts
-           AND (webhook_${p}_next_at IS NULL OR webhook_${p}_next_at <= @now))`;
+           AND (webhook_${p}_next_at IS NULL OR webhook_${p}_next_at <= @now)${
+             p === "transcript"
+               ? `
+           AND (summary_downloaded_at IS NOT NULL OR plaud_is_summary = 0
+                OR transcript_downloaded_at <= @now - @summaryWaitMs)`
+               : ""
+           })`;
+}
+
+/**
+ * Whether `transcript_ready` should wait for the summary: Plaud may still be
+ * producing it, and the transcript landed less than WEBHOOK_SUMMARY_WAIT_MS
+ * ago. Phase 2b sends the held event once this turns false.
+ */
+export function isTranscriptWebhookHeld(
+  row: Pick<RecordingRow, "transcriptDownloadedAt" | "summaryDownloadedAt" | "plaudIsSummary">,
+  now = Date.now(),
+): boolean {
+  return (
+    row.transcriptDownloadedAt != null &&
+    row.summaryDownloadedAt == null &&
+    row.plaudIsSummary &&
+    row.transcriptDownloadedAt > now - WEBHOOK_SUMMARY_WAIT_MS
+  );
 }
 
 /** JS mirror of `webhookDueSql`, used to split a matched row into its due events. */
@@ -558,7 +582,8 @@ function isWebhookDue(
     downloadedAt >= opts.cutoff &&
     firedAt == null &&
     attempts < WEBHOOK_REDRIVE_MAX_ATTEMPTS &&
-    (nextAt == null || nextAt <= opts.now)
+    (nextAt == null || nextAt <= opts.now) &&
+    (p === "audio" || !isTranscriptWebhookHeld(rowToRecording(row), opts.now))
   );
 }
 
@@ -567,7 +592,8 @@ function isWebhookDue(
  * downloaded at or after `cutoff` (when the webhook was enabled), has never
  * been confirmed delivered, is under the attempt cap, and is past its back-off.
  * Mirrors the download path's fire semantics: audio_ready for any downloaded
- * audio, transcript_ready for any downloaded transcript. At most `limit` events.
+ * audio, transcript_ready for any downloaded transcript once it is no longer
+ * held for the summary (`isTranscriptWebhookHeld`). At most `limit` events.
  */
 export function findRecordingsNeedingWebhook(opts: {
   cutoff: number;
@@ -578,14 +604,23 @@ export function findRecordingsNeedingWebhook(opts: {
   event: WebhookReadyEvent;
 }[] {
   const rows = getDb()
-    .prepare<{ cutoff: number; now: number; maxAttempts: number; limit: number }, RecordingDbRow>(
+    .prepare<
+      { cutoff: number; now: number; maxAttempts: number; limit: number; summaryWaitMs: number },
+      RecordingDbRow
+    >(
       `SELECT * FROM recordings
        WHERE user_deleted_at IS NULL
          AND (${webhookDueSql("audio")} OR ${webhookDueSql("transcript")})
        ORDER BY start_time DESC
        LIMIT @limit`,
     )
-    .all({ cutoff: opts.cutoff, now: opts.now, maxAttempts: WEBHOOK_REDRIVE_MAX_ATTEMPTS, limit: opts.limit });
+    .all({
+      cutoff: opts.cutoff,
+      now: opts.now,
+      maxAttempts: WEBHOOK_REDRIVE_MAX_ATTEMPTS,
+      limit: opts.limit,
+      summaryWaitMs: WEBHOOK_SUMMARY_WAIT_MS,
+    });
   const out: { row: RecordingRow; event: WebhookReadyEvent }[] = [];
   for (const dbRow of rows) {
     const row = rowToRecording(dbRow);

@@ -4,6 +4,9 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+- **Webhook downloads failing with 404 on some recordings.** Plaud writes the transcript first and the summary, and the title Applaud renames the recording's folder to, a few minutes later. `transcript_ready` was sent as soon as the transcript landed, so its `summary.md` URL pointed at a file that didn't exist yet and its folder was renamed shortly after; receivers such as n8n that downloaded the files got 404s. Since 0.6.1 picks up Plaud's new name on the next fetch of the recording, this happened more often. `transcript_ready` now waits until the summary is in, for up to 30 minutes (`APPLAUD_WEBHOOK_SUMMARY_WAIT_MINUTES`; `0` sends straight away as before), then is sent by the next sync. Recordings Plaud makes no summary for are sent when the wait runs out.
+
 ## [0.6.1] - 2026-11-09
 
 ### Added
