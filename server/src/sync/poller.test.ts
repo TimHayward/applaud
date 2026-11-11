@@ -425,6 +425,28 @@ describe("poller", () => {
       expect(backoff(ID)).toMatchObject({ a: 1, t: 1 });
     });
 
+    it("holds transcript_ready until Plaud's summary is in, then sends it from Phase 2b", async () => {
+      const noSummary = detail(ID, NOW - DAY, {
+        name: "2026-11-10 12:33:32",
+        note_list: [],
+      });
+      clientMocks.listFiles.mockResolvedValueOnce([listed(ID, NOW - DAY, { name: "2026-11-10 12:33:32" })]);
+      clientMocks.getFile.mockResolvedValue(noSummary);
+      loadConfig.mockReturnValue(webhookConfig(0));
+
+      await poller.trigger();
+      const events = () => webhookMocks.fireWebhookForRecording.mock.calls.map((c) => c[0]);
+      expect(events()).toEqual(["audio_ready"]);
+
+      // Next poll: Plaud has written the summary (and named the recording).
+      clientMocks.getFile.mockResolvedValue(detail(ID, NOW - DAY, { name: "Weekly sync" }));
+      await poller.trigger();
+      expect(events()).toEqual(["audio_ready", "transcript_ready"]);
+      const sent = webhookMocks.fireWebhookForRecording.mock.calls[1]![1] as { filename: string; summaryDownloadedAt: number | null };
+      expect(sent.filename).toBe("Weekly sync");
+      expect(sent.summaryDownloadedAt).not.toBeNull();
+    });
+
     it("leaves no back-off state when no webhook is configured", async () => {
       clientMocks.listFiles.mockResolvedValueOnce([listed(ID, NOW - DAY)]);
       clientMocks.getFile.mockResolvedValue(detail(ID, NOW - DAY));

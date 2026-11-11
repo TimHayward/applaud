@@ -31,6 +31,7 @@ import {
   setRecordingDisplayName,
   getRecordingById,
   findRecordingsNeedingWebhook,
+  markSummaryDownloaded,
   findRecordingsNeedingAssets,
   countPendingTranscripts,
   markWebhookFired,
@@ -41,7 +42,7 @@ import {
   setAudioFilename,
   type PlaudRecordingMeta,
 } from "./state.js";
-import { WEBHOOK_REDRIVE_MAX_ATTEMPTS } from "../constants.js";
+import { WEBHOOK_REDRIVE_MAX_ATTEMPTS, WEBHOOK_SUMMARY_WAIT_MS } from "../constants.js";
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 
 const baseConfig: AppConfig = {
@@ -314,10 +315,11 @@ describe("webhook re-delivery queue", () => {
   const NOW = Date.UTC(2026, 9, 13, 12, 0);
   const ID = "abcdef0123456789";
 
-  const markDownloaded = (id: string, at: number, transcript = true): void => {
+  /** Audio and (optionally) transcript downloaded; the summary too unless `summary` is false. */
+  const markDownloaded = (id: string, at: number, transcript = true, summary = true): void => {
     db.prepare(
-      "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ? WHERE id = ?",
-    ).run(at, transcript ? at : null, id);
+      "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ?, summary_downloaded_at = ? WHERE id = ?",
+    ).run(at, transcript ? at : null, transcript && summary ? at : null, id);
   };
   const due = (cutoff = 0, now = NOW, limit = 100) =>
     findRecordingsNeedingWebhook({ cutoff, now, limit }).map((d) => `${d.row.id}:${d.event}`);
@@ -347,8 +349,8 @@ describe("webhook re-delivery queue", () => {
   it("re-drives a transcript that landed after enablement even if the audio predates it", () => {
     upsertFromPlaud(makePlaudItem());
     db.prepare(
-      "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ? WHERE id = ?",
-    ).run(NOW - 60_000, NOW - 10, ID);
+      "UPDATE recordings SET audio_downloaded_at = ?, transcript_downloaded_at = ?, summary_downloaded_at = ? WHERE id = ?",
+    ).run(NOW - 60_000, NOW - 10, NOW - 10, ID);
     expect(due(NOW - 1000)).toEqual([`${ID}:transcript_ready`]);
   });
 
@@ -384,6 +386,36 @@ describe("webhook re-delivery queue", () => {
       .get(ID);
     expect(row).toEqual({ attempts: 0, next_at: null });
     expect(due()).toEqual([]);
+  });
+
+  it("holds transcript_ready while Plaud may still be writing the summary", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000, true, false);
+    setPlaudAvailability(ID, true, true);
+    expect(due()).toEqual([`${ID}:audio_ready`]);
+  });
+
+  it("sends a held transcript_ready once the summary is downloaded", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000, true, false);
+    setPlaudAvailability(ID, true, true);
+    markSummaryDownloaded(ID);
+    expect(due()).toEqual([`${ID}:audio_ready`, `${ID}:transcript_ready`]);
+  });
+
+  it("sends a held transcript_ready when the summary wait runs out", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000, true, false);
+    setPlaudAvailability(ID, true, true);
+    expect(due(0, NOW - 1000 + WEBHOOK_SUMMARY_WAIT_MS - 1)).toEqual([`${ID}:audio_ready`]);
+    expect(due(0, NOW - 1000 + WEBHOOK_SUMMARY_WAIT_MS)).toEqual([`${ID}:audio_ready`, `${ID}:transcript_ready`]);
+  });
+
+  it("does not hold transcript_ready when Plaud has no summary coming", () => {
+    upsertFromPlaud(makePlaudItem());
+    markDownloaded(ID, NOW - 1000, true, false);
+    setPlaudAvailability(ID, true, false);
+    expect(due()).toEqual([`${ID}:audio_ready`, `${ID}:transcript_ready`]);
   });
 
   it("caps the number of events returned per call", () => {
