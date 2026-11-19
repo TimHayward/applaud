@@ -1,6 +1,12 @@
 import type { SpeakerState, SpeakerStatus } from "@applaud/shared";
 import { logger } from "../logger.js";
-import { analyseRecording, enrolOwner, recordingsWithStaleVoiceprints, reembedRecording } from "./analyse.js";
+import {
+  analyseRecording,
+  enrolOwner,
+  recordingsWithStaleLabels,
+  recordingsWithStaleVoiceprints,
+  reembedRecording,
+} from "./analyse.js";
 import { rematchAll } from "./assign.js";
 import { EmbedderError, type Embedder } from "./embedder.js";
 import {
@@ -57,6 +63,8 @@ export class SpeakerRunner {
   private checking: Promise<void> | null = null;
   private timer: NodeJS.Timeout | null = null;
   private reembedQueuedFor: string | null = null;
+  /** The active model whose stale label centroids were last queued for analysis. */
+  private staleLabelsQueuedFor: string | null = null;
 
   constructor(private readonly deps: RunnerDeps) {}
 
@@ -310,7 +318,11 @@ export class SpeakerRunner {
       this.deps.setActiveModel(modelId);
       return;
     }
-    if (active === modelId || this.reembedQueuedFor === modelId) return;
+    if (active === modelId) {
+      this.queueStaleLabels(modelId);
+      return;
+    }
+    if (this.reembedQueuedFor === modelId) return;
     this.reembedQueuedFor = modelId;
     const stale = recordingsWithStaleVoiceprints(modelId);
     logger.info({ from: active, to: modelId, recordings: stale.length }, "speaker model changed: re-embedding voiceprints");
@@ -324,6 +336,21 @@ export class SpeakerRunner {
     this.deps.setActiveModel(this.modelId);
     logger.info({ modelId: this.modelId }, "speaker model active");
     this.refresh();
+    this.queueStaleLabels(this.modelId);
+  }
+
+  /**
+   * Analyse again every recording whose open labels still have centroids from
+   * an earlier model: re-embedding only refreshes voiceprints, so without this
+   * those labels could never be matched again. Once per active model per run.
+   */
+  private queueStaleLabels(modelId: string): void {
+    if (this.staleLabelsQueuedFor === modelId) return;
+    this.staleLabelsQueuedFor = modelId;
+    const stale = recordingsWithStaleLabels(modelId);
+    if (stale.length === 0) return;
+    logger.info({ modelId, recordings: stale.length }, "re-analysing recordings with speakers from an earlier model");
+    for (const id of stale) enqueueJob("analyse", id, this.now());
   }
 }
 

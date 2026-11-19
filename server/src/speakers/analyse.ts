@@ -200,6 +200,27 @@ export function recordingsWithStaleVoiceprints(modelId: string): string[] {
   ).map((r) => r.recording_id);
 }
 
+/**
+ * Recordings with a label the matcher may assign whose centroid is from
+ * another model. Re-embedding refreshes voiceprints only, and the matcher
+ * skips centroids from another model, so these show as unknown until they
+ * are analysed again with `modelId`.
+ */
+export function recordingsWithStaleLabels(modelId: string): string[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT DISTINCT rs.recording_id FROM recording_speakers rs
+         JOIN recordings r ON r.id = rs.recording_id
+         WHERE r.user_deleted_at IS NULL AND rs.centroid IS NOT NULL AND rs.model_id != ?
+           AND rs.status IN ('unknown', 'suggested', 'auto')
+           AND (rs.assigned_by IS NULL OR rs.assigned_by = 'matcher')
+         ORDER BY r.start_time DESC`,
+      )
+      .all(modelId) as { recording_id: string }[]
+  ).map((r) => r.recording_id);
+}
+
 /** The owner's person record, created or renamed to `name` as needed. */
 function ensureOwner(name: string, now: number): number {
   const d = getDb();

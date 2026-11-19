@@ -193,6 +193,61 @@ describe("SpeakerRunner", () => {
     expect(r2Text()).toContain("[00:00] Tim Hayward: ");
   });
 
+  describe("after a model change", () => {
+    const r2Speaker2 = (): unknown =>
+      db
+        .prepare("SELECT status, model_id FROM recording_speakers WHERE recording_id = 'r2' AND plaud_label = 'Speaker 2'")
+        .get();
+
+    /** Ann confirmed in r1 and matched in r2, all with model m@1. */
+    const annMatchedWithM1 = async (): Promise<void> => {
+      embedder = new FakeEmbedder({ modelId: "m@1", dim: 64, vectorFor: (id) => hashVector(id.replace(/^r\d+|\d+$/g, ""), 64) });
+      runner = new SpeakerRunner({
+        embedder,
+        settings: () => settings,
+        ownerName: async () => owner,
+        setActiveModel: (id) => {
+          settings = { ...settings, activeModelId: id };
+        },
+      });
+      addRecording("r1");
+      addRecording("r2");
+      runner.start();
+      await runner.idle();
+      setLabel("r1", "Speaker 2", { status: "confirmed", person: { name: "Ann" } }, 20_000);
+      await runner.labelsChanged("r1");
+      expect(r2Speaker2()).toEqual({ status: "auto", model_id: "m@1" });
+      runner.stop();
+      await runner.idle();
+    };
+
+    it("re-analyses recordings so their speakers are matched with the new model", async () => {
+      await annMatchedWithM1();
+      embedder.modelId = "m@2";
+      runner.start();
+      await runner.idle();
+      expect(settings.activeModelId).toBe("m@2");
+      expect(r2Speaker2()).toEqual({ status: "auto", model_id: "m@2" });
+    });
+
+    it("repairs recordings left with old centroids once the new model is already active", async () => {
+      await annMatchedWithM1();
+      // As an earlier version left it: voiceprints re-embedded and the model
+      // active, but the recordings' own centroids still from m@1.
+      db.prepare("UPDATE speaker_embeddings SET model_id = 'm@2'").run();
+      db.prepare("UPDATE recording_speakers SET status = 'unknown', speaker_id = NULL, assigned_by = NULL WHERE recording_id = 'r2' AND plaud_label = 'Speaker 2'").run();
+      settings = { ...settings, activeModelId: "m@2" };
+      embedder.modelId = "m@2";
+      runner.start();
+      await runner.idle();
+      expect(r2Speaker2()).toEqual({ status: "auto", model_id: "m@2" });
+      expect(db.prepare("SELECT status, assigned_by FROM recording_speakers WHERE recording_id = 'r1' AND plaud_label = 'Speaker 2'").get()).toEqual({
+        status: "confirmed",
+        assigned_by: "user",
+      });
+    });
+  });
+
   it("keeps file paths out of error messages", () => {
     const fsErr = Object.assign(new Error("ENOENT: open '/data/recordings/2026-10-29_Secret_title/transcript.json'"), {
       code: "ENOENT",
