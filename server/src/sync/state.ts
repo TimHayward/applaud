@@ -2,7 +2,7 @@ import { renameSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { RecordingRow, RecordingsSort } from "@applaud/shared";
 import { getDb, rowToRecording, type RecordingDbRow } from "../db.js";
-import { folderName } from "./layout.js";
+import { folderName, OPUS_AUDIO_FILENAME } from "./layout.js";
 import { historyWindowStart } from "./window.js";
 import { loadConfig } from "../config.js";
 import { logger } from "../logger.js";
@@ -26,6 +26,8 @@ function mainListWhereSql(): string {
  * Rows that still need asset work (used by the poller): inside the history
  * window or explicitly requested, and missing audio, or missing a transcript
  * or summary Plaud may still produce (`plaud_is_trans` / `plaud_is_summary`).
+ * A recent recording saved as Plaud's original `.opus` upload is revisited
+ * too, until Plaud offers its converted copy (see the poller).
  */
 function assetWorkWhereSql(): string {
   return `user_deleted_at IS NULL
@@ -34,8 +36,12 @@ function assetWorkWhereSql(): string {
          audio_downloaded_at IS NULL
          OR (transcript_downloaded_at IS NULL AND plaud_is_trans = 1)
          OR (summary_downloaded_at IS NULL AND plaud_is_summary = 1)
+         OR (audio_filename = '${OPUS_AUDIO_FILENAME}' AND start_time >= @opusSince)
        )`;
 }
+
+/** How long a recording saved as `.opus` keeps being checked for Plaud's converted copy. */
+export const OPUS_UPGRADE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 export function isSyncIgnoredId(id: string): boolean {
   const row = getDb()
@@ -531,8 +537,10 @@ export function countErrorsLast24h(): number {
 export function findRecordingsNeedingAssets(): RecordingRow[] {
   const w = assetWorkWhereSql();
   const rows = getDb()
-    .prepare<{ windowStart: number }, RecordingDbRow>(`SELECT * FROM recordings WHERE ${w} ORDER BY start_time DESC`)
-    .all({ windowStart: historyWindowStart(loadConfig()) });
+    .prepare<{ windowStart: number; opusSince: number }, RecordingDbRow>(
+      `SELECT * FROM recordings WHERE ${w} ORDER BY start_time DESC`,
+    )
+    .all({ windowStart: historyWindowStart(loadConfig()), opusSince: Date.now() - OPUS_UPGRADE_WINDOW_MS });
   return rows.map(rowToRecording);
 }
 

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, updateConfig } from "../config.js";
 import { logger } from "../logger.js";
@@ -38,7 +38,13 @@ import {
   type PlaudRecordingMeta,
   updateDuration,
 } from "./state.js";
-import { audioFilenameForFiletype, ensureRecordingFolder, sanitizeFilename } from "./layout.js";
+import {
+  audioFilenameForFiletype,
+  ensureRecordingFolder,
+  OPUS_AUDIO_FILENAME,
+  recordingPaths,
+  sanitizeFilename,
+} from "./layout.js";
 import { writeFileAtomic } from "../fsAtomic.js";
 import {
   POLLER_LIST_PAGE_SIZE,
@@ -504,6 +510,11 @@ class Poller {
             logger.warn({ err, id: row.id }, "audio download failed");
           }
         }
+      } else if (row.audioFilename === OPUS_AUDIO_FILENAME && audioExt && audioFilename !== OPUS_AUDIO_FILENAME) {
+        // Saved from Plaud's original .opus upload, which may not decode for
+        // speaker identification or play in a browser. Plaud now serves its
+        // converted copy (an MP3): replace the .opus with it and re-analyse.
+        await this.replaceOpusAudio(row, detail.presigned_url!, cfg.recordingsDir, audioFilename, paths.audioPath);
       }
 
       const sources = detail.source_list ?? [];
@@ -587,6 +598,31 @@ class Poller {
       }
     } finally {
       this.processingIds.delete(row.id);
+    }
+  }
+
+  /**
+   * Swap a downloaded `audio.opus` for the copy Plaud converted it to. On
+   * failure the .opus is kept and the swap is retried on a later poll.
+   */
+  private async replaceOpusAudio(
+    row: RecordingRow,
+    link: string,
+    recordingsDir: string,
+    audioFilename: string,
+    opusPath: string,
+  ): Promise<void> {
+    const newPath = recordingPaths(recordingsDir, row.folder, audioFilename).audioPath;
+    try {
+      const bytes = await downloadToFile(link, newPath);
+      setAudioFilename(row.id, audioFilename);
+      markAudioDownloaded(row.id, bytes);
+      rmSync(opusPath, { force: true });
+      logger.info({ id: row.id, audioFilename }, "replaced the original .opus audio with Plaud's converted copy");
+      emit("recording_downloaded", { recordingId: row.id });
+      if (row.transcriptDownloadedAt) speakers.onTranscript(row.id);
+    } catch (err) {
+      logger.warn({ err, id: row.id }, "could not replace the .opus audio; keeping it for now");
     }
   }
 

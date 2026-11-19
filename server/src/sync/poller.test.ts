@@ -295,6 +295,35 @@ describe("poller", () => {
       expect(transcriptFires()).toBe(first + 1);
     });
 
+    it("replaces an original .opus download once Plaud offers its MP3", async () => {
+      const link = (ext: string) => `https://bucket.s3.amazonaws.com/audiofiles/${ID}/o_1.${ext}?X-Amz-Expires=3600`;
+      clientMocks.getFile.mockResolvedValue(detail(ID, START, { presigned_url: link("opus") }));
+      await poller.trigger();
+      expect(getRecordingById(ID)!.audioFilename).toBe("audio.opus");
+
+      // Fully downloaded, but still revisited while the audio is the .opus original.
+      clientMocks.getFile.mockResolvedValue(detail(ID, START, { presigned_url: link("opus") }));
+      await poller.trigger();
+      expect(clientMocks.downloadToFile).toHaveBeenCalledTimes(1);
+
+      clientMocks.getFile.mockResolvedValue(detail(ID, START, { presigned_url: link("mp3") }));
+      clientMocks.downloadToFile.mockResolvedValue(8192);
+      await poller.trigger();
+      expect(clientMocks.downloadToFile).toHaveBeenLastCalledWith(
+        expect.stringContaining("o_1.mp3"),
+        expect.stringMatching(/audio\.mp3$/),
+      );
+      const row = getRecordingById(ID)!;
+      expect(row.audioFilename).toBe("audio.mp3");
+      expect(row.filesizeBytes).toBe(8192);
+      expect(fsMocks.rmSync).toHaveBeenCalledWith(expect.stringMatching(/audio\.opus$/), { force: true });
+
+      // Now an MP3, the recording is no longer revisited.
+      clientMocks.getFile.mockClear();
+      await poller.trigger();
+      expect(clientMocks.getFile).not.toHaveBeenCalled();
+    });
+
     it("records an error and retries later when Plaud has no audio link yet", async () => {
       clientMocks.getFile.mockResolvedValue(detail(ID, START, { presigned_url: null }));
       await poller.trigger();

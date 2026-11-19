@@ -32,6 +32,12 @@ export function folderName(startTimeMs: number, filename: string, id: string): s
 /** Default audio filename — used when Plaud's `filetype` is absent or unrecognized. */
 export const DEFAULT_AUDIO_FILENAME = "audio.ogg";
 
+/**
+ * Plaud's original upload from some devices. Plaud later replaces it with an
+ * MP3; until then the file may not decode in ffmpeg or browsers.
+ */
+export const OPUS_AUDIO_FILENAME = "audio.opus";
+
 // Recognized audio containers, mapping a normalized `filetype` token (or the
 // subtype of a mime string) to the on-disk extension we save the file under.
 const AUDIO_EXTENSIONS: Record<string, string> = {
