@@ -241,6 +241,8 @@ export function People(): JSX.Element {
     void qc.invalidateQueries({ queryKey: ["speaker-voiceprints"] });
     void qc.invalidateQueries({ queryKey: ["recording-speakers"] });
     void qc.invalidateQueries({ queryKey: ["speaker-review"] });
+    void qc.invalidateQueries({ queryKey: ["recordings-sidebar"] });
+    void qc.invalidateQueries({ queryKey: ["recordings"] });
   };
 
   const people = q.data?.people ?? [];

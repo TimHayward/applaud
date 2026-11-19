@@ -4,6 +4,7 @@ import type {
   AuthStatusResponse,
   ConfigResponse,
   RecordingsListResponse,
+  SpeakerFilter,
   RecordingDetail,
   SyncStatusResponse,
   SetupStatusResponse,
@@ -146,6 +147,7 @@ export const api = {
       to?: number;
       sort?: RecordingsSort;
       starred?: boolean;
+      speakers?: SpeakerFilter;
     } = {},
   ) => {
     const qs = new URLSearchParams();
@@ -156,6 +158,7 @@ export const api = {
     if (params.to != null) qs.set("to", String(params.to));
     if (params.sort) qs.set("sort", params.sort);
     if (params.starred) qs.set("starred", "1");
+    if (params.speakers) qs.set("speakers", params.speakers);
     return jsonFetch<RecordingsListResponse>(`/api/recordings?${qs.toString()}`);
   },
   listTrashRecordings: (params: { limit?: number; offset?: number } = {}) => {

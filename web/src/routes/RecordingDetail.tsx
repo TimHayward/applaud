@@ -89,6 +89,9 @@ function RecordingDetail({ id }: { id: string }): JSX.Element {
     void qc.invalidateQueries({ queryKey: ["speaker-review"] });
     void qc.invalidateQueries({ queryKey: ["speaker-people"] });
     void qc.invalidateQueries({ queryKey: ["plaud-writeback"] });
+    // A speaker filter may no longer match this recording.
+    void qc.invalidateQueries({ queryKey: ["recordings-sidebar"] });
+    void qc.invalidateQueries({ queryKey: ["recordings"] });
   };
 
   const setSpeakerLabel = async (label: string, body: SetSpeakerLabelRequest): Promise<boolean> => {

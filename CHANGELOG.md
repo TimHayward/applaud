@@ -4,6 +4,9 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+- **Filter recordings by speakers**, on the Recordings list and in the recordings sidebar: **All**, **To label**, **To confirm**, **To sync** (while sending names to Plaud is on), **Synced** and **Not analysed** (audio and transcript in, no speaker analysis yet). Each recording counts in its most urgent state, the same one its speaker status mark shows. The sidebar remembers its filter. API: `speakers` on `GET /api/recordings`.
+
 ### Fixed
 - **Webhook downloads failing with 404 on some recordings.** Plaud writes the transcript first and the summary, and the title Applaud renames the recording's folder to, a few minutes later. `transcript_ready` was sent as soon as the transcript landed, so its `summary.md` URL pointed at a file that didn't exist yet and its folder was renamed shortly after; receivers such as n8n that downloaded the files got 404s. Since 0.6.1 picks up Plaud's new name on the next fetch of the recording, this happened more often. `transcript_ready` now waits until the summary is in, for up to 30 minutes (`APPLAUD_WEBHOOK_SUMMARY_WAIT_MINUTES`; `0` sends straight away as before), then is sent by the next sync. Recordings Plaud makes no summary for are sent when the wait runs out.
 - **Recordings saved as `.opus` now get speaker identification and play in the browser.** Some Plaud devices upload an original `.opus` file, which Plaud later replaces with an MP3. A recording downloaded before then was kept as `audio.opus`, which wouldn't decode for speaker identification or play. Applaud now checks such recordings for up to 14 days. Once Plaud offers the MP3, Applaud downloads it as `audio.mp3`, deletes the `.opus` copy and runs speaker analysis again. A `.opus` recording older than that is fixed by **Resync**.

@@ -17,7 +17,7 @@ import {
 import { loadConfig } from "../config.js";
 import { poller } from "../sync/poller.js";
 import { RECORDINGS_LIST_MAX_LIMIT } from "../constants.js";
-import type { RecordingDetail } from "@applaud/shared";
+import { SPEAKER_FILTERS, speakerConfig, type RecordingDetail } from "@applaud/shared";
 import { sanitizePlaudSummaryMarkdown } from "@applaud/shared";
 import { recordingPaths } from "../sync/layout.js";
 
@@ -66,6 +66,7 @@ const RecordingsListQuerySchema = ListQuerySchema.extend({
     .enum(["1", "true", "0", "false"])
     .transform((v) => v === "1" || v === "true")
     .optional(),
+  speakers: z.enum(SPEAKER_FILTERS).optional(),
 });
 
 recordingsRouter.get("/trash", (req, res) => {
@@ -89,8 +90,10 @@ recordingsRouter.get("/", (req, res) => {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
-  const { limit, offset, search, from, to, sort, starred } = parsed.data;
+  const { limit, offset, search, from, to, sort, starred, speakers } = parsed.data;
+  const s = speakerConfig(loadConfig());
   const result = listRecordingRows({
+    ...(speakers && s.enabled ? { speakers: { filter: speakers, sendToPlaud: s.sendToPlaud } } : {}),
     limit,
     offset,
     ...(search ? { search } : {}),

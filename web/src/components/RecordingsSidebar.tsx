@@ -1,14 +1,33 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "../api.js";
 import { formatDateShort } from "../lib/format.js";
-import { SpeakerStatusDot, useSpeakerStatuses } from "./SpeakerStatus.js";
+import type { SpeakerFilter } from "@applaud/shared";
+import { SpeakerFilterSelect, SpeakerStatusDot, useSpeakerFilterOptions, useSpeakerStatuses } from "./SpeakerStatus.js";
 
 const PAGE = 50;
 export const SIDEBAR_MIN = 200;
 export const SIDEBAR_MAX = 520;
+const FILTER_KEY = "applaud-sidebar-speakers";
+
+function savedFilter(): SpeakerFilter | null {
+  try {
+    return (localStorage.getItem(FILTER_KEY) as SpeakerFilter | null) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveFilter(value: SpeakerFilter | null): void {
+  try {
+    if (value) localStorage.setItem(FILTER_KEY, value);
+    else localStorage.removeItem(FILTER_KEY);
+  } catch {
+    /* not remembered */
+  }
+}
 
 /**
  * Other recordings, newest first, beside a recording's page: each with the
@@ -26,9 +45,18 @@ export function RecordingsSidebar({
   onHide: () => void;
 }): JSX.Element {
   const statusOf = useSpeakerStatuses();
+  const filterOptions = useSpeakerFilterOptions();
+  const [chosenFilter, setChosenFilter] = useState<SpeakerFilter | null>(savedFilter);
+  // A remembered filter that no longer applies (the feature or sending turned off) shows everything.
+  const filter = chosenFilter && filterOptions?.includes(chosenFilter) ? chosenFilter : null;
+  const chooseFilter = (value: SpeakerFilter | null): void => {
+    setChosenFilter(value);
+    saveFilter(value);
+  };
   const list = useInfiniteQuery({
-    queryKey: ["recordings-sidebar"],
-    queryFn: ({ pageParam }) => api.listRecordings({ limit: PAGE, offset: pageParam, sort: "date_desc" }),
+    queryKey: ["recordings-sidebar", filter],
+    queryFn: ({ pageParam }) =>
+      api.listRecordings({ limit: PAGE, offset: pageParam, sort: "date_desc", ...(filter ? { speakers: filter } : {}) }),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
       const loaded = pages.reduce((n, p) => n + p.items.length, 0);
@@ -84,9 +112,25 @@ export function RecordingsSidebar({
           </svg>
         </button>
       </div>
+      {filterOptions && (
+        <div className="flex items-center gap-2 px-4 py-2 shrink-0 border-b border-outline-variant/20">
+          <span className="text-xs text-on-surface-variant">Speakers</span>
+          <SpeakerFilterSelect
+            className="input min-w-0 flex-1 py-1 px-2 border-transparent text-xs"
+            value={filter}
+            options={filterOptions}
+            onChange={chooseFilter}
+          />
+        </div>
+      )}
       <nav className="flex-1 overflow-y-auto py-2">
         {list.isLoading && <p className="px-4 py-2 text-xs text-on-surface-variant">Loading…</p>}
         {list.isError && <p className="px-4 py-2 text-xs text-error">Couldn't load recordings.</p>}
+        {list.data && items.length === 0 && (
+          <p className="px-4 py-2 text-xs text-on-surface-variant">
+            {filter ? "No recordings match this filter." : "No recordings yet."}
+          </p>
+        )}
         <ul>
           {items.map((r) => {
             const current = r.id === currentId;

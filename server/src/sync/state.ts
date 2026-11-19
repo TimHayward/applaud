@@ -1,6 +1,6 @@
 import { renameSync, existsSync, rmSync } from "node:fs";
 import path from "node:path";
-import type { RecordingRow, RecordingsSort } from "@applaud/shared";
+import type { RecordingRow, RecordingsSort, SpeakerFilter } from "@applaud/shared";
 import { getDb, rowToRecording, type RecordingDbRow } from "../db.js";
 import { folderName, OPUS_AUDIO_FILENAME } from "./layout.js";
 import { historyWindowStart } from "./window.js";
@@ -345,6 +345,40 @@ const SORT_COLUMNS: Record<RecordingsSort, string> = {
   size_asc: "filesize_bytes ASC",
 };
 
+/** A recording has a speaker label in one of `statuses`. */
+function hasLabelSql(statuses: string[]): string {
+  return `EXISTS (SELECT 1 FROM recording_speakers rs WHERE rs.recording_id = recordings.id
+            AND rs.status IN (${statuses.map((s) => `'${s}'`).join(", ")}))`;
+}
+
+/**
+ * SQL predicate for a speaker filter. Mirrors the web's speaker status
+ * (web/src/lib/speakerStatus.ts), most urgent first: a recording is in the
+ * first state that applies. Plaud's trashed recordings show no status, so
+ * they match no speaker filter. `sendToPlaud` is whether names-to-sync count.
+ */
+export function speakerFilterSql(filter: SpeakerFilter, sendToPlaud: boolean): string {
+  const label = hasLabelSql(["unknown", "suggested"]);
+  const confirm = hasLabelSql(["auto"]);
+  const pending = `EXISTS (SELECT 1 FROM plaud_writeback w WHERE w.recording_id = recordings.id AND w.pending_segments > 0)`;
+  const settled = `NOT ${label} AND NOT ${confirm}`;
+  const state = (() => {
+    switch (filter) {
+      case "label":
+        return label;
+      case "confirm":
+        return `NOT ${label} AND ${confirm}`;
+      case "sync":
+        return sendToPlaud ? `${settled} AND ${pending}` : "0";
+      case "synced":
+        return `${settled}${sendToPlaud ? ` AND NOT ${pending}` : ""} AND ${hasLabelSql(["confirmed"])}`;
+      case "unanalysed":
+        return `speakers_processed_at IS NULL AND audio_downloaded_at IS NOT NULL AND transcript_downloaded_at IS NOT NULL`;
+    }
+  })();
+  return `(is_trash = 0 AND ${state})`;
+}
+
 export function listRecordingRows(
   opts: {
     limit?: number;
@@ -355,6 +389,7 @@ export function listRecordingRows(
     to?: number;
     sort?: RecordingsSort;
     starred?: boolean;
+    speakers?: { filter: SpeakerFilter; sendToPlaud: boolean };
   } = {},
 ): { total: number; totalBytes: number; items: RecordingRow[] } {
   const db = getDb();
@@ -384,6 +419,7 @@ export function listRecordingRows(
   if (opts.starred) {
     conditions.push("is_starred = 1");
   }
+  if (opts.speakers) conditions.push(speakerFilterSql(opts.speakers.filter, opts.speakers.sendToPlaud));
 
   const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 

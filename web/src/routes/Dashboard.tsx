@@ -7,8 +7,13 @@ import { useDebouncedValue } from "../hooks/useDebouncedValue.js";
 import { useRecordingActions } from "../hooks/useRecordingActions.js";
 import { useToast } from "../components/Toast.js";
 import { formatDurationClock, formatDateShort, formatBytes } from "../lib/format.js";
-import type { RecordingRow, RecordingsSort } from "@applaud/shared";
-import { SpeakerStatusPill, useSpeakerStatuses } from "../components/SpeakerStatus.js";
+import type { RecordingRow, RecordingsSort, SpeakerFilter } from "@applaud/shared";
+import {
+  SpeakerFilterSelect,
+  SpeakerStatusPill,
+  useSpeakerFilterOptions,
+  useSpeakerStatuses,
+} from "../components/SpeakerStatus.js";
 import type { SpeakerStatus } from "../lib/speakerStatus.js";
 
 const PAGE_SIZES = [10, 20, 50, 100] as const;
@@ -135,6 +140,11 @@ export function Dashboard(): JSX.Element {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [starredOnly, setStarredOnly] = useState(false);
+  const [chosenSpeakerFilter, setSpeakerFilter] = useState<SpeakerFilter | null>(null);
+  const speakerFilterOptions = useSpeakerFilterOptions();
+  // A filter that no longer applies (the feature or sending turned off) shows everything.
+  const speakerFilter =
+    chosenSpeakerFilter && speakerFilterOptions?.includes(chosenSpeakerFilter) ? chosenSpeakerFilter : null;
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(savedPageSize);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -145,16 +155,16 @@ export function Dashboard(): JSX.Element {
   const toast = useToast();
   useEffect(() => {
     setPage(0);
-  }, [debouncedSearch, sort, fromDate, toDate, starredOnly]);
+  }, [debouncedSearch, sort, fromDate, toDate, starredOnly, speakerFilter]);
   // Selection and per-row resync errors are both page-scoped: clear them
   // whenever the visible rows change, so a row that scrolls back into view on
   // another page/filter doesn't reappear carrying a stale error.
   useEffect(() => {
     setSelected(new Set());
     setResyncErrors({});
-  }, [debouncedSearch, sort, fromDate, toDate, starredOnly, page, pageSize]);
+  }, [debouncedSearch, sort, fromDate, toDate, starredOnly, speakerFilter, page, pageSize]);
   const list = useQuery({
-    queryKey: ["recordings", { search: debouncedSearch, sort, fromDate, toDate, starredOnly, page, pageSize }],
+    queryKey: ["recordings", { search: debouncedSearch, sort, fromDate, toDate, starredOnly, speakerFilter, page, pageSize }],
     queryFn: () =>
       api.listRecordings({
         limit: pageSize,
@@ -164,6 +174,7 @@ export function Dashboard(): JSX.Element {
         from: dateStringToFromMs(fromDate),
         to: dateStringToToMs(toDate),
         starred: starredOnly || undefined,
+        ...(speakerFilter ? { speakers: speakerFilter } : {}),
       }),
     // Keep the current rows on screen while the next page / search result
     // loads, so the list and its footer don't collapse to a skeleton on every
@@ -363,6 +374,17 @@ export function Dashboard(): JSX.Element {
           <svg width="14" height="14" viewBox="0 0 24 24" fill={starredOnly ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
           Starred
         </button>
+        {speakerFilterOptions && (
+          <label className="flex items-center gap-2 text-sm text-on-surface-variant">
+            Speakers
+            <SpeakerFilterSelect
+              className="input py-2 px-3 border-transparent text-sm"
+              value={speakerFilter}
+              options={speakerFilterOptions}
+              onChange={setSpeakerFilter}
+            />
+          </label>
+        )}
         {(fromDate || toDate) && (
           <button
             type="button"
@@ -420,11 +442,17 @@ export function Dashboard(): JSX.Element {
 
       {list.data && list.data.items.length === 0 && (
         <div className="card flex flex-col items-center justify-center p-12 text-center">
-          <p className="text-on-surface">No recordings yet.</p>
-          <p className="mt-1 text-sm text-on-surface-variant">
-            Click <span className="font-medium">Sync now</span> or wait for the next poll
-            cycle.
-          </p>
+          {debouncedSearch || fromDate || toDate || starredOnly || speakerFilter ? (
+            <p className="text-on-surface">No recordings match these filters.</p>
+          ) : (
+            <>
+              <p className="text-on-surface">No recordings yet.</p>
+              <p className="mt-1 text-sm text-on-surface-variant">
+                Click <span className="font-medium">Sync now</span> or wait for the next poll
+                cycle.
+              </p>
+            </>
+          )}
         </div>
       )}
 

@@ -49,6 +49,15 @@ export type RecordingsSort =
   | "size_desc"
   | "size_asc";
 
+/**
+ * Filter the recordings list by where its speakers stand, as the speaker
+ * status marks show it: speakers to label, automatic names to confirm,
+ * confirmed names to sync to Plaud, everything synced, or audio and
+ * transcript downloaded but no speaker analysis yet.
+ */
+export const SPEAKER_FILTERS = ["label", "confirm", "sync", "synced", "unanalysed"] as const;
+export type SpeakerFilter = (typeof SPEAKER_FILTERS)[number];
+
 export interface RecordingsListQuery {
   limit?: number;
   offset?: number;
@@ -56,6 +65,8 @@ export interface RecordingsListQuery {
   from?: number;
   to?: number;
   sort?: RecordingsSort;
+  /** Ignored while speaker identification is off. */
+  speakers?: SpeakerFilter;
 }
 
 export interface RecordingsListResponse {
