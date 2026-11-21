@@ -107,6 +107,7 @@ function deps(
       plaud.push("diagnose");
       return over.signedIn ?? true;
     }),
+    openTabSignedIn: vi.fn(async () => (tabOpen ? (over.signedIn ?? true) : null)),
     sleep: async () => {},
   };
   return { d, heartbeats, plaud };
@@ -128,6 +129,13 @@ describe("runOnce", () => {
     expect(heartbeats).toEqual([
       { plaudSignedIn: null, ran: false, sent: 0, conflicts: 0, failed: 0, cards: 0 },
     ]);
+  });
+
+  it("reports the sign-in of a Plaud tab that's already open, without opening one", async () => {
+    const { d, heartbeats, plaud } = deps({ tabOpen: true });
+    expect(await runOnce(d)).toBe("idle");
+    expect(plaud).toEqual([]);
+    expect(heartbeats[0]).toMatchObject({ plaudSignedIn: true, ran: false });
   });
 
   it("asks only for what Applaud allows", async () => {

@@ -344,6 +344,19 @@ describe("plaudWritebackRouter", () => {
     expect((await status()).lastRunAt).not.toBeNull();
     expect((await status()).lastSeenAt).not.toBeNull();
 
+    // An idle check-in that finds no Plaud tab keeps the known sign-in state;
+    // one that finds the tab signed in clears it, and keeps the last run's figures.
+    await heartbeat(token, { ran: true, plaudSignedIn: true, sent: 3 });
+    await heartbeat(token, { plaudSignedIn: false });
+    await heartbeat(token, { plaudSignedIn: null });
+    expect(await status()).toMatchObject({ plaudSignedIn: false, needsAttention: "signed_out" });
+    await heartbeat(token, { plaudSignedIn: true });
+    expect(await status()).toMatchObject({
+      plaudSignedIn: true,
+      needsAttention: null,
+      last: { sent: 3 },
+    });
+
     await heartbeat(token, { ran: true, shapeError: true, error: "files/detail: no data" });
     expect(await status()).toMatchObject({
       paused: "files/detail: no data",

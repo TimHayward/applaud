@@ -33,6 +33,11 @@ export interface RunDeps {
   openPlaud: () => Promise<boolean>;
   closePlaud: () => Promise<void>;
   signedIn: () => Promise<boolean>;
+  /**
+   * Whether a Plaud tab that is already open is signed in, read from the page
+   * without contacting Plaud; null when none is open (one isn't opened for this).
+   */
+  openTabSignedIn: () => Promise<boolean | null>;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -77,8 +82,10 @@ export async function runOnce(deps: RunDeps): Promise<RunOutcome> {
   const cardIds = n.cards ? await deps.cardsNeeded() : [];
   const counts: Counts = { sent: 0, conflicts: 0, failed: 0, cards: 0 };
   if (items.length === 0 && cardIds.length === 0) {
-    // Nothing to do: Plaud isn't contacted at all.
-    await deps.heartbeat({ plaudSignedIn: null, ran: false, ...counts });
+    // Nothing to do: Plaud isn't contacted at all. An open Plaud tab (the one
+    // you signed in on) still shows whether the sign-in is good.
+    const plaudSignedIn = await deps.openTabSignedIn().catch(() => null);
+    await deps.heartbeat({ plaudSignedIn, ran: false, ...counts });
     return "idle";
   }
 
@@ -86,12 +93,9 @@ export async function runOnce(deps: RunDeps): Promise<RunOutcome> {
   try {
     opened = await deps.openPlaud();
     if (!(await deps.signedIn())) {
-      await deps.heartbeat({
-        plaudSignedIn: false,
-        ran: true,
-        ...counts,
-        error: "The automation browser is signed out of Plaud. Open it and sign in",
-      });
+      // No error text: Settings shows the sign-in state itself, and clears it
+      // as soon as a check-in sees the browser signed in again.
+      await deps.heartbeat({ plaudSignedIn: false, ran: true, ...counts });
       return "signed_out";
     }
 

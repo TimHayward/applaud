@@ -154,7 +154,9 @@ export function applyAutomation(cfg: Pick<AppConfig, "plaudAutomation">, now = D
   logger.info("issued the automation browser's credential for automatic Plaud sync");
 }
 
-function lastHeartbeat(row: AutomationRow | null): PlaudAutomationHeartbeat | null {
+function lastHeartbeat(
+  row: Pick<AutomationRow, "last_heartbeat"> | null,
+): PlaudAutomationHeartbeat | null {
   if (!row?.last_heartbeat) return null;
   try {
     return JSON.parse(row.last_heartbeat) as PlaudAutomationHeartbeat;
@@ -194,6 +196,16 @@ export function recordHeartbeat(
   const pause = hb.shapeError
     ? (hb.error?.slice(0, 500) ?? "Plaud answered in a shape Applaud doesn't recognise")
     : null;
+  // Settings' "Last run" shows the last run that did something; an idle
+  // check-in only refreshes the sign-in state. Sign-in "unknown" (no Plaud
+  // tab was looked at) keeps the last known state.
+  const prevRow = getDb()
+    .prepare("SELECT last_heartbeat FROM plaud_writeback_clients WHERE id = ?")
+    .get(clientId) as { last_heartbeat: string | null } | undefined;
+  const prev = lastHeartbeat(prevRow ?? null);
+  const plaudSignedIn = hb.plaudSignedIn ?? prev?.plaudSignedIn ?? null;
+  const stored: PlaudAutomationHeartbeat =
+    hb.ran || !prev ? { ...hb, plaudSignedIn } : { ...prev, plaudSignedIn };
   getDb()
     .prepare(
       `UPDATE plaud_writeback_clients
@@ -202,7 +214,7 @@ export function recordHeartbeat(
            paused_reason = COALESCE(?, paused_reason)
        WHERE id = ?`,
     )
-    .run(now, JSON.stringify(hb), hb.ran ? 1 : 0, now, pause, clientId);
+    .run(now, JSON.stringify(stored), hb.ran ? 1 : 0, now, pause, clientId);
   if (pause) logger.warn({ reason: pause }, "automatic Plaud sync paused");
 }
 

@@ -172,6 +172,8 @@ async function tick(): Promise<void> {
       openPlaud,
       closePlaud,
       signedIn: async () => (await askPlaud({ type: "plaud.diagnose" })).signedIn,
+      openTabSignedIn: async () =>
+        (await plaudTab()) ? (await askPlaud({ type: "plaud.diagnose" })).signedIn : null,
     };
     await runOnce(deps);
   } catch (err) {
