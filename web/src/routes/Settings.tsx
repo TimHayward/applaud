@@ -6,6 +6,7 @@ import { useConfirm } from "../components/ConfirmDialog.js";
 import { ResultCard } from "../components/ResultCard.js";
 import { WebhookDeliveries } from "../components/WebhookDeliveries.js";
 import { SpeakerSettings } from "../components/SpeakerSettings.js";
+import { PlaudAutomationSettings } from "../components/PlaudAutomationSettings.js";
 import { AuthStep } from "./setup/AuthStep.js";
 import { formatRelative, daysUntil } from "../lib/format.js";
 
@@ -615,6 +616,9 @@ export function Settings(): JSX.Element {
 
       {/* Speaker identification (saves on change, not with Save Settings) */}
       <SpeakerSettings />
+
+      {/* Automatic Plaud sync through the browser container (saves on change) */}
+      <PlaudAutomationSettings />
 
       {/* Save Footer */}
       <footer className="pt-4 flex flex-col items-center">

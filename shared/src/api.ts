@@ -531,3 +531,65 @@ export interface PlaudCardsNeededResponse {
 
 /** `POST /api/plaud-writeback/cards/:id`: a card the extension fetched, or that Plaud has none (yet). */
 export type PlaudCardRequest = { status: "found"; png: string } | { status: "none" };
+
+// ── Automatic Plaud sync through the browser container ──
+
+/** Where the automation browser's credential is written, inside `APPLAUD_AUTOMATION_DIR`. */
+export const PLAUD_AUTOMATION_CLIENT_FILE = "client.json";
+
+/** The file Applaud writes for the automation browser while automatic sync is on. */
+export interface PlaudAutomationClientFile {
+  applaudUrl: string;
+  token: string;
+}
+
+/** `GET /api/plaud-writeback/automation/next`: whether the automation browser should run now. */
+export interface PlaudAutomationNextResponse {
+  enabled: boolean;
+  due: boolean;
+  names: boolean;
+  cards: boolean;
+  paused: string | null;
+}
+
+/** `POST /api/plaud-writeback/automation/heartbeat`: what the automation browser did. */
+export interface PlaudAutomationHeartbeat {
+  /** Null when the run stopped before it could check Plaud (for example, nothing to do). */
+  plaudSignedIn: boolean | null;
+  /** True when the run did work (opened Plaud); false for an idle check-in. */
+  ran: boolean;
+  sent: number;
+  conflicts: number;
+  failed: number;
+  cards: number;
+  error?: string;
+  /** Plaud answered in a shape the extension doesn't recognise: automation pauses (P6). */
+  shapeError?: boolean;
+}
+
+/** `GET /api/plaud-writeback/automation/status`, for Settings and the Dashboard. */
+export interface PlaudAutomationStatus {
+  /** `APPLAUD_AUTOMATION_DIR` is set, so the browser container can be given a credential. */
+  available: boolean;
+  enabled: boolean;
+  names: boolean;
+  cards: boolean;
+  viewerUrl: string;
+  /** Last time the browser checked in, or null if it never has since automation was turned on. */
+  lastSeenAt: number | null;
+  /** Last run that did work. */
+  lastRunAt: number | null;
+  plaudSignedIn: boolean | null;
+  last: PlaudAutomationHeartbeat | null;
+  paused: string | null;
+  /** Automation is on and the browser is signed out, or hasn't checked in for 30 minutes. */
+  needsAttention: "signed_out" | "not_seen" | "paused" | null;
+}
+
+/** `PUT /api/plaud-writeback/automation`. */
+export interface PlaudAutomationUpdate {
+  enabled?: boolean;
+  names?: boolean;
+  cards?: boolean;
+  viewerUrl?: string;
+}

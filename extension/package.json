@@ -6,8 +6,9 @@
   "description": "Browser extension that sends confirmed speaker names from Applaud to Plaud (docs/plans/plaud-write-back-extension.md).",
   "scripts": {
     "build": "node build.mjs",
+    "build:automation": "node build.mjs automation",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\""
+    "clean": "node -e \"for (const d of ['dist','dist-automation']) fs.rmSync(d,{recursive:true,force:true})\""
   },
   "dependencies": {
     "@applaud/shared": "workspace:*"

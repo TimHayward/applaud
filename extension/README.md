@@ -50,6 +50,10 @@ Writes send the same headers the Plaud web app sends, including your device id a
 
 The extension and Applaud are built from the same branch or release. If the extension is newer than the Applaud it talks to, features Applaud doesn't have yet report *Applaud doesn't support this yet*; redeploy Applaud.
 
+## Automatic sync without a desktop browser
+
+Applaud can also do this unattended: **Settings → Automatic Plaud sync** runs a separate *automation* build of this extension in an always-on browser container (`src/automation/`, built with `pnpm -C extension build:automation`). See the [Portainer guide](../docs/portainer.md#automatic-plaud-sync). This extension is unchanged by it and works the same whether or not that is on.
+
 ## Remove
 
 Choose **Unpair** in the popup, or **Remove** next to the extension in Applaud's settings, then remove the extension in `edge://extensions`.

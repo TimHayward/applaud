@@ -180,3 +180,13 @@ export const RATE_LIMIT_MEDIA_MAX = envInt("APPLAUD_RATE_LIMIT_MEDIA_MAX", 900);
 export const RATE_LIMIT_SENSITIVE_MAX = envInt("APPLAUD_RATE_LIMIT_SENSITIVE_MAX", 20);
 /** Failed LAN-token attempts before the client is locked out for the window. */
 export const RATE_LIMIT_AUTH_FAILURES = envInt("APPLAUD_RATE_LIMIT_AUTH_FAILURES", 20);
+
+/**
+ * Folder shared with the browser container (docs/portainer.md). While
+ * automatic Plaud sync is on, Applaud writes the automation browser's
+ * credential here; unset, the feature is unavailable.
+ */
+export const AUTOMATION_DIR = process.env.APPLAUD_AUTOMATION_DIR?.trim() || null;
+
+/** The address the automation browser reaches Applaud on (its manifest allows only this). */
+export const AUTOMATION_APPLAUD_URL = "http://applaud.internal:44471";

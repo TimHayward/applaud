@@ -76,6 +76,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The browser for Automatic Plaud sync, from the same commit so its
+      # automation extension and this Applaud speak the same protocol.
+      - name: Build and push browser image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: browser/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}-browser:${{ github.ref_name }}
+            ${{ env.IMAGE }}-browser:latest
+          cache-from: type=gha,scope=browser
+          cache-to: type=gha,mode=max,scope=browser
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

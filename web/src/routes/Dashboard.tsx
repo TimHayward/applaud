@@ -6,6 +6,7 @@ import { api, ApiError } from "../api.js";
 import { useDebouncedValue } from "../hooks/useDebouncedValue.js";
 import { useRecordingActions } from "../hooks/useRecordingActions.js";
 import { useToast } from "../components/Toast.js";
+import { PlaudAutomationBanner } from "../components/PlaudAutomationSettings.js";
 import { formatDurationClock, formatDateShort, formatBytes } from "../lib/format.js";
 import type { RecordingRow, RecordingsSort, SpeakerFilter } from "@applaud/shared";
 import {
@@ -276,6 +277,7 @@ export function Dashboard(): JSX.Element {
 
   return (
     <div>
+      <PlaudAutomationBanner />
       {/* Page Header */}
       <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div className="space-y-2">

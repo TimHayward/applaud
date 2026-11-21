@@ -6,6 +6,11 @@
 # generated on first start and printed to the container log; set
 # APPLAUD_LAN_TOKEN to pin your own instead (min. 16 chars). Applaud needs
 # outbound HTTPS to Plaud; it needs no inbound access from the internet.
+#
+# Optional: the Applaud browser for Automatic Plaud sync (Settings). Start it
+# with the "browser" profile (`docker compose --profile browser up -d`, or
+# COMPOSE_PROFILES=browser in Portainer) and set APPLAUD_BROWSER_PASSWORD.
+# See docs/portainer.md, "Automatic Plaud sync".
 services:
   applaud:
     build: .
@@ -26,10 +31,55 @@ services:
       APPLAUD_LAN_TOKEN: ${APPLAUD_LAN_TOKEN:-}
       # Set to 1 if a webhook target (e.g. n8n) is on your LAN or this host.
       APPLAUD_WEBHOOK_ALLOW_PRIVATE: ${APPLAUD_WEBHOOK_ALLOW_PRIVATE:-}
+      # Shared with applaud-browser: where Applaud leaves that browser's credential.
+      APPLAUD_AUTOMATION_DIR: /data/automation
     volumes:
       - config:/data/config
       - recordings:/data/recordings
+      - automation:/data/automation
+    networks:
+      default:
+        # The address the browser container reaches Applaud on. Names ending
+        # in .internal pass Applaud's host check without APPLAUD_ALLOWED_HOSTS.
+        aliases:
+          - applaud.internal
+
+  # Automatic Plaud sync: Chromium you view in a web page (https://<host>:3001)
+  # to sign in to Plaud once. Off unless the "browser" profile is active.
+  applaud-browser:
+    profiles: ["browser"]
+    build:
+      context: .
+      dockerfile: browser/Dockerfile
+    image: applaud-browser:local
+    pull_policy: build
+    container_name: applaud-browser
+    restart: unless-stopped
+    depends_on:
+      - applaud
+    # Chromium needs shared memory and its own sandbox syscalls.
+    shm_size: "1gb"
+    security_opt:
+      - seccomp:unconfined
+    mem_limit: ${APPLAUD_BROWSER_MEMORY:-2g}
+    ports:
+      # The viewer. Keep it on your LAN: it controls a browser signed in to Plaud.
+      - "${APPLAUD_BROWSER_PORT:-3001}:3001"
+    environment:
+      # Same uid as Applaud, so the browser can read the credential Applaud writes.
+      PUID: "1000"
+      PGID: "1000"
+      TZ: ${TZ:-Etc/UTC}
+      # Sign-in for the viewer. The container won't start the viewer without a password.
+      CUSTOM_USER: ${APPLAUD_BROWSER_USER:-applaud}
+      PASSWORD: ${APPLAUD_BROWSER_PASSWORD:-}
+    volumes:
+      # The browser profile, including the Plaud sign-in: treat it as a secret.
+      - browser:/config
+      - automation:/opt/applaud-automation/secret:ro
 
 volumes:
   config:
   recordings:
+  automation:
+  browser:

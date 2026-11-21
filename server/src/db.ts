@@ -93,6 +93,18 @@ const MIGRATIONS: Migration[] = [
       addColumn(d, "recordings", "summary_card_checked_at", "INTEGER");
     },
   },
+  {
+    version: 9,
+    name: "automatic Plaud sync through the browser container",
+    up: (d) => {
+      // 'automation' marks the browser container's client; existing rows are paired extensions.
+      addColumn(d, "plaud_writeback_clients", "kind", "TEXT NOT NULL DEFAULT 'extension'");
+      addColumn(d, "plaud_writeback_clients", "last_heartbeat_at", "INTEGER");
+      addColumn(d, "plaud_writeback_clients", "last_heartbeat", "TEXT");
+      addColumn(d, "plaud_writeback_clients", "last_run_at", "INTEGER");
+      addColumn(d, "plaud_writeback_clients", "paused_reason", "TEXT");
+    },
+  },
 ];
 
 /** Schema version this build writes. */

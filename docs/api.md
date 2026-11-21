@@ -101,6 +101,22 @@ These routes accept the LAN token as usual, or a paired extension's own token as
 | POST | `/api/plaud-writeback/pair` | none | Body: `{ code, name }`. Exchanges a pairing code for an extension token. No other authentication; failures are rate limited. |
 | GET | `/api/plaud-writeback/clients` | web UI | Paired extensions. |
 | DELETE | `/api/plaud-writeback/clients/:id` | web UI | Remove a paired extension; its token stops working at once. |
+| GET | `/api/plaud-writeback/cards/needed?limit=` | both | Recordings with a summary but no summary card yet, newest first (`limit` 1 to 100, default 25). |
+| POST | `/api/plaud-writeback/cards/:id` | extension | Body: `{ status: "found", png }` (base64, at most 10 MB) saves `summary_card.png` and links it from `summary.md`; `{ status: "none" }` records that Plaud has no card yet. |
+
+### Automatic Plaud sync
+
+The browser container's routes ([Portainer guide](portainer.md#automatic-plaud-sync)). The automation browser authenticates with the token Applaud writes to `APPLAUD_AUTOMATION_DIR/client.json` while **Settings → Automatic Plaud sync** is on, and sends the protocol header like an extension. That token also works on `/plan`, `/results`, `/cards/needed` and `/cards/:id`. `/plan` and `/cards/:id` return 409 while automatic sync, or its names or cards option, is off. It can't undo. It isn't listed by `/clients`.
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| GET | `/api/plaud-writeback/automation/next` | automation | `{ enabled, due, names, cards, paused }`: whether to run now. Due every 5 minutes, or after Run now. |
+| GET | `/api/plaud-writeback/automation/pending` | automation | As `/pending`, less recordings sent and awaiting Applaud's re-read, and those that failed or conflicted in the last 6 hours. Empty unless names are on here and under Speaker identification. |
+| POST | `/api/plaud-writeback/automation/heartbeat` | automation | Body: `{ plaudSignedIn, ran, sent, conflicts, failed, cards, error?, shapeError? }`. `shapeError` pauses automatic sync. |
+| GET | `/api/plaud-writeback/automation/status` | web UI | Settings, last check-in, last run, Plaud sign-in state, pause reason, and `needsAttention` (`signed_out`, `not_seen`, `paused` or null). |
+| PUT | `/api/plaud-writeback/automation` | web UI | Body: any of `{ enabled, names, cards, viewerUrl }`. Turning it on writes the credential (409 without `APPLAUD_AUTOMATION_DIR`); turning it off deletes it and revokes the token. |
+| POST | `/api/plaud-writeback/automation/run` | web UI | Run at the browser's next check-in. |
+| POST | `/api/plaud-writeback/automation/resume` | web UI | Clear a pause and run at the next check-in. |
 
 ## Sync
 

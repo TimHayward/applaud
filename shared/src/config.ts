@@ -64,6 +64,29 @@ export const DEFAULT_SPEAKER_CONFIG: SpeakerConfig = {
   webhookWhenNamed: false,
 };
 
+/**
+ * Automatic Plaud sync: an always-on browser container in the stack runs the
+ * Applaud automation extension, which sends confirmed names and fetches
+ * summary cards without anyone opening Plaud. Off by default; turning it off
+ * revokes the browser's credential and refuses its requests at once.
+ */
+export interface PlaudAutomationConfig {
+  enabled: boolean;
+  /** Send confirmed speaker names (also needs Speakers → "Send names to Plaud"). */
+  names: boolean;
+  /** Fetch summary cards. */
+  cards: boolean;
+  /** Where the browser container's viewer is reached, for the sign-in link. "" uses `https://<this host>:3001`. */
+  viewerUrl: string;
+}
+
+export const DEFAULT_PLAUD_AUTOMATION_CONFIG: PlaudAutomationConfig = {
+  enabled: false,
+  names: true,
+  cards: true,
+  viewerUrl: "",
+};
+
 export interface AppConfig {
   version: number;
   setupComplete: boolean;
@@ -114,6 +137,15 @@ export interface AppConfig {
   plaudNickname: string | null;
   /** Partial in settings files written before it existed; read through `speakerConfig()`. */
   speakers: SpeakerConfig;
+  /** Absent in settings files written before it existed; read through `plaudAutomationConfig()`. */
+  plaudAutomation?: PlaudAutomationConfig;
+}
+
+/** Automatic Plaud sync settings with defaults filled in. */
+export function plaudAutomationConfig(
+  cfg: Pick<AppConfig, "plaudAutomation"> | null | undefined,
+): PlaudAutomationConfig {
+  return { ...DEFAULT_PLAUD_AUTOMATION_CONFIG, ...cfg?.plaudAutomation };
 }
 
 /** Speaker settings with defaults filled in. */
