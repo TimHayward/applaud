@@ -42,12 +42,7 @@ export interface SetupStatusResponse {
 }
 
 export type RecordingsSort =
-  | "date_desc"
-  | "date_asc"
-  | "duration_desc"
-  | "duration_asc"
-  | "size_desc"
-  | "size_asc";
+  "date_desc" | "date_asc" | "duration_desc" | "duration_asc" | "size_desc" | "size_asc";
 
 /**
  * Filter the recordings list by where its speakers stand, as the speaker
@@ -575,6 +570,8 @@ export interface PlaudAutomationStatus {
   names: boolean;
   cards: boolean;
   viewerUrl: string;
+  /** Host port the browser viewer is published on (`APPLAUD_BROWSER_PORT`), for the default address. */
+  viewerPort: number;
   /** Last time the browser checked in, or null if it never has since automation was turned on. */
   lastSeenAt: number | null;
   /** Last run that did work. */

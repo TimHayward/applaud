@@ -33,6 +33,8 @@ services:
       APPLAUD_WEBHOOK_ALLOW_PRIVATE: ${APPLAUD_WEBHOOK_ALLOW_PRIVATE:-}
       # Shared with applaud-browser: where Applaud leaves that browser's credential.
       APPLAUD_AUTOMATION_DIR: /data/automation
+      # The browser viewer's host port, so Settings links to it.
+      APPLAUD_BROWSER_PORT: ${APPLAUD_BROWSER_PORT:-3001}
     volumes:
       - config:/data/config
       - recordings:/data/recordings

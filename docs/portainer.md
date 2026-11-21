@@ -220,7 +220,7 @@ The card then shows the browser as connected and Plaud as signed in. If Plaud si
 | --- | --- | --- |
 | `APPLAUD_BROWSER_PASSWORD` | none (required) | Password for the browser viewer |
 | `APPLAUD_BROWSER_USER` | `applaud` | User name for the browser viewer |
-| `APPLAUD_BROWSER_PORT` | `3001` | Host port for the viewer (HTTPS) |
+| `APPLAUD_BROWSER_PORT` | `3001` | Host port for the viewer (HTTPS). Settings links to it on the host you opened Applaud on; set **Browser address** in Settings if you reach the viewer some other way. |
 | `APPLAUD_BROWSER_MEMORY` | `2g` | Memory limit for the browser container |
 
 **If Portainer ignores `COMPOSE_PROFILES`**, the browser service doesn't start. Remove the `profiles:` line from the `applaud-browser` service in the compose file the stack builds from.

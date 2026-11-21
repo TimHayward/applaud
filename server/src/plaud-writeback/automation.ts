@@ -14,7 +14,7 @@ import {
 import { getDb } from "../db.js";
 import { writeFileAtomic } from "../fsAtomic.js";
 import { logger } from "../logger.js";
-import { AUTOMATION_APPLAUD_URL, AUTOMATION_DIR } from "../constants.js";
+import { AUTOMATION_APPLAUD_URL, AUTOMATION_DIR, AUTOMATION_VIEWER_PORT } from "../constants.js";
 import { hashToken } from "./clients.js";
 import { listPending } from "./store.js";
 
@@ -267,6 +267,7 @@ export function automationStatus(
     names: a.names,
     cards: a.cards,
     viewerUrl: a.viewerUrl,
+    viewerPort: AUTOMATION_VIEWER_PORT,
     lastSeenAt,
     lastRunAt: row?.last_run_at ?? null,
     plaudSignedIn,

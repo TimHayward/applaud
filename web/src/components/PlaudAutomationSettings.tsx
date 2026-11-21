@@ -11,9 +11,14 @@ export const AUTOMATION_QUERY_KEY = ["plaud-automation"] as const;
 const DOCS_URL =
   "https://github.com/TimHayward/applaud/blob/main/docs/portainer.md#automatic-plaud-sync";
 
-/** The viewer's address: as set, else this host on the browser container's default port. */
-export function viewerAddress(s: Pick<PlaudAutomationStatus, "viewerUrl">): string {
-  return s.viewerUrl || `https://${window.location.hostname}:3001`;
+/** The viewer's address on this host and the stack's APPLAUD_BROWSER_PORT. */
+function defaultViewerAddress(s: Pick<PlaudAutomationStatus, "viewerPort">): string {
+  return `https://${window.location.hostname}:${s.viewerPort || 3001}`;
+}
+
+/** The viewer's address: as set, else the default one. */
+export function viewerAddress(s: Pick<PlaudAutomationStatus, "viewerUrl" | "viewerPort">): string {
+  return s.viewerUrl || defaultViewerAddress(s);
 }
 
 /** An API error's message: the server's `error` text when it sent JSON. */
@@ -241,7 +246,7 @@ export function PlaudAutomationSettings(): JSX.Element {
               <input
                 type="url"
                 className="w-full bg-surface-container-highest/50 border-0 rounded-lg p-3 text-sm text-on-surface focus:ring-2 focus:ring-primary/40 focus:outline-none"
-                placeholder={`https://${window.location.hostname}:3001`}
+                placeholder={defaultViewerAddress(s)}
                 value={viewerUrl}
                 onChange={(e) => setViewerUrl(e.target.value)}
                 onBlur={() => {
