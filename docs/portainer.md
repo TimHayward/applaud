@@ -259,6 +259,7 @@ Files are served by Applaud itself (player, downloads, webhook URLs). On the Doc
 | Build fails with `429 Too Many Requests` from Docker Hub | Docker Hub's anonymous pull limit. Add Docker Hub credentials under Portainer **Registries**, or retry later. |
 | A recording shows *details only* | It's older than the history window. Click **Download**, or raise **Settings → History window**. |
 | Recordings folder errors in the wizard | Use `/data/recordings`, the volume's path inside the container. |
+| *Could not write the automation browser's credential* when turning on Automatic Plaud sync | The `applaud_automation` volume isn't writable by Applaud (uid 1000), usually because it was created by an older browser image. Stop the stack, delete the `applaud_automation` volume (it holds only that credential), and update the stack. Your Plaud sign-in in `applaud_browser` is kept. |
 
 ## Switching to a released image
 

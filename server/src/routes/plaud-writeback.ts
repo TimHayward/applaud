@@ -219,7 +219,13 @@ plaudWritebackRouter.get("/cards/needed", (req, res) => {
 
 const CardBody = z.discriminatedUnion("status", [
   // Base64 of a PNG of at most 10 MB.
-  z.object({ status: z.literal("found"), png: z.string().min(1).max(14 * 1024 * 1024) }),
+  z.object({
+    status: z.literal("found"),
+    png: z
+      .string()
+      .min(1)
+      .max(14 * 1024 * 1024),
+  }),
   z.object({ status: z.literal("none") }),
 ]);
 
@@ -481,7 +487,21 @@ plaudWritebackRouter.put("/automation", uiOnly, (req, res) => {
     applyAutomation(nextCfg);
   } catch (err) {
     logger.warn({ err }, "could not update the automation browser's credential");
-    res.status(500).json({ error: "could not write the automation browser's credential" });
+    // Don't leave it switched on without a credential the browser can read.
+    if (!prev.enabled && plaudAutomationConfig(nextCfg).enabled) {
+      try {
+        applyAutomation(updateConfig({ plaudAutomation: prev }));
+      } catch {
+        /* the switch is off again; nothing was written */
+      }
+    }
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    res.status(500).json({
+      error:
+        code === "EACCES" || code === "EPERM"
+          ? `could not write the automation browser's credential: Applaud has no permission to write to the shared automation folder. Delete the stack's automation volume and update the stack (see docs/portainer.md, Troubleshooting)`
+          : `could not write the automation browser's credential${code ? ` (${code})` : ""}`,
+    });
     return;
   }
   // Turning it on: run as soon as the browser checks in.

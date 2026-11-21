@@ -195,7 +195,15 @@ describe("plaudWritebackRouter", () => {
   const heartbeat = (token: string, over: Record<string, unknown> = {}) =>
     call("POST", "/automation/heartbeat", {
       token,
-      body: { plaudSignedIn: true, ran: false, sent: 0, conflicts: 0, failed: 0, cards: 0, ...over },
+      body: {
+        plaudSignedIn: true,
+        ran: false,
+        sent: 0,
+        conflicts: 0,
+        failed: 0,
+        cards: 0,
+        ...over,
+      },
     });
 
   const nextRun = async (token: string) =>
@@ -216,6 +224,21 @@ describe("plaudWritebackRouter", () => {
     expect(status).toMatchObject({ available: false, enabled: false });
   });
 
+  it("stays off when it can't write the browser's credential", async () => {
+    automationDir = mkdtempSync(path.join(tmpdir(), "applaud-automation-"));
+    // A file where the folder should be: the credential can't be written.
+    const blocked = path.join(automationDir, "blocked");
+    writeFileSync(blocked, "");
+    setAutomationDirForTests(path.join(blocked, "sub"));
+    const res = await call("PUT", "/automation", { token: LAN, body: { enabled: true } });
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toMatch(/could not write/);
+    const status = (await (await call("GET", "/automation/status", { token: LAN })).json()) as {
+      enabled: boolean;
+    };
+    expect(status.enabled).toBe(false);
+  });
+
   it("gives the automation browser a credential while it is on, and revokes it when off", async () => {
     const token = await enableAutomation();
     expect(await nextRun(token)).toMatchObject({ enabled: true, due: true, paused: null });
@@ -225,7 +248,9 @@ describe("plaudWritebackRouter", () => {
     expect((await call("GET", "/automation/next", { token: extension })).status).toBe(403);
     expect((await call("GET", "/automation/next", { token: LAN })).status).toBe(403);
     expect((await call("GET", "/automation/status", { token })).status).toBe(403);
-    expect((await call("PUT", "/automation", { token, body: { enabled: false } })).status).toBe(403);
+    expect((await call("PUT", "/automation", { token, body: { enabled: false } })).status).toBe(
+      403,
+    );
     // The paired-extensions list looks as it did, and can't revoke the browser.
     const clients = (await (await call("GET", "/clients", { token: LAN })).json()) as {
       clients: { name: string }[];
@@ -251,9 +276,9 @@ describe("plaudWritebackRouter", () => {
 
     await call("PUT", "/automation", { token: LAN, body: { names: true, cards: false } });
     expect((await call("POST", "/plan", { token, body })).status).toBe(200);
-    expect(
-      (await call("POST", "/cards/f_1", { token, body: { status: "none" } })).status,
-    ).toBe(409);
+    expect((await call("POST", "/cards/f_1", { token, body: { status: "none" } })).status).toBe(
+      409,
+    );
     expect((await call("POST", "/undo/f_1", { token })).status).toBe(403);
 
     // "Send names to Plaud" still applies on top.
@@ -284,7 +309,9 @@ describe("plaudWritebackRouter", () => {
     });
     expect(await pending()).toEqual([]);
     // The extension's own list is unchanged by the back-off.
-    const all = (await (await call("GET", "/pending", { token: LAN })).json()) as PlaudWritebackPendingResponse;
+    const all = (await (
+      await call("GET", "/pending", { token: LAN })
+    ).json()) as PlaudWritebackPendingResponse;
     expect(all.recordings.map((r) => r.recordingId)).toEqual(["f_1"]);
 
     db.prepare("UPDATE plaud_writeback SET last_attempt_at = ? WHERE recording_id = 'f_1'").run(
@@ -318,7 +345,10 @@ describe("plaudWritebackRouter", () => {
     expect((await status()).lastSeenAt).not.toBeNull();
 
     await heartbeat(token, { ran: true, shapeError: true, error: "files/detail: no data" });
-    expect(await status()).toMatchObject({ paused: "files/detail: no data", needsAttention: "paused" });
+    expect(await status()).toMatchObject({
+      paused: "files/detail: no data",
+      needsAttention: "paused",
+    });
     expect(await nextRun(token)).toMatchObject({ due: false, paused: "files/detail: no data" });
 
     await call("POST", "/automation/resume", { token: LAN });

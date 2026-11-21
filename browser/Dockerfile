@@ -30,6 +30,11 @@ FROM lscr.io/linuxserver/chromium:075b0b99-ls64@sha256:6d2a8da6a45d4083a7287211a
 COPY --from=build /app/extension/dist-automation/ /opt/applaud-automation/
 COPY browser/root/ /
 
+# The shared volume is seeded from whichever container mounts it first, so
+# this mount point must have the same owner as Applaud's (uid 1000, which
+# writes the credential); otherwise a root-owned volume locks Applaud out.
+RUN chown 1000:1000 /opt/applaud-automation/secret
+
 # Chromium (unlike branded Chrome 137+) still loads an unpacked extension from
 # the command line. Its id comes from this fixed path, so its storage survives
 # image updates. Applaud's credential arrives in /opt/applaud-automation/secret
