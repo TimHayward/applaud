@@ -87,9 +87,10 @@ for p in "${PACKAGES[@]}"; do
   ' "$p" "$NEW_NO_V"
 done
 
-# The extension's manifest carries its own version: keep it with the release.
-MANIFEST="extension/static/manifest.json"
-if [ -f "$MANIFEST" ]; then
+# The extension's manifests (desktop and automation builds) carry their own
+# version: keep them with the release.
+for MANIFEST in extension/static/manifest.json extension/static-automation/manifest.json; do
+  if [ ! -f "$MANIFEST" ]; then continue; fi
   node -e '
     const fs = require("fs");
     const [path, version] = [process.argv[1], process.argv[2]];
@@ -97,7 +98,7 @@ if [ -f "$MANIFEST" ]; then
     const next = text.replace(/("version":\s*")[^"]+(")/, `$1${version}$2`);
     if (next !== text) { fs.writeFileSync(path, next); console.log(`  ${path}: → ${version}`); }
   ' "$MANIFEST" "$NEW_NO_V"
-fi
+done
 
 echo
 echo "==> diff summary"

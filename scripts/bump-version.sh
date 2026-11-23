@@ -5,7 +5,7 @@
 #   scripts/bump-version.sh <new-version>
 #   Example: scripts/bump-version.sh v0.5.8
 #
-# Updates README.md, install.sh, and install.ps1 to point at the new
+# Updates README.md, install.sh, install.ps1 and docs/portainer.md to point at the new
 # release tag. Does NOT create the git tag, commit, or push — review
 # the diff, commit manually, then tag + push.
 
@@ -37,6 +37,7 @@ FILES=(
   "README.md"
   "install.sh"
   "install.ps1"
+  "docs/portainer.md"
 )
 
 changed=0

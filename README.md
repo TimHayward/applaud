@@ -14,6 +14,7 @@ A self-hosted local server that mirrors your [Plaud](https://plaud.ai) recording
 - **Transcript viewer** — speaker-labeled, timestamped, color-coded blocks with auto-scroll during playback, click-to-seek, and full-text search within transcripts
 - **Speaker identification** — optional and off by default: recognises people by voice across recordings, with names you confirm applied to a separate `-Applaud` transcript. Runs entirely on your host (Docker image; see [Speaker identification](#speaker-identification))
 - **Names in Plaud** — optional: a browser extension sends the speaker names you confirmed to Plaud, so Plaud AI uses them (see [Sending names to Plaud](#sending-names-to-plaud))
+- **Automatic Plaud sync** — optional, Docker only: an always-on browser container sends confirmed names and fetches summary cards for you, without opening Plaud (see [Automatic Plaud sync](#automatic-plaud-sync))
 - **AI summaries** — rendered markdown with expandable full-screen modal for long summaries
 - **Webhooks** — POST JSON payloads on `audio_ready` and `transcript_ready` events for n8n, Zapier, or custom integrations
 - **Dark & light mode** — toggle between themes, defaults to system preference
@@ -215,13 +216,16 @@ cd applaud
 docker compose up -d --build
 ```
 
-`docker-compose.yml` builds the image, creates the `config` and `recordings` volumes, and reads three optional variables (from the shell or an `.env` file):
+`docker-compose.yml` builds the image, creates the `config`, `recordings` and `automation` volumes, and reads these optional variables (from the shell or an `.env` file):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `APPLAUD_PORT` | `44471` | Host port |
 | `APPLAUD_ALLOWED_HOSTS` | empty | Hostname(s) you open Applaud on, when not an IP or a `.lan`/`.local` name |
 | `APPLAUD_LAN_TOKEN` | generated | Pin the LAN access token (first start only) |
+| `APPLAUD_WEBHOOK_ALLOW_PRIVATE` | empty | `1` lets webhooks go to a private address, such as n8n on your LAN |
+
+The optional browser container for [Automatic Plaud sync](#automatic-plaud-sync) is in the same file, behind the `browser` profile, so `docker compose up -d --build` alone doesn't start it.
 
 Open `http://<host>:44471/setup` (with `?token=…`, see below), click **Sign in with Plaud**, and enter `/data/recordings` as the recordings folder. The container needs outbound HTTPS to Plaud (`mcp.plaud.ai`, `platform.plaud.ai`, Plaud's storage on `*.amazonaws.com`) but no inbound access from the internet.
 
@@ -261,6 +265,31 @@ Plaud AI only uses speaker names held in Plaud. Each recording's page in Applaud
 4. With [web.plaud.ai](https://web.plaud.ai) open and signed in, use **Dry run** and **Send to Plaud** on one recording, or **Send all**.
 
 Only names you confirmed are sent, never automatic matches. Plaud refuses any write to a document that changed since it was read, a send that stops part-way is completed by sending again, and every send can be undone for 30 days. Details, permissions and building from source: [extension/README.md](extension/README.md).
+
+Older Plaud recordings whose transcripts have no line IDs can't take names this way; Applaud marks them **rename in Plaud** and lists the renames on the recording's page.
+
+### Automatic Plaud sync
+
+With Docker, Applaud can send confirmed names and fetch summary cards without you opening Plaud. An optional container, `applaud-browser` (Chromium you view in a web page, with the extension's *automation* build), stays signed in to Plaud. Applaud tells it when to run and contacts Plaud only when there is something to do. Same caveat: unofficial, and not supported by Plaud.
+
+1. Start the stack with the browser profile and a password for the browser viewer:
+
+   ```bash
+   APPLAUD_BROWSER_PASSWORD='<a strong password>' docker compose --profile browser up -d --build
+   ```
+
+   (In Portainer, set `COMPOSE_PROFILES=browser` and `APPLAUD_BROWSER_PASSWORD` as stack variables.)
+2. In Applaud, turn on **Settings → Automatic Plaud sync**.
+3. Choose **Open the browser** (`https://<host>:3001`), accept its self-signed certificate, sign in with `applaud` and your password, and sign in to Plaud in the tab that is already open.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `APPLAUD_BROWSER_PASSWORD` | none (required) | Password for the browser viewer; the viewer won't start without one |
+| `APPLAUD_BROWSER_USER` | `applaud` | User name for the browser viewer |
+| `APPLAUD_BROWSER_PORT` | `3001` | Host port for the viewer (HTTPS) |
+| `APPLAUD_BROWSER_MEMORY` | `2g` | Memory limit for the browser container |
+
+The viewer controls a browser signed in to your Plaud account: keep its port on your LAN, and treat the `browser` volume like a password. Each release also publishes the browser as `ghcr.io/timhayward/applaud-browser:v0.7.0`. Full guide: [docs/portainer.md](docs/portainer.md#automatic-plaud-sync).
 
 ## Running in the background
 
@@ -333,6 +362,8 @@ pnpm dev
 ```
 
 Runs the Vite dev server on port 44470 with a proxy for `/api` and `/media` to the Express server on port 44471. The server runs in `tsx watch` mode. Hot reload works on both sides.
+
+The browser extension builds separately: `pnpm build:extension` (desktop, to `extension/dist`) and `pnpm -C extension build:automation` (the automation build for the browser container, to `extension/dist-automation`). `docker build -f browser/Dockerfile -t applaud-browser .` builds the browser image from the repository root.
 
 - HTTP API reference: [`docs/api.md`](docs/api.md)
 - Contributing guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
