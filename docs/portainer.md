@@ -177,6 +177,56 @@ The bands for automatic names and suggestions are under **Matching thresholds** 
 
 **Privacy.** Voiceprints are biometric data. They are stored only in the database in the `applaud_config` volume, never sent anywhere, and never included in webhooks or exports, so treat backups of that volume accordingly.
 
+## Automatic Plaud sync
+
+Optional, and off until you turn it on in **Settings → Automatic Plaud sync**. An always-on Chromium container, `applaud-browser`, stays signed in to Plaud and does what the browser extension does when you click it: it sends the speaker names you confirm and fetches summary cards. You don't need to open Plaud. The browser extension keeps working as it does today, with or without this.
+
+How it behaves:
+
+- It checks in with Applaud every minute. Applaud tells it to run every 5 minutes, or straight away when you choose **Run now**.
+- It contacts Plaud only when Applaud has names to send or cards to fetch. It then opens Plaud in a background tab, works through up to 25 recordings 1.5 seconds apart (each read fresh, planned by Applaud and written with Plaud's version check), and closes the tab again.
+- Only names you confirmed are sent. Confirming a speaker in Applaud is the approval, so there is no dry run. Every send can still be undone from the browser extension.
+- A recording that failed or changed in Plaud waits 6 hours before it is tried again. If Plaud answers in a way Applaud doesn't recognise, automatic sync pauses until you choose **Resume**.
+- Turning it off in Settings revokes the browser's credential at once.
+
+There is no pairing code. Applaud gives the browser its own credential through the `automation` volume the two containers share.
+
+**Set it up**
+
+1. In the stack's environment variables, set `COMPOSE_PROFILES=browser` and choose a strong `APPLAUD_BROWSER_PASSWORD`. The browser container won't start its viewer without a password. Update the stack.
+2. In Applaud, open **Settings → Automatic Plaud sync** and turn it on. Turn on **Send names to Plaud** under Speaker identification too, if you want names sent.
+3. Choose **Open the browser** (`https://<host>:3001`). Your browser will warn about the viewer's self-signed certificate; accept it. Sign in with `applaud` (or your `APPLAUD_BROWSER_USER`) and the password. A Plaud tab is already open: sign in to Plaud there, then close the viewer.
+
+The card then shows the browser as connected and Plaud as signed in. If Plaud signs the browser out, the card and the Recordings page say so; open the browser and sign in again.
+
+**Security**
+
+- The viewer gives full control of a browser signed in to your Plaud account. Keep port 3001 on your LAN. Don't put it behind a public reverse proxy. You can remove the port mapping once you're signed in, and add it back only when you need to sign in again.
+- The `browser` volume holds the Plaud sign-in. Treat it, and backups of it, like a password.
+- The browser reaches Applaud at `http://applaud.internal:44471` on the stack's own network, and its credential works on Applaud's `/api/plaud-writeback/*` routes only.
+
+**Resources**
+
+| | |
+| --- | --- |
+| Image | `applaud-browser`, built from `browser/Dockerfile`: [linuxserver/chromium](https://docs.linuxserver.io/images/docker-chromium/) (pinned) with the Applaud automation extension. Over 1 GB, most of it Chromium and its desktop. |
+| Memory | Limited to 2 GB by default (`APPLAUD_BROWSER_MEMORY`). Most of it is used only while Plaud is open. |
+| Shared memory | `shm_size: 1gb`, which Chromium needs. |
+| Security option | `seccomp:unconfined`, which Chromium's own sandbox needs in this image. |
+
+**Optional environment variables**
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `APPLAUD_BROWSER_PASSWORD` | none (required) | Password for the browser viewer |
+| `APPLAUD_BROWSER_USER` | `applaud` | User name for the browser viewer |
+| `APPLAUD_BROWSER_PORT` | `3001` | Host port for the viewer (HTTPS). Settings links to it on the host you opened Applaud on; set **Browser address** in Settings if you reach the viewer some other way. |
+| `APPLAUD_BROWSER_MEMORY` | `2g` | Memory limit for the browser container |
+
+**If Portainer ignores `COMPOSE_PROFILES`**, the browser service doesn't start. Remove the `profiles:` line from the `applaud-browser` service in the compose file the stack builds from.
+
+To stop using it, turn it off in Settings, then remove `COMPOSE_PROFILES=browser` and update the stack. Delete the `applaud_browser` volume to discard the browser's Plaud sign-in.
+
 ## Backups
 
 Back up **both volumes**. `applaud_config` contains your Plaud tokens and the LAN token, so store backups as securely as a password.
@@ -189,6 +239,8 @@ docker run --rm -v applaud_recordings:/v -v "$PWD":/backup alpine tar czf /backu
 ```
 
 Restore by extracting into empty volumes of the same names before starting the stack.
+
+With [Automatic Plaud sync](#automatic-plaud-sync), there are two more volumes. `applaud_automation` needs no backup: Applaud writes it again when it starts. Back up `applaud_browser` only if you'd rather not sign in to Plaud again after a restore, and store that backup as securely as a password.
 
 Removing the stack leaves its volumes in place; delete them under **Volumes** only if you really want to discard everything.
 
@@ -207,7 +259,10 @@ Files are served by Applaud itself (player, downloads, webhook URLs). On the Doc
 | Build fails with `429 Too Many Requests` from Docker Hub | Docker Hub's anonymous pull limit. Add Docker Hub credentials under Portainer **Registries**, or retry later. |
 | A recording shows *details only* | It's older than the history window. Click **Download**, or raise **Settings → History window**. |
 | Recordings folder errors in the wizard | Use `/data/recordings`, the volume's path inside the container. |
+| *Could not write the automation browser's credential* when turning on Automatic Plaud sync | The `applaud_automation` volume isn't writable by Applaud (uid 1000), usually because it was created by an older browser image. Stop the stack, delete the `applaud_automation` volume (it holds only that credential), and update the stack. Your Plaud sign-in in `applaud_browser` is kept. |
 
 ## Switching to a released image
 
 Each tagged release publishes a multi-architecture image, for example `ghcr.io/timhayward/applaud:v0.6.1`. To switch, replace `build: .`, `image: applaud:local` and `pull_policy: build` in the stack with `image: ghcr.io/timhayward/applaud:v0.6.1` and redeploy. The volumes, and therefore your sign-in and library, carry over.
+
+The browser for Automatic Plaud sync is published alongside it as `ghcr.io/timhayward/applaud-browser:v0.6.1`. In the `applaud-browser` service, replace its `build:` block, `image: applaud-browser:local` and `pull_policy: build` with that image, using the same version as Applaud. Its Plaud sign-in, in the `browser` volume, carries over.

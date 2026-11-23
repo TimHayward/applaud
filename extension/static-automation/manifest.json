@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Applaud automation",
+  "short_name": "Applaud automation",
+  "version": "0.6.1",
+  "description": "Runs Applaud's automatic Plaud sync in the Applaud browser container: sends confirmed speaker names and fetches summary cards. Unofficial; not affiliated with Plaud.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "worker.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "scripting", "alarms"],
+  "host_permissions": ["https://web.plaud.ai/*", "http://applaud.internal:44471/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://web.plaud.ai/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

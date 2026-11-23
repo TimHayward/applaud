@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import express from "express";
 import type { Server } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type Database from "better-sqlite3";
@@ -16,8 +16,16 @@ import {
   type PlaudWritebackRecordingResponse,
 } from "@applaud/shared";
 
-const { loadConfig } = vi.hoisted(() => ({ loadConfig: vi.fn() }));
-vi.mock("../config.js", () => ({ loadConfig }));
+const { loadConfig, updateConfig } = vi.hoisted(() => {
+  const loadConfig = vi.fn();
+  const updateConfig = vi.fn((patch: Record<string, unknown>) => {
+    const next = { ...loadConfig(), ...patch };
+    loadConfig.mockReturnValue(next);
+    return next;
+  });
+  return { loadConfig, updateConfig };
+});
+vi.mock("../config.js", () => ({ loadConfig, updateConfig }));
 vi.mock("../logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -25,6 +33,7 @@ vi.mock("../logger.js", () => ({
 import { setupTestDb, teardownTestDb } from "../test/fixtures/db.js";
 import { resetAuthFailures } from "../auth/lan-token.js";
 import { resetPairingForTests } from "../plaud-writeback/clients.js";
+import { RETRY_BACKOFF_MS, setAutomationDirForTests } from "../plaud-writeback/automation.js";
 import { setConfirmationForTests } from "../plaud-writeback/confirm.js";
 import { writeApplaudTranscript } from "../speakers/outputs.js";
 import {
@@ -161,6 +170,202 @@ describe("plaudWritebackRouter", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     teardownTestDb(db);
     rmSync(dir, { recursive: true, force: true });
+    if (automationDir) rmSync(automationDir, { recursive: true, force: true });
+    automationDir = null;
+    setAutomationDirForTests(undefined);
+  });
+
+  // ── Automatic Plaud sync ──
+
+  let automationDir: string | null = null;
+
+  const enableAutomation = async (over: Record<string, unknown> = {}): Promise<string> => {
+    automationDir = mkdtempSync(path.join(tmpdir(), "applaud-automation-"));
+    setAutomationDirForTests(automationDir);
+    const res = await call("PUT", "/automation", { token: LAN, body: { enabled: true, ...over } });
+    expect(res.status).toBe(200);
+    const file = JSON.parse(readFileSync(path.join(automationDir, "client.json"), "utf8")) as {
+      token: string;
+      applaudUrl: string;
+    };
+    expect(file.applaudUrl).toBe("http://applaud.internal:44471");
+    return file.token;
+  };
+
+  const heartbeat = (token: string, over: Record<string, unknown> = {}) =>
+    call("POST", "/automation/heartbeat", {
+      token,
+      body: {
+        plaudSignedIn: true,
+        ran: false,
+        sent: 0,
+        conflicts: 0,
+        failed: 0,
+        cards: 0,
+        ...over,
+      },
+    });
+
+  const nextRun = async (token: string) =>
+    (await (await call("GET", "/automation/next", { token })).json()) as {
+      enabled: boolean;
+      due: boolean;
+      paused: string | null;
+    };
+
+  it("won't turn automatic sync on without the shared folder", async () => {
+    setAutomationDirForTests(null);
+    const res = await call("PUT", "/automation", { token: LAN, body: { enabled: true } });
+    expect(res.status).toBe(409);
+    const status = (await (await call("GET", "/automation/status", { token: LAN })).json()) as {
+      available: boolean;
+      enabled: boolean;
+    };
+    expect(status).toMatchObject({ available: false, enabled: false });
+  });
+
+  it("stays off when it can't write the browser's credential", async () => {
+    automationDir = mkdtempSync(path.join(tmpdir(), "applaud-automation-"));
+    // A file where the folder should be: the credential can't be written.
+    const blocked = path.join(automationDir, "blocked");
+    writeFileSync(blocked, "");
+    setAutomationDirForTests(path.join(blocked, "sub"));
+    const res = await call("PUT", "/automation", { token: LAN, body: { enabled: true } });
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toMatch(/could not write/);
+    const status = (await (await call("GET", "/automation/status", { token: LAN })).json()) as {
+      enabled: boolean;
+    };
+    expect(status.enabled).toBe(false);
+  });
+
+  it("gives the automation browser a credential while it is on, and revokes it when off", async () => {
+    const token = await enableAutomation();
+    expect(await nextRun(token)).toMatchObject({ enabled: true, due: true, paused: null });
+
+    // Its routes are its own; Settings routes and pairing management are not.
+    const extension = await pairExtension();
+    expect((await call("GET", "/automation/next", { token: extension })).status).toBe(403);
+    expect((await call("GET", "/automation/next", { token: LAN })).status).toBe(403);
+    expect((await call("GET", "/automation/status", { token })).status).toBe(403);
+    expect((await call("PUT", "/automation", { token, body: { enabled: false } })).status).toBe(
+      403,
+    );
+    // The paired-extensions list looks as it did, and can't revoke the browser.
+    const clients = (await (await call("GET", "/clients", { token: LAN })).json()) as {
+      clients: { name: string }[];
+    };
+    expect(clients.clients.map((c) => c.name)).toEqual(["Edge"]);
+
+    const off = await call("PUT", "/automation", { token: LAN, body: { enabled: false } });
+    expect(off.status).toBe(200);
+    expect(existsSync(path.join(automationDir!, "client.json"))).toBe(false);
+    expect((await call("GET", "/automation/next", { token })).status).toBe(401);
+    // The paired extension carries on as before.
+    expect((await call("GET", "/pending", { token: extension })).status).toBe(200);
+  });
+
+  it("lets the automation browser send names and save cards only while those options are on", async () => {
+    const token = await enableAutomation({ names: false });
+    const body = { recordingId: "f_1", documents: docs() };
+    expect((await call("POST", "/plan", { token, body })).status).toBe(409);
+    expect(
+      ((await (await call("GET", "/automation/pending", { token })).json()) as { recordings: [] })
+        .recordings,
+    ).toEqual([]);
+
+    await call("PUT", "/automation", { token: LAN, body: { names: true, cards: false } });
+    expect((await call("POST", "/plan", { token, body })).status).toBe(200);
+    expect((await call("POST", "/cards/f_1", { token, body: { status: "none" } })).status).toBe(
+      409,
+    );
+    expect((await call("POST", "/undo/f_1", { token })).status).toBe(403);
+
+    // "Send names to Plaud" still applies on top.
+    configure({ sendToPlaud: false });
+    loadConfig.mockReturnValue({
+      ...loadConfig(),
+      plaudAutomation: { enabled: true, names: true, cards: true, viewerUrl: "" },
+    });
+    expect((await call("POST", "/plan", { token, body })).status).toBe(409);
+  });
+
+  it("offers the automation browser only recordings ready to send, backing off after a failure", async () => {
+    const token = await enableAutomation();
+    const pending = async () =>
+      (
+        (await (await call("GET", "/automation/pending", { token })).json()) as {
+          recordings: { recordingId: string }[];
+        }
+      ).recordings.map((r) => r.recordingId);
+    expect(await pending()).toEqual(["f_1"]);
+
+    const plan = (await (
+      await call("POST", "/plan", { token, body: { recordingId: "f_1", documents: docs() } })
+    ).json()) as PlaudWritebackPlanResponse;
+    await call("POST", "/results", {
+      token,
+      body: { planId: plan.planId, results: [{ kind: "transcript", outcome: "conflict" }] },
+    });
+    expect(await pending()).toEqual([]);
+    // The extension's own list is unchanged by the back-off.
+    const all = (await (
+      await call("GET", "/pending", { token: LAN })
+    ).json()) as PlaudWritebackPendingResponse;
+    expect(all.recordings.map((r) => r.recordingId)).toEqual(["f_1"]);
+
+    db.prepare("UPDATE plaud_writeback SET last_attempt_at = ? WHERE recording_id = 'f_1'").run(
+      Date.now() - RETRY_BACKOFF_MS - 1000,
+    );
+    expect(await pending()).toEqual(["f_1"]);
+  });
+
+  it("runs on Applaud's cadence or on Run now, and pauses on a shape it doesn't recognise", async () => {
+    const token = await enableAutomation();
+    expect((await nextRun(token)).due).toBe(true);
+    expect((await heartbeat(token)).status).toBe(200);
+    expect((await nextRun(token)).due).toBe(false);
+
+    expect((await call("POST", "/automation/run", { token: LAN })).status).toBe(200);
+    expect((await nextRun(token)).due).toBe(true);
+    await heartbeat(token, { ran: true, plaudSignedIn: false });
+    expect((await nextRun(token)).due).toBe(false);
+
+    type Status = {
+      plaudSignedIn: boolean | null;
+      needsAttention: string | null;
+      paused: string | null;
+      lastRunAt: number | null;
+      lastSeenAt: number | null;
+    };
+    const status = async () =>
+      (await (await call("GET", "/automation/status", { token: LAN })).json()) as Status;
+    expect(await status()).toMatchObject({ plaudSignedIn: false, needsAttention: "signed_out" });
+    expect((await status()).lastRunAt).not.toBeNull();
+    expect((await status()).lastSeenAt).not.toBeNull();
+
+    // An idle check-in that finds no Plaud tab keeps the known sign-in state;
+    // one that finds the tab signed in clears it, and keeps the last run's figures.
+    await heartbeat(token, { ran: true, plaudSignedIn: true, sent: 3 });
+    await heartbeat(token, { plaudSignedIn: false });
+    await heartbeat(token, { plaudSignedIn: null });
+    expect(await status()).toMatchObject({ plaudSignedIn: false, needsAttention: "signed_out" });
+    await heartbeat(token, { plaudSignedIn: true });
+    expect(await status()).toMatchObject({
+      plaudSignedIn: true,
+      needsAttention: null,
+      last: { sent: 3 },
+    });
+
+    await heartbeat(token, { ran: true, shapeError: true, error: "files/detail: no data" });
+    expect(await status()).toMatchObject({
+      paused: "files/detail: no data",
+      needsAttention: "paused",
+    });
+    expect(await nextRun(token)).toMatchObject({ due: false, paused: "files/detail: no data" });
+
+    await call("POST", "/automation/resume", { token: LAN });
+    expect(await nextRun(token)).toMatchObject({ due: true, paused: null });
   });
 
   it("lists what Plaud is missing, behind the LAN token", async () => {

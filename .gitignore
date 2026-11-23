@@ -3,6 +3,7 @@ node_modules/
 /applaud/
 dist/
 **/dist/
+extension/dist-automation/
 *.log
 .DS_Store
 .env

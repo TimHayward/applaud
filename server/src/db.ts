@@ -93,6 +93,28 @@ const MIGRATIONS: Migration[] = [
       addColumn(d, "recordings", "summary_card_checked_at", "INTEGER");
     },
   },
+  {
+    version: 9,
+    name: "automatic Plaud sync through the browser container",
+    up: (d) => {
+      // 'automation' marks the browser container's client; existing rows are paired extensions.
+      addColumn(d, "plaud_writeback_clients", "kind", "TEXT NOT NULL DEFAULT 'extension'");
+      addColumn(d, "plaud_writeback_clients", "last_heartbeat_at", "INTEGER");
+      addColumn(d, "plaud_writeback_clients", "last_heartbeat", "TEXT");
+      addColumn(d, "plaud_writeback_clients", "last_run_at", "INTEGER");
+      addColumn(d, "plaud_writeback_clients", "paused_reason", "TEXT");
+    },
+  },
+  {
+    version: 10,
+    name: "confirmed names Plaud's transcript can't take",
+    up: (d) => {
+      // Segments without Plaud's segment_uid (older recordings) can't be sent
+      // to; counted so they don't show as synced. Filled in by the next
+      // rebuild, which runs for every analysed recording on start.
+      addColumn(d, "plaud_writeback", "unsendable_segments", "INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Schema version this build writes. */

@@ -2,7 +2,7 @@
 
 |             |                                                                                                                                                                                                                                                          |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**  | Phases 1 to 3 complete and verified by the owner on two computers in Edge against Plaud. Phase 4 built (batch sends, release packaging, install guide), not yet verified by the owner. |
+| **Status**  | Phases 1 to 3 complete and verified by the owner on two computers in Edge against Plaud. Phase 4 built (batch sends, release packaging, install guide), not yet verified by the owner. Unattended mode (section 10) built, not yet verified on the host. |
 | **Updated** | 2026-11-01                                                                                                                                                                                                                                               |
 | **Owner**   | Tim Hayward                                                                                                                                                                                                                                              |
 | **Context** | Picks up "Write-back to Plaud" from [speaker-identification.md](speaker-identification.md) section 11. Automated server-side write-back was rejected; a browser extension acting in the user's own signed-in Plaud session is the option being explored. |
@@ -310,6 +310,37 @@ Not done, deliberately:
 | Q2  | Whether a content-script fetch of the signed content URLs is accepted by the storage host's CORS policy, as the page's own fetch is.    | Phase 2.                                                                |
 | Q3  | Recordings with no polished transcript, no summary, or more than one summary (`relation_content_ids`).                                  | Phase 1 tests with synthetic cases; Phase 2 against real recordings.    |
 | Q4  | Whether Plaud's "recently used names" list should be updated too. Not needed for Plaud AI; left alone unless it proves useful.          | After Phase 3.                                                          |
+
+## 10. Unattended mode: Automatic Plaud sync (2026-11-21)
+
+Decided by the owner on 2026-11-21. Confirmed names and summary cards reach Plaud without anyone at a desktop browser. User guide: [portainer.md](../portainer.md#automatic-plaud-sync). API: [api.md](../api.md#automatic-plaud-sync).
+
+**Owner constraints.** It is an option in Applaud's Settings, off by default. It must not change how the existing extension works.
+
+**Shape.**
+
+- An optional `applaud-browser` container in the same stack (`browser/Dockerfile`, compose profile `browser`): pinned `linuxserver/chromium`, which you view in a web page (KasmVNC) to sign in to Plaud once.
+- It runs a separate *automation* build of the extension (`extension/src/automation/`, `extension/static-automation/`, output `dist-automation/`).
+- That build reuses `send.ts`, `batch.ts`, `cards.ts`, `plaud.ts`, `content.ts` and `ApplaudClient` unmodified. The desktop worker's tab and unreported-results helpers are copied rather than moved, so the desktop extension's sources and its built `dist/` are unchanged.
+- There is no pairing. While the setting is on, Applaud writes an `automation`-kind client token to `APPLAUD_AUTOMATION_DIR/client.json`, a volume the browser mounts read-only inside the extension's folder. Off deletes the file and revokes the token.
+- Applaud decides (P2). The browser asks `/automation/next` every minute. A run is due every 5 minutes, or on Run now. Plaud is opened, in a background tab, only when `/automation/pending` or `/cards/needed` has work.
+
+**Principles revised.**
+
+| Principle | Change |
+| --- | --- |
+| P4 Low touch, user initiated | Relaxed for the automation browser only, while the Settings option is on: unattended runs are allowed. Plaud is contacted only when Applaud has work, at the same pace as Send all (25 recordings, 1.5 s apart). |
+| P5 Safe writes | For automatic sends only, the dry-run approval is replaced by the user's confirmation of the speaker in Applaud. The undo log, the `origin_version` guard and W3 (confirmed names only) are unchanged. The automation browser can't undo; undo stays with the desktop extension. |
+| P6 Fail closed | A reply in an unexpected shape pauses automatic sync until the user resumes it. A recording that failed or conflicted waits 6 hours before an automatic retry. Each retry starts from a fresh read (W5), so W6 still holds. |
+| P7 Least privilege | Unchanged for Applaud, which never holds a Plaud credential. The Plaud session lives in the browser container's profile volume, which is documented as a secret. The automation build's host permissions are fixed: `web.plaud.ai` and `http://applaud.internal:44471`. |
+
+**Still to verify on the Portainer host** (the spike in the implementation plan):
+
+- Plaud web session lifetime in the container: the expiry of the JWT in `pld_tokenstr`, and whether it stays valid for a week with and without a Plaud tab open.
+- Whether signing in from the container signs the desktop session out.
+- Memory at idle and during a 25-recording run.
+- That Chromium serves `secret/client.json` from the mounted volume.
+- That Portainer honours compose profiles.
 
 ## Appendix A. Spike capture checklist
 

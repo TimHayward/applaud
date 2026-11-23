@@ -19,7 +19,9 @@ const TOUCH_INTERVAL_MS = 60 * 1000;
 
 let pending: { code: string; expiresAt: number } | null = null;
 
-function hashToken(token: string): string {
+export type ClientKind = "extension" | "automation";
+
+export function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
@@ -53,25 +55,35 @@ export function pair(
 
 /** The paired client a token belongs to, or null. */
 export function authenticate(token: string, now: number = Date.now()): number | null {
+  return authenticateClient(token, now)?.id ?? null;
+}
+
+/** As `authenticate`, with whether it is a paired extension or the automation browser. */
+export function authenticateClient(
+  token: string,
+  now: number = Date.now(),
+): { id: number; kind: ClientKind } | null {
   const row = getDb()
     .prepare(
-      "SELECT id, last_used_at FROM plaud_writeback_clients WHERE token_hash = ? AND revoked_at IS NULL",
+      "SELECT id, kind, last_used_at FROM plaud_writeback_clients WHERE token_hash = ? AND revoked_at IS NULL",
     )
-    .get(hashToken(token)) as { id: number; last_used_at: number | null } | undefined;
+    .get(hashToken(token)) as
+    | { id: number; kind: ClientKind; last_used_at: number | null }
+    | undefined;
   if (!row) return null;
   if (row.last_used_at === null || now - row.last_used_at > TOUCH_INTERVAL_MS) {
     getDb()
       .prepare("UPDATE plaud_writeback_clients SET last_used_at = ? WHERE id = ?")
       .run(now, row.id);
   }
-  return row.id;
+  return { id: row.id, kind: row.kind === "automation" ? "automation" : "extension" };
 }
 
 export function listClients(): PlaudWritebackClient[] {
   return (
     getDb()
       .prepare(
-        "SELECT id, name, created_at, last_used_at FROM plaud_writeback_clients WHERE revoked_at IS NULL ORDER BY id",
+        "SELECT id, name, created_at, last_used_at FROM plaud_writeback_clients WHERE revoked_at IS NULL AND kind = 'extension' ORDER BY id",
       )
       .all() as { id: number; name: string; created_at: number; last_used_at: number | null }[]
   ).map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, lastUsedAt: r.last_used_at }));
@@ -81,7 +93,7 @@ export function revokeClient(id: number, now: number = Date.now()): boolean {
   return (
     getDb()
       .prepare(
-        "UPDATE plaud_writeback_clients SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+        "UPDATE plaud_writeback_clients SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND kind = 'extension'",
       )
       .run(now, id).changes > 0
   );

@@ -111,8 +111,16 @@ export const WEBHOOK_RETRY_BACKOFF_MS: readonly number[] = process.env.APPLAUD_W
  * MAX_PER_POLL deliveries are re-driven per cycle, so a dead receiver can't
  * stall syncing.
  */
-export const WEBHOOK_REDRIVE_BASE_DELAY_MS = envMs("APPLAUD_WEBHOOK_REDRIVE_BASE_MINUTES", 5 * 60_000, 60_000);
-export const WEBHOOK_REDRIVE_MAX_DELAY_MS = envMs("APPLAUD_WEBHOOK_REDRIVE_MAX_HOURS", DAY_MS, HOUR_MS);
+export const WEBHOOK_REDRIVE_BASE_DELAY_MS = envMs(
+  "APPLAUD_WEBHOOK_REDRIVE_BASE_MINUTES",
+  5 * 60_000,
+  60_000,
+);
+export const WEBHOOK_REDRIVE_MAX_DELAY_MS = envMs(
+  "APPLAUD_WEBHOOK_REDRIVE_MAX_HOURS",
+  DAY_MS,
+  HOUR_MS,
+);
 export const WEBHOOK_REDRIVE_MAX_ATTEMPTS = envInt("APPLAUD_WEBHOOK_REDRIVE_MAX_ATTEMPTS", 8);
 export const WEBHOOK_REDRIVE_MAX_PER_POLL = envInt("APPLAUD_WEBHOOK_REDRIVE_MAX_PER_POLL", 10);
 
@@ -125,7 +133,10 @@ export const WEBHOOK_REDRIVE_MAX_PER_POLL = envInt("APPLAUD_WEBHOOK_REDRIVE_MAX_
  * or this wait runs out (some recordings never get one), poller Phase 2b
  * sends it. `0` sends as soon as the transcript lands, as before.
  */
-export const WEBHOOK_SUMMARY_WAIT_MS = envMinutesAllowZero("APPLAUD_WEBHOOK_SUMMARY_WAIT_MINUTES", 30);
+export const WEBHOOK_SUMMARY_WAIT_MS = envMinutesAllowZero(
+  "APPLAUD_WEBHOOK_SUMMARY_WAIT_MINUTES",
+  30,
+);
 
 /**
  * Lifetime of the signed ticket the web UI uses for media links and live
@@ -180,3 +191,22 @@ export const RATE_LIMIT_MEDIA_MAX = envInt("APPLAUD_RATE_LIMIT_MEDIA_MAX", 900);
 export const RATE_LIMIT_SENSITIVE_MAX = envInt("APPLAUD_RATE_LIMIT_SENSITIVE_MAX", 20);
 /** Failed LAN-token attempts before the client is locked out for the window. */
 export const RATE_LIMIT_AUTH_FAILURES = envInt("APPLAUD_RATE_LIMIT_AUTH_FAILURES", 20);
+
+/**
+ * Folder shared with the browser container (docs/portainer.md). While
+ * automatic Plaud sync is on, Applaud writes the automation browser's
+ * credential here; unset, the feature is unavailable.
+ */
+export const AUTOMATION_DIR = process.env.APPLAUD_AUTOMATION_DIR?.trim() || null;
+
+/** The address the automation browser reaches Applaud on (its manifest allows only this). */
+export const AUTOMATION_APPLAUD_URL = "http://applaud.internal:44471";
+
+/**
+ * Host port the browser viewer is published on (APPLAUD_BROWSER_PORT, passed
+ * to this container too), so Settings links to the right default address.
+ */
+export const AUTOMATION_VIEWER_PORT = (() => {
+  const n = Number(process.env.APPLAUD_BROWSER_PORT?.trim());
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : 3001;
+})();

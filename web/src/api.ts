@@ -31,6 +31,8 @@ import type {
   PlaudWritebackPairingCodeResponse,
   PlaudWritebackPendingResponse,
   PlaudWritebackRecordingResponse,
+  PlaudAutomationStatus,
+  PlaudAutomationUpdate,
 } from "@applaud/shared";
 
 export class ApiError extends Error {
@@ -225,6 +227,16 @@ export const api = {
   plaudWritebackClients: () => jsonFetch<{ clients: PlaudWritebackClient[] }>("/api/plaud-writeback/clients"),
   revokePlaudWritebackClient: (id: number) =>
     jsonFetch<{ clients: PlaudWritebackClient[] }>(`/api/plaud-writeback/clients/${id}`, { method: "DELETE" }),
+  plaudAutomationStatus: () => jsonFetch<PlaudAutomationStatus>("/api/plaud-writeback/automation/status"),
+  updatePlaudAutomation: (patch: PlaudAutomationUpdate) =>
+    jsonFetch<PlaudAutomationStatus>("/api/plaud-writeback/automation", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  runPlaudAutomation: () =>
+    jsonFetch<PlaudAutomationStatus>("/api/plaud-writeback/automation/run", { method: "POST", body: "{}" }),
+  resumePlaudAutomation: () =>
+    jsonFetch<PlaudAutomationStatus>("/api/plaud-writeback/automation/resume", { method: "POST", body: "{}" }),
   speakerPeople: () => jsonFetch<SpeakerPeopleResponse>("/api/speakers/people"),
   renamePerson: (id: number, name: string) =>
     jsonFetch<SpeakerPeopleResponse>(`/api/speakers/people/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),

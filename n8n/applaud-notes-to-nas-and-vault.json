@@ -1,0 +1,612 @@
+{
+  "name": "Applaud — notes to NAS (NFS) and Obsidian vault",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "applaud",
+        "options": {}
+      },
+      "id": "a21faf9f-f2c5-4862-a573-86ec0095ae4c",
+      "name": "Applaud Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        1728,
+        2816
+      ],
+      "webhookId": "8a7b6c5d-1234-5678-90ab-cdef12345678"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-1",
+              "name": "recipient_email",
+              "value": "you@example.com",
+              "type": "string"
+            },
+            {
+              "id": "cfg-2",
+              "name": "from_email",
+              "value": "applaud@example.com",
+              "type": "string"
+            },
+            {
+              "id": "cfg-3",
+              "name": "subject_prefix",
+              "value": "[Applaud]",
+              "type": "string"
+            },
+            {
+              "id": "cfg-4",
+              "name": "claude_model",
+              "value": "claude-sonnet-4-6",
+              "type": "string"
+            },
+            {
+              "id": "cfg-5",
+              "name": "max_summary_tokens",
+              "value": 4096,
+              "type": "number"
+            },
+            {
+              "id": "cfg-6",
+              "name": "summarize_prompt",
+              "value": "Summarize the following meeting/voice-memo transcript in 3–5 concise bullet points, then end with a one-sentence takeaway. Use markdown.",
+              "type": "string"
+            },
+            {
+              "id": "cfg-7",
+              "name": "vault_root",
+              "value": "/vault/003. Meetings",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "93bae8fc-a6b3-4fa9-aee8-089c597e044c",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2160,
+        2816
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "533a5eb2-6006-4d0d-8c2d-ccd4e679ee62",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "=downloadedMarkdown",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2608,
+        2720
+      ],
+      "id": "d777d32c-ac1f-4307-8474-3ff8aa733978",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.targetPath }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        3280,
+        2720
+      ],
+      "id": "ad36cee3-22ac-4df2-a53d-f951b39ee065",
+      "name": "Write Notes"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function buildFrontMatter(type, date) {\n  return [\n    '---',\n    `type: ${type || 'note'}`,\n    date ? `date: ${date}` : 'date:',\n    'tags:',\n    '  - plaud',\n    'date_reviewed:',\n    '---',\n    '',\n    '',\n  ].join('\\n');\n}\n\n// Change this node name if your upstream preparation node has a different name\nconst upstream = $('Rewrite URLs').item.json;\n\nconst fileName = String(upstream.desiredFileName || 'output.md');\nconst targetDir = String(upstream.targetDir || '/data/applaud');\nconst filePath = `${targetDir}/${fileName}`;\n\nif (upstream.kind === 'downloadedImage') {\n  const binary = $binary.data\n    ? { ...$binary.data, fileName, mimeType: 'image/png' }\n    : await this.helpers.prepareBinaryData(\n        Buffer.from($json.data || '', 'binary'),\n        fileName,\n        'image/png'\n      );\n\n  return {\n    json: {\n      targetDir,\n      desiredFileName: fileName,\n      targetPath: filePath,\n      vaultDir: upstream.vaultDir || '',\n      vaultRelinkImages: upstream.vaultRelinkImages === true,\n    },\n    binary: { data: binary },\n  };\n}\n\nlet content =\n  typeof $json.data === 'string'\n    ? $json.data\n    : (typeof $json.body === 'string'\n        ? $json.body\n        : (typeof $json.content === 'string' ? $json.content : ''));\n\nif (!content) {\n  throw new Error(`Downloaded markdown content was empty for ${fileName}; refusing to upload a blank file.`);\n}\n\nfor (const rewrite of upstream.markdownImageRewrites || []) {\n  if (!rewrite.source || !rewrite.replacement) continue;\n  content = content.split(rewrite.source).join(rewrite.replacement);\n}\n\ncontent = content.replace(/\\r\\n/g, '\\n');\n\n// Summary only: a text line directly followed by a line of dashes renders as a\n// heading in Markdown. Insert a blank line so the dashes become a divider.\nif (upstream.fixDividerSpacing) {\n  content = content.replace(/^([^\\n]*\\S[^\\n]*)\\n([ \\t]*-{3,}[ \\t]*)$/gm, '$1\\n\\n$2');\n}\n\ncontent = buildFrontMatter(upstream.frontMatterType, upstream.recordingDate) + content;\n\nreturn {\n  json: {\n    targetDir,\n    desiredFileName: fileName,\n    targetPath: filePath,\n    vaultDir: upstream.vaultDir || '',\n    vaultRelinkImages: upstream.vaultRelinkImages === true,\n  },\n  binary: {\n    data: await this.helpers.prepareBinaryData(\n      Buffer.from(content, 'utf8'),\n      fileName,\n      'text/markdown'\n    )\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3056,
+        2720
+      ],
+      "id": "fd7cc773-18ae-4183-8150-ba300d62dab3",
+      "name": "Format Outputs"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.sourceUrl }}",
+        "options": {
+          "response": {
+            "response": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2832,
+        2720
+      ],
+      "id": "7c0322b4-14bb-4f6c-a0db-80679e8aa2af",
+      "name": "Get Files"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The webhook body, from Config (\"Make folders\" runs in between).\nconst input = $('Config').first().json.body;\n\nconst ignoredNameFragments = [\n  '_transaction_polish_',\n  '_mark_memo_',\n  '_high_light_',\n];\n\nfunction shouldIgnoreFileName(name) {\n  const value = String(name || '').toLowerCase();\n  return ignoredNameFragments.some(fragment => value.includes(fragment));\n}\n\n// Applaud and n8n both run on the Docker host. With Settings → Webhook Outbound →\n// Public URL set to http://docker.hayward.mx:44471 in Applaud, links already\n// arrive with the right host and this changes nothing. Without it, Applaud\n// sends its bind address (127.0.0.1); older deliveries may name the old host.\nconst APPLAUD_HOST = 'http://docker.hayward.mx';\nfunction rewriteHost(url) {\n  if (!url || typeof url !== 'string') return url;\n  return url.replace(/^http:\\/\\/(?:127\\.0\\.0\\.1|localhost|192\\.168\\.0\\.117)(?=[:/]|$)/, APPLAUD_HOST);\n}\n\n// Links carry a read-only ticket for the recording's folder (?ticket=…); a link\n// built from a file path below needs the same ticket or Applaud refuses it.\nconst folderTicket = (() => {\n  try {\n    return new URL(rewriteHost(input.http_urls?.summary || '')).searchParams.get('ticket') || '';\n  } catch {\n    return '';\n  }\n})();\nfunction withTicket(url) {\n  if (!url || !folderTicket || /[?&]ticket=/.test(url)) return url;\n  return `${url}${url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(folderTicket)}`;\n}\n\nfunction sanitiseBaseName(name) {\n  return String(name || 'Recording')\n    .replace(/[\\\\/:*?\\\"<>|]/g, '-')\n    .replace(/\\s+/g, ' ')\n    .replace(/[ .]+$/g, '')\n    .trim();\n}\n\nfunction assetBaseName(name) {\n  return String(name || '').split('/').pop() || '';\n}\n\nfunction extensionFromName(name, fallback = '') {\n  const match = assetBaseName(name).match(/\\.([a-z0-9]+)$/i);\n  return match ? `.${match[1].toLowerCase()}` : fallback;\n}\n\nfunction firstPresent(...values) {\n  return values.find(value => typeof value === 'string' && value.length > 0) || '';\n}\n\nfunction uniqueStrings(values) {\n  return [...new Set(values.filter(value => typeof value === 'string' && value.length > 0))];\n}\n\nfunction mediaRootFromUrl(url) {\n  const value = String(url || '').split('?')[0];\n  const marker = '/media/';\n  const index = value.indexOf(marker);\n  return index === -1 ? '' : value.slice(0, index + marker.length);\n}\n\nfunction containingFolderFromUrl(url) {\n  const value = String(url || '').split('?')[0];\n  const index = value.lastIndexOf('/');\n  return index === -1 ? '' : value.slice(0, index + 1);\n}\n\nfunction originFromUrl(url) {\n  try {\n    return new URL(url).origin;\n  } catch {\n    return '';\n  }\n}\n\nfunction deriveAssetUrl(asset, summaryUrl) {\n  if (asset.url) return rewriteHost(asset.url);\n\n  const rewrittenSummaryUrl = rewriteHost(summaryUrl);\n  const origin = originFromUrl(rewrittenSummaryUrl);\n  const mediaRoot = mediaRootFromUrl(rewrittenSummaryUrl);\n  const summaryFolder = containingFolderFromUrl(rewrittenSummaryUrl);\n\n  for (const candidate of uniqueStrings([asset.path, asset.name])) {\n    if (/^https?:\\/\\//i.test(candidate)) return rewriteHost(candidate);\n    if (candidate.startsWith('/media/') && origin) return withTicket(`${origin}${candidate}`);\n    if (candidate.includes('/')) {\n      if (mediaRoot) return withTicket(`${mediaRoot}${candidate.replace(/^\\/+/, '')}`);\n      if (origin) return withTicket(`${origin}/media/${candidate.replace(/^\\/+/, '')}`);\n    }\n    if (summaryFolder) return withTicket(`${summaryFolder}${candidate}`);\n  }\n\n  return '';\n}\n\nfunction londonPartsFromMs(ms) {\n  const dt = new Date(ms);\n  const parts = new Intl.DateTimeFormat('en-GB', {\n    timeZone: 'Europe/London',\n    year: 'numeric',\n    month: '2-digit',\n  }).formatToParts(dt);\n\n  const year = parts.find(p => p.type === 'year')?.value;\n  const month = parts.find(p => p.type === 'month')?.value;\n\n  return { year, month };\n}\n\nfunction londonDateFromMs(ms) {\n  const dt = new Date(ms);\n  if (Number.isNaN(dt.getTime())) return '';\n  const parts = new Intl.DateTimeFormat('en-GB', {\n    timeZone: 'Europe/London',\n    year: 'numeric',\n    month: '2-digit',\n    day: '2-digit',\n  }).formatToParts(dt);\n  const get = type => parts.find(p => p.type === type)?.value;\n  return `${get('year')}-${get('month')}-${get('day')}`;\n}\n\nconst { year, month } = londonPartsFromMs(input.recording.start_time_ms);\n// Recording date (Europe/London) used for the front matter date field\nconst recordingDate = londonDateFromMs(input.recording.start_time_ms);\nconst baseName = sanitiseBaseName(input.recording.filename);\nconst targetRoot = `/data/applaud/${year}/${month}`;\n\n// Obsidian vault copy (see \"Copy to Vault\"): YYYY/MM/{Summary,Transcript,Other},\n// with summary images in Summary/images next to the summary that links to them.\nconst vaultRoot = String($('Config').first().json.vault_root || '/vault/003. Meetings').replace(/\\/+$/, '');\nconst vaultMonth = `${vaultRoot}/${year}/${month}`;\nconst vaultDirs = {\n  summary: `${vaultMonth}/Summary`,\n  summaryImages: `${vaultMonth}/Summary/images`,\n  transcript: `${vaultMonth}/Transcript`,\n  other: `${vaultMonth}/Other`,\n};\n\n// If the recording filename itself is one of the excluded file types,\n// do not create any FTP upload items for this webhook execution.\nif (shouldIgnoreFileName(baseName)) {\n  return [];\n}\n\n// Use Summary_*.md asset as main summary if present; fall back to http_urls.summary\nconst autoSummaryAsset = (input.http_urls.assets || []).find(asset => {\n  if (asset.type !== 'markdown') return false;\n  if (shouldIgnoreFileName(asset.name)) return false;\n\n  const bn = assetBaseName(asset.name).toLowerCase();\n  return bn.startsWith('summary_');\n});\n\nconst summarySourceUrl = autoSummaryAsset\n  ? rewriteHost(autoSummaryAsset.url)\n  : rewriteHost(input.http_urls.summary);\n\nconst summaryDesiredFileName = `${baseName} - Summary.md`;\nconst summaryStem = summaryDesiredFileName.replace(/\\.md$/i, '');\nconst summaryMarkdownText = firstPresent(\n  input.content?.markdown_text,\n  input.markdown_text,\n  input.summary?.markdown_text\n);\nconst summaryImageRelDir = 'Summary/images';\nconst summaryImageTargetDir = `${targetRoot}/${summaryImageRelDir}`;\nconst summaryImageMappings = [];\n\nfor (const asset of input.http_urls.assets || []) {\n  if (shouldIgnoreFileName(asset.name)) continue;\n  if (shouldIgnoreFileName(asset.path)) continue;\n  if (shouldIgnoreFileName(asset.url)) continue;\n\n  const assetIdentity = uniqueStrings([asset.name, asset.path, asset.url]).join(' ');\n  const extension = extensionFromName(asset.name || asset.path || asset.url, '');\n  const isPngAsset = extension === '.png' || /\\.png(?:$|[?#])/i.test(assetIdentity);\n  if (!isPngAsset) continue;\n\n  const sourceCandidates = uniqueStrings([\n    asset.name,\n    asset.path,\n    assetBaseName(asset.name),\n    assetBaseName(asset.path),\n    assetBaseName(asset.url),\n  ]).sort((a, b) => b.length - a.length);\n\n  const referencedSources = sourceCandidates.filter(candidate => summaryMarkdownText.includes(candidate));\n  const looksLikeSummaryPoster = /summary_poster|card_[^/\\\\]+\\.png/i.test(assetIdentity);\n\n  // The downloaded Summary_*.md can contain the image link even when the webhook\n  // payload does not expose markdown_text, so do not require a payload text match.\n  if (referencedSources.length === 0 && !looksLikeSummaryPoster && summaryMarkdownText) continue;\n\n  const rewriteSources = referencedSources.length > 0 ? referencedSources : sourceCandidates;\n  if (rewriteSources.length === 0) continue;\n\n  const desiredImageFileName = `${summaryStem}.png`;\n  const relativeImagePath = `${summaryImageRelDir}/${desiredImageFileName}`;\n  const sourceUrl = deriveAssetUrl(asset, summarySourceUrl);\n  if (!sourceUrl) continue;\n\n  summaryImageMappings.push({\n    sourcePath: rewriteSources[0],\n    rewriteSources,\n    relativeImagePath,\n    desiredImageFileName,\n    sourceUrl,\n  });\n}\n\nconst items = [];\n\nfunction pushItemIfAllowed(item) {\n  const fileName = item?.json?.desiredFileName || '';\n  const sourceUrl = item?.json?.sourceUrl || '';\n\n  if (shouldIgnoreFileName(fileName)) return;\n  if (shouldIgnoreFileName(sourceUrl)) return;\n\n  items.push(item);\n}\n\n// Main summary only once\npushItemIfAllowed({\n  json: {\n    kind: 'downloadedMarkdown',\n    sourceUrl: summarySourceUrl,\n    targetDir: targetRoot,\n    desiredFileName: summaryDesiredFileName,\n    frontMatterType: 'summary',\n    recordingDate,\n    fixDividerSpacing: true,\n    vaultDir: vaultDirs.summary,\n    // NAS keeps the summary beside Summary/; in the vault it sits inside it.\n    vaultRelinkImages: true,\n    markdownImageRewrites: summaryImageMappings.flatMap(mapping =>\n      (mapping.rewriteSources || [mapping.sourcePath]).map(source => ({\n        source,\n        replacement: `<${mapping.relativeImagePath}>`,\n      }))\n    ),\n    recordingId: input.recording.id,\n  }\n});\n\nfor (const mapping of summaryImageMappings) {\n  pushItemIfAllowed({\n    json: {\n      kind: 'downloadedImage',\n      sourceUrl: mapping.sourceUrl,\n      targetDir: summaryImageTargetDir,\n      desiredFileName: mapping.desiredImageFileName,\n      vaultDir: vaultDirs.summaryImages,\n      recordingId: input.recording.id,\n    }\n  });\n}\n\n// Markdown assets except filtered duplicates\nfor (const asset of input.http_urls.assets || []) {\n  if (asset.type !== 'markdown') continue;\n\n  const bn = assetBaseName(asset.name).toLowerCase();\n\n  // Ignore file types that should not be copied to the FTP server\n  if (shouldIgnoreFileName(asset.name)) continue;\n  if (shouldIgnoreFileName(asset.url)) continue;\n\n  // Always skip summary.md\n  if (bn === 'summary.md') continue;\n  // Always skip outline duplicates\n  if (bn.startsWith('outline__outline__')) continue;\n  // Skip the Summary_*.md that was already used as the main summary\n  if (autoSummaryAsset && asset === autoSummaryAsset) continue;\n  // If no auto-summary was used, still skip any Summary_*.md assets\n  if (!autoSummaryAsset && bn.startsWith('summary_')) continue;\n\n  const rawAssetName = assetBaseName(asset.name);\n\n  const safeAssetName = String(asset.name)\n    .replace(/[\\\\/:*?\\\"<>|]/g, '-')\n    .replace(/[ .]+$/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  const desiredFileName = /^speech_summary/i.test(rawAssetName)\n    ? `${baseName} - Speech Summary.md`\n    : `${baseName} - ${safeAssetName}`;\n\n  pushItemIfAllowed({\n    json: {\n      kind: 'downloadedMarkdown',\n      sourceUrl: rewriteHost(asset.url),\n      targetDir: targetRoot,\n      desiredFileName,\n      frontMatterType: /^speech_summary/i.test(rawAssetName) ? 'summary' : 'note',\n      vaultDir: vaultDirs.other,\n      recordingDate,\n      recordingId: input.recording.id,\n    }\n  });\n}\n\n// Transcript generated from payload\npushItemIfAllowed({\n  json: {\n    kind: 'generatedTranscript',\n    targetDir: targetRoot,\n    desiredFileName: `${baseName} - Transcript.md`,\n    frontMatterType: 'transcript',\n    recordingDate,\n    transcriptText: input.content?.transcript_text || '',\n    vaultDir: vaultDirs.transcript,\n    recordingId: input.recording.id,\n  }\n});\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        2816
+      ],
+      "id": "fde37dd5-2170-4fb9-a7b7-0c4fb2a7b0ec",
+      "name": "Rewrite URLs"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ede7c888-bb37-48ac-b345-47bb9f12c26b",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "generatedTranscript",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2608,
+        2912
+      ],
+      "id": "16322603-d6e4-409d-997a-ee9da2e50df6",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "jsCode": "function buildFrontMatter(type, date) {\n  return [\n    '---',\n    `type: ${type || 'note'}`,\n    date ? `date: ${date}` : 'date:',\n    'tags:',\n    '  - plaud',\n    'date_reviewed:',\n    '---',\n    '',\n    '',\n  ].join('\\n');\n}\n\nfunction formatTranscript(text) {\n  return String(text || '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .replace(/\\s*(\\[\\d{2}:\\d{2}(?::\\d{2})?\\])/g, '\\n$1')\n    .replace(/^\\n+/, '')\n    .trim() + '\\n';\n}\n\nconst formatted =\n  buildFrontMatter($json.frontMatterType || 'transcript', $json.recordingDate) +\n  formatTranscript($json.transcriptText);\nconst fileName = $json.desiredFileName;\nconst filePath = `${$json.targetDir}/${fileName}`;\n\nreturn [\n  {\n    json: {\n      targetDir: $json.targetDir,\n      desiredFileName: fileName,\n      targetPath: filePath,\n      vaultDir: $json.vaultDir || '',\n      vaultRelinkImages: false,\n    },\n    binary: {\n      data: await this.helpers.prepareBinaryData(\n        Buffer.from(formatted, 'utf8'),\n        fileName,\n        'text/markdown'\n      )\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2832,
+        2912
+      ],
+      "id": "b6f9f582-4f23-47f1-bdaa-0392625010b6",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.targetPath }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        3056,
+        2912
+      ],
+      "id": "18cf1c95-bcb2-40d5-a8b4-9c7e3738a70f",
+      "name": "Write Transcript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "effff6d7-80ec-4c43-acdd-715a4fe2cbe3",
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "transcript_ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        1936,
+        2816
+      ],
+      "id": "81d041e3-9c75-43fd-aa8b-b925b678f8aa",
+      "name": "Drop Audio Only"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "image-kind-filter",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "downloadedImage",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2496,
+        2496
+      ],
+      "id": "e525172d-9163-42ec-b623-7ad6db325e6a",
+      "name": "If Image"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Rewrite URLs').item.json.sourceUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2880,
+        2496
+      ],
+      "id": "b14c9b1a-8f43-4423-ac4c-1be6049a0515",
+      "name": "Get Image File"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const upstream = $('Rewrite URLs').item.json;\n\nconst fileName = String(upstream.desiredFileName || 'image.png');\nconst targetDir = String(upstream.targetDir || '/data/applaud/Summary/images');\nconst filePath = `${targetDir}/${fileName}`;\n\nconst binary = $binary.data\n  ? { ...$binary.data, fileName, mimeType: 'image/png' }\n  : await this.helpers.prepareBinaryData(\n      Buffer.from($json.data || $json.body || '', 'binary'),\n      fileName,\n      'image/png'\n    );\n\nreturn {\n  json: {\n    targetDir,\n    desiredFileName: fileName,\n    targetPath: filePath,\n    vaultDir: upstream.vaultDir || '',\n    vaultRelinkImages: upstream.vaultRelinkImages === true,\n  },\n  binary: { data: binary },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3056,
+        2512
+      ],
+      "id": "766d675d-0367-46ae-8f42-3dd32c1cfc22",
+      "name": "Format Image Output"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.targetPath }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        3280,
+        2512
+      ],
+      "id": "9fc18086-28bf-4315-ae6b-23e5fd14bc30",
+      "name": "Write Image"
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "=mkdir -p \"/data/applaud/{{ DateTime.fromMillis($json.body.recording.start_time_ms, { zone: 'Europe/London' }).toFormat('yyyy/MM') }}/Summary/images\""
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        2272,
+        2976
+      ],
+      "id": "76dd2058-034e-41e3-8159-b4f26b1f1cfb",
+      "name": "Make folders",
+      "notes": "Write File to Disk doesn't create missing folders (the FTP node did). Creates this recording's YYYY/MM and Summary/images in Europe/London time, matching Rewrite URLs. Needs NODES_EXCLUDE=[] on n8n 2.x.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Runs after each NAS write: the file just written there is the source for the\n// vault copy. Paths go to the shell as base64 so spaces, quotes and $ are safe.\nconst source = String($json.targetPath || '');\nconst dir = String($json.vaultDir || '');\nif (!source || !dir) {\n  throw new Error(`No vault folder for ${source || 'this item'}; check Rewrite URLs sets vaultDir.`);\n}\nconst fileName = source.split('/').pop();\nconst vaultPath = `${dir}/${fileName}`;\nconst b64 = value => Buffer.from(value, 'utf8').toString('base64');\n\nreturn {\n  json: {\n    sourcePath: source,\n    vaultPath,\n    sourceB64: b64(source),\n    vaultB64: b64(vaultPath),\n    relinkImages: $json.vaultRelinkImages === true,\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3504,
+        2720
+      ],
+      "id": "5b0f3c1e-7a2d-4c6b-9e1f-2a8d4c7b6e01",
+      "name": "Vault Paths"
+    },
+    {
+      "parameters": {
+        "command": "=set -eu\nsrc=$(printf '%s' '{{ $json.sourceB64 }}' | base64 -d)\ndst=$(printf '%s' '{{ $json.vaultB64 }}' | base64 -d)\ndir=$(dirname \"$dst\")\nmkdir -p \"$dir\"\n# Build the vault version under a dot-name first: Obsidian ignores dot files, so\n# it never sees a half-written note.\ntmp=\"$dir/.applaud-$$.tmp\"\ntrap 'rm -f \"$tmp\"' EXIT\nif [ '{{ $json.relinkImages ? 1 : 0 }}' = 1 ]; then\n  sed 's#(<Summary/images/#(<images/#g' \"$src\" > \"$tmp\"\nelse\n  cp \"$src\" \"$tmp\"\nfi\nif [ ! -e \"$dst\" ]; then\n  mv \"$tmp\" \"$dst\"\n  echo \"written: $dst\"\nelif cmp -s \"$tmp\" \"$dst\"; then\n  echo \"unchanged: $dst\"\nelse\n  name=$(basename \"$dst\")\n  stem=\"${name%.*}\"\n  ext=\"${name##*.}\"\n  new=\"$dir/$stem-$(TZ=Europe/London date +%Y%m%d-%H%M%S).$ext\"\n  [ -e \"$new\" ] && new=\"$dir/$stem-$(TZ=Europe/London date +%Y%m%d-%H%M%S)-$$.$ext\"\n  mv \"$tmp\" \"$new\"\n  echo \"kept existing, wrote copy: $new\"\nfi"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        3728,
+        2720
+      ],
+      "id": "8c4e2d9a-1f3b-4a7c-b6d5-3e9f0a1b2c02",
+      "name": "Copy to Vault",
+      "notes": "Copies each file just written to the NAS into the Obsidian vault (Config → vault_root). New file: written. Same content: left alone. Different content: existing note kept, new version saved with a -YYYYMMDD-HHMMSS suffix.",
+      "notesInFlow": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Applaud Webhook": {
+      "main": [
+        [
+          {
+            "node": "Drop Audio Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Make folders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Get Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Outputs": {
+      "main": [
+        [
+          {
+            "node": "Write Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Files": {
+      "main": [
+        [
+          {
+            "node": "Format Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rewrite URLs": {
+      "main": [
+        [
+          {
+            "node": "If Image",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Write Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drop Audio Only": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Image": {
+      "main": [
+        [
+          {
+            "node": "Get Image File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Image File": {
+      "main": [
+        [
+          {
+            "node": "Format Image Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Image Output": {
+      "main": [
+        [
+          {
+            "node": "Write Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Make folders": {
+      "main": [
+        [
+          {
+            "node": "Rewrite URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Notes": {
+      "main": [
+        [
+          {
+            "node": "Vault Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Image": {
+      "main": [
+        [
+          {
+            "node": "Vault Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Transcript": {
+      "main": [
+        [
+          {
+            "node": "Vault Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vault Paths": {
+      "main": [
+        [
+          {
+            "node": "Copy to Vault",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "tags": []
+}

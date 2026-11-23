@@ -23,6 +23,7 @@ import {
 import { poller } from "./sync/poller.js";
 import { speakers } from "./speakers/service.js";
 import { confirmOutstanding } from "./plaud-writeback/confirm.js";
+import { applyAutomation } from "./plaud-writeback/automation.js";
 import { requireLanToken, requireLanTokenMedia } from "./auth/lan-token.js";
 import { buildAppCsp, securityHeaders } from "./security/headers.js";
 import { requireAllowedHost } from "./security/host-check.js";
@@ -306,6 +307,12 @@ async function main(): Promise<void> {
     }
     // Off unless switched on in Settings; runs apart from sync.
     speakers.start();
+    // Automatic Plaud sync: make the browser container's credential match the setting.
+    try {
+      applyAutomation(loadConfig());
+    } catch (err) {
+      logger.warn({ err }, "could not set up the automation browser's credential");
+    }
   });
 }
 

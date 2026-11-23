@@ -360,7 +360,9 @@ function hasLabelSql(statuses: string[]): string {
 export function speakerFilterSql(filter: SpeakerFilter, sendToPlaud: boolean): string {
   const label = hasLabelSql(["unknown", "suggested"]);
   const confirm = hasLabelSql(["auto"]);
-  const pending = `EXISTS (SELECT 1 FROM plaud_writeback w WHERE w.recording_id = recordings.id AND w.pending_segments > 0)`;
+  // Names Plaud still needs: to send, or (older recordings) to rename in Plaud by hand.
+  const pending = `EXISTS (SELECT 1 FROM plaud_writeback w WHERE w.recording_id = recordings.id
+            AND (w.pending_segments > 0 OR w.unsendable_segments > 0))`;
   const settled = `NOT ${label} AND NOT ${confirm}`;
   const state = (() => {
     switch (filter) {

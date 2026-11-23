@@ -5,11 +5,11 @@ import type { PlaudWritebackPendingResponse, SpeakerReviewResponse } from "@appl
  * name, automatic names still to confirm, confirmed names Plaud doesn't have
  * yet, or everything confirmed and in Plaud.
  */
-export type SpeakerStatusKind = "label" | "confirm" | "sync" | "synced";
+export type SpeakerStatusKind = "label" | "confirm" | "sync" | "manual" | "synced";
 
 export interface SpeakerStatus {
   kind: SpeakerStatusKind;
-  /** Speakers in this state; 0 for `synced`. */
+  /** Speakers in this state; 0 for `synced` and `manual`. */
   count: number;
 }
 
@@ -34,6 +34,8 @@ export function speakerStatus(
       const labels = new Set(item.changes.map((c) => c.plaudLabel)).size;
       return { kind: "sync", count: Math.max(labels, 1) };
     }
+    // Confirmed names Plaud lacks that can't be sent (older recordings): not synced.
+    if ((pending.unsendable?.[id] ?? 0) > 0) return { kind: "manual", count: 0 };
   }
   if ((review.confirmed?.[id] ?? 0) > 0) return { kind: "synced", count: 0 };
   return null;
@@ -48,6 +50,8 @@ export function speakerStatusText(s: SpeakerStatus): string {
       return `${n} to confirm`;
     case "sync":
       return `${n} to sync`;
+    case "manual":
+      return "rename in Plaud";
     default:
       return "synced";
   }
@@ -61,6 +65,8 @@ export function speakerStatusTitle(s: SpeakerStatus): string {
       return "Named automatically. Only confirmed names are sent to Plaud";
     case "sync":
       return "Confirmed names Plaud doesn't have yet. Send them with the browser extension";
+    case "manual":
+      return "Confirmed names Plaud doesn't have. This older recording's transcript can't take names from Applaud, so rename these speakers in Plaud";
     default:
       return "Every speaker is confirmed and the names are in Plaud";
   }
@@ -71,6 +77,7 @@ export const SPEAKER_DOT: Record<SpeakerStatusKind, string> = {
   label: "bg-red-400 dark:bg-red-300",
   confirm: "bg-red-400 dark:bg-red-300",
   sync: "bg-amber-400 dark:bg-amber-300",
+  manual: "bg-amber-400 dark:bg-amber-300",
   synced: "bg-emerald-400 dark:bg-emerald-300",
 };
 
@@ -78,5 +85,6 @@ export const SPEAKER_TEXT: Record<SpeakerStatusKind, string> = {
   label: "text-red-500 dark:text-red-300",
   confirm: "text-amber-600 dark:text-amber-300",
   sync: "text-amber-600 dark:text-amber-300",
+  manual: "text-amber-600 dark:text-amber-300",
   synced: "text-emerald-600 dark:text-emerald-300",
 };

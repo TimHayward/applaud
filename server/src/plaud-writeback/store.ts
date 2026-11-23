@@ -30,6 +30,7 @@ type LastResult = "sent" | "partial" | "failed" | "stale";
 interface WritebackRow {
   recording_id: string;
   pending_segments: number;
+  unsendable_segments: number;
   changes: string;
   last_result: LastResult | null;
   last_attempt_at: number | null;
@@ -42,7 +43,7 @@ interface WritebackRow {
 }
 
 const SELECT_ROWS = `
-  SELECT w.recording_id, w.pending_segments, w.changes, w.last_result, w.last_attempt_at, w.last_error, w.pending_transcript_at,
+  SELECT w.recording_id, w.pending_segments, w.unsendable_segments, w.changes, w.last_result, w.last_attempt_at, w.last_error, w.pending_transcript_at,
          r.filename, r.display_name, r.start_time, r.transcript_downloaded_at
   FROM plaud_writeback w JOIN recordings r ON r.id = w.recording_id
   WHERE r.user_deleted_at IS NULL`;
@@ -82,6 +83,7 @@ function toRecording(row: WritebackRow): PlaudWritebackRecording {
     title: row.display_name || row.filename,
     startTime: row.start_time,
     pendingSegments: row.pending_segments,
+    unsendableSegments: row.unsendable_segments,
     changes,
     state: stateOf(row),
     lastAttemptAt: row.last_attempt_at,
@@ -95,6 +97,14 @@ export function listPending(): PlaudWritebackRecording[] {
     .prepare(`${SELECT_ROWS} AND w.pending_segments > 0 ORDER BY r.start_time DESC`)
     .all() as WritebackRow[];
   return rows.map(toRecording);
+}
+
+/** Recordings with confirmed names Plaud still needs but can't be sent, and how many segments. */
+export function unsendableCounts(): Record<string, number> {
+  const rows = getDb()
+    .prepare(`${SELECT_ROWS} AND w.unsendable_segments > 0`)
+    .all() as WritebackRow[];
+  return Object.fromEntries(rows.map((r) => [r.recording_id, r.unsendable_segments]));
 }
 
 /** Pending segment counts by recording id, for the dashboard. */

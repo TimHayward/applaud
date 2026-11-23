@@ -44,9 +44,11 @@ COPY models/NOTICE models/
 
 # node:22-slim ships a non-root `node` user (uid 1000) — run as that instead
 # of root. Volume mount points must be owned by it before Docker seeds a
-# fresh named volume from this layer.
-RUN mkdir -p /data/config /data/recordings \
-  && chown -R node:node /app /data/config /data/recordings
+# fresh named volume from this layer. /data/automation is shared with the
+# optional browser container (Automatic Plaud sync); Applaud writes that
+# browser's credential there.
+RUN mkdir -p /data/config /data/recordings /data/automation \
+  && chown -R node:node /app /data/config /data/recordings /data/automation
 
 USER node
 
