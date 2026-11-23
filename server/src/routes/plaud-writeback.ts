@@ -29,6 +29,7 @@ import {
   getRecording,
   history,
   listPending,
+  unsendableCounts,
   recordResults,
 } from "../plaud-writeback/store.js";
 import { scheduleConfirmation } from "../plaud-writeback/confirm.js";
@@ -208,6 +209,7 @@ plaudWritebackRouter.get("/pending", (_req, res) => {
     enabled: s.enabled && s.sendToPlaud,
     protocol: PLAUD_WRITEBACK_PROTOCOL,
     recordings: s.enabled ? listPending() : [],
+    unsendable: s.enabled ? unsendableCounts() : {},
   };
   res.json(body);
 });

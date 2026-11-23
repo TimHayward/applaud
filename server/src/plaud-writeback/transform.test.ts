@@ -9,6 +9,7 @@ import {
   rewriteSummary,
   rewriteTranscript,
   summaryRenames,
+  unsendableNames,
   type DesiredName,
 } from "./transform.js";
 
@@ -90,6 +91,28 @@ describe("desiredNames", () => {
     );
     const desired = desiredFor(doc, { "Speaker 2": confirmed(2) });
     expect([...desired.keys()]).toEqual(["u5"]);
+  });
+});
+
+describe("unsendableNames", () => {
+  it("collects confirmed names on segments without a segment_uid, as in older recordings", () => {
+    // Older Plaud transcripts carry no segment_uid at all.
+    const doc = plaudTranscript().map(({ segment_uid: _uid, ...s }) => s);
+    const segments = normaliseSegments(doc, 5000);
+    const applaud = buildApplaudTranscript(
+      segments,
+      new Map(Object.entries({ "Speaker 2": confirmed(2), "Speaker 3": confirmed(3) })),
+      new Map(),
+      NAMES,
+    );
+    expect(desiredNames(segments, applaud).size).toBe(0);
+    const unsendable = unsendableNames(segments, applaud);
+    expect(unsendable.size).toBe(3);
+    // Speaker 3 is already "Tim Hayward" in Plaud, so only Speaker 2's two lines need renaming.
+    expect(pendingCount(unsendable)).toBe(2);
+    expect(pendingChanges(unsendable)).toEqual([
+      { plaudLabel: "Speaker 2", from: "Speaker 2", to: "Ben Example", segments: 2, segment: null },
+    ]);
   });
 });
 

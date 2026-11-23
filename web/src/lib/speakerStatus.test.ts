@@ -10,7 +10,10 @@ const review = (over: Partial<SpeakerReviewResponse> = {}): SpeakerReviewRespons
   ...over,
 });
 
-const pending = (state: "to_send" | "sent" | "in_plaud", enabled = true): PlaudWritebackPendingResponse => ({
+const pending = (
+  state: "to_send" | "sent" | "in_plaud",
+  enabled = true,
+): PlaudWritebackPendingResponse => ({
   enabled,
   protocol: 1,
   recordings: [
@@ -34,7 +37,9 @@ const pending = (state: "to_send" | "sent" | "in_plaud", enabled = true): PlaudW
 describe("speakerStatus", () => {
   it("shows nothing while speaker identification is off or nothing is named", () => {
     expect(speakerStatus("r1", undefined, undefined)).toBeNull();
-    expect(speakerStatus("r1", review({ enabled: false, recordings: { r1: 2 } }), undefined)).toBeNull();
+    expect(
+      speakerStatus("r1", review({ enabled: false, recordings: { r1: 2 } }), undefined),
+    ).toBeNull();
     expect(speakerStatus("r1", review(), undefined)).toBeNull();
   });
 
@@ -49,8 +54,23 @@ describe("speakerStatus", () => {
     const done = review({ confirmed: { r1: 2 } });
     expect(speakerStatus("r1", done, pending("to_send"))).toEqual({ kind: "sync", count: 2 });
     expect(speakerStatus("r1", done, pending("sent"))).toEqual({ kind: "sync", count: 2 });
-    expect(speakerStatus("r1", done, pending("to_send", false))).toEqual({ kind: "synced", count: 0 });
+    expect(speakerStatus("r1", done, pending("to_send", false))).toEqual({
+      kind: "synced",
+      count: 0,
+    });
     expect(speakerStatus("r1", done, pending("in_plaud"))).toEqual({ kind: "synced", count: 0 });
+  });
+
+  it("doesn't call a recording synced when Plaud can't take its names", () => {
+    const done = review({ confirmed: { r1: 2 } });
+    const older = { ...pending("in_plaud"), recordings: [], unsendable: { r1: 4 } };
+    expect(speakerStatus("r1", done, older)).toEqual({ kind: "manual", count: 0 });
+    expect(speakerStatusText({ kind: "manual", count: 0 })).toBe("rename in Plaud");
+    // Names that can be sent still come first.
+    expect(speakerStatus("r1", done, { ...pending("to_send"), unsendable: { r1: 1 } })).toEqual({
+      kind: "sync",
+      count: 2,
+    });
   });
 
   it("words each state", () => {

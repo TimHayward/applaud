@@ -1,5 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import type { PlaudDocumentKind, PlaudWritebackChange, PlaudWritebackRecording } from "@applaud/shared";
+import type {
+  PlaudDocumentKind,
+  PlaudWritebackChange,
+  PlaudWritebackRecording,
+} from "@applaud/shared";
 import { api } from "../api.js";
 import { useToast } from "./Toast.js";
 import { formatDurationClock, formatRelative } from "../lib/format.js";
@@ -10,7 +14,9 @@ const KIND_LABEL: Record<PlaudDocumentKind, string> = {
   summary: "Summary",
 };
 
-function stateLine(r: PlaudWritebackRecording): { text: string; tone: "info" | "warn" | "ok" } | null {
+function stateLine(
+  r: PlaudWritebackRecording,
+): { text: string; tone: "info" | "warn" | "ok" } | null {
   switch (r.state) {
     case "sent":
       return {
@@ -34,13 +40,21 @@ function stateLine(r: PlaudWritebackRecording): { text: string; tone: "info" | "
   }
 }
 
-function ChangeRow({ change, onCopy }: { change: PlaudWritebackChange; onCopy: (name: string) => void }): JSX.Element {
+function ChangeRow({
+  change,
+  onCopy,
+}: {
+  change: PlaudWritebackChange;
+  onCopy: (name: string) => void;
+}): JSX.Element {
   return (
     <li className="flex items-start justify-between gap-4 py-2">
       <div className="min-w-0 text-sm">
         {change.segment ? (
           <>
-            <span className="font-label text-xs text-on-surface-variant">{formatDurationClock(change.segment.startMs)}</span>{" "}
+            <span className="font-label text-xs text-on-surface-variant">
+              {formatDurationClock(change.segment.startMs)}
+            </span>{" "}
             <span className="text-on-surface-variant">&ldquo;{change.segment.text}&rdquo;</span>
             <span className="block">
               <span className="text-on-surface-variant">{change.from}</span> →{" "}
@@ -83,7 +97,9 @@ export function PlaudWritebackPanel({ recordingId }: { recordingId: string }): J
   });
   const r = q.data?.recording;
   const historyItems = q.data?.history ?? [];
-  if (!r || (r.pendingSegments === 0 && historyItems.length === 0)) return null;
+  const unsendable = r?.unsendableSegments ?? 0;
+  if (!r || (r.pendingSegments === 0 && unsendable === 0 && historyItems.length === 0)) return null;
+  const toRename = r.pendingSegments > 0 || unsendable > 0;
 
   const copy = async (name: string): Promise<void> => {
     try {
@@ -94,15 +110,28 @@ export function PlaudWritebackPanel({ recordingId }: { recordingId: string }): J
     }
   };
 
-  const line = stateLine(r);
+  const line =
+    unsendable > 0
+      ? {
+          text: `This older recording's transcript in Plaud can't take names from Applaud, so ${
+            r.pendingSegments > 0 ? "some of these names" : "these names"
+          } can't be sent. Rename these speakers in Plaud yourself.`,
+          tone: "warn" as const,
+        }
+      : stateLine(r);
   return (
     <section className="card p-6 space-y-4">
       <div className="space-y-1">
-        <h2 className="font-label text-xs font-bold text-primary uppercase tracking-widest">Names to send to Plaud</h2>
-        {r.pendingSegments > 0 && (
+        <h2 className="font-label text-xs font-bold text-primary uppercase tracking-widest">
+          Names to send to Plaud
+        </h2>
+        {toRename && (
           <p className="text-sm text-on-surface-variant max-w-prose">
             Plaud AI only uses names held in Plaud. Rename these speakers in Plaud
-            {q.data?.enabled ? ", or send them with the Applaud browser extension" : ""}.
+            {q.data?.enabled && r.pendingSegments > 0
+              ? ", or send them with the Applaud browser extension"
+              : ""}
+            .
           </p>
         )}
       </div>
@@ -121,7 +150,7 @@ export function PlaudWritebackPanel({ recordingId }: { recordingId: string }): J
         </p>
       )}
 
-      {r.pendingSegments > 0 && r.changes.length > 0 && (
+      {toRename && r.changes.length > 0 && (
         <ul className="divide-y divide-outline-variant/30">
           {r.changes.map((c) => (
             <ChangeRow
@@ -135,7 +164,9 @@ export function PlaudWritebackPanel({ recordingId }: { recordingId: string }): J
 
       {historyItems.length > 0 && (
         <details>
-          <summary className="cursor-pointer text-sm font-semibold text-on-surface select-none">History</summary>
+          <summary className="cursor-pointer text-sm font-semibold text-on-surface select-none">
+            History
+          </summary>
           <ul className="mt-3 space-y-1 text-xs text-on-surface-variant">
             {historyItems.map((h, i) => (
               <li key={`${h.planId}-${h.kind}-${i}`}>

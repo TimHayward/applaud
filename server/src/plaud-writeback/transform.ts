@@ -52,6 +52,32 @@ export function desiredNames(
   return out;
 }
 
+/**
+ * Confirmed names on segments Plaud's documents can't address (no usable
+ * `segment_uid`, as in older recordings), keyed by Applaud's segment key.
+ * They can't be sent, but Plaud still needs them, so they mustn't read as synced.
+ */
+export function unsendableNames(
+  segments: SpeakerSegment[],
+  applaud: ApplaudSegment[],
+): Map<string, DesiredName> {
+  const out = new Map<string, DesiredName>();
+  segments.forEach((s, i) => {
+    const a = applaud[i];
+    if (s.uid || !a || a.segment_key !== s.key) return;
+    if (a.label_status !== "confirmed" || a.speaker_id === null) return;
+    out.set(s.key, {
+      label: s.label,
+      expected: s.name,
+      name: a.speaker,
+      startMs: s.startMs,
+      text: s.text,
+      override: a.segment_override === true,
+    });
+  });
+  return out;
+}
+
 const SNIPPET_MAX = 80;
 
 /**

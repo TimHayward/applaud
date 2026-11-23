@@ -398,6 +398,11 @@ export interface PlaudWritebackRecording {
   title: string;
   startTime: number;
   pendingSegments: number;
+  /**
+   * Segments with a confirmed name Plaud lacks but that can't be sent: Plaud's
+   * transcript gives them no `segment_uid` (older recordings). Renamed in Plaud by hand.
+   */
+  unsendableSegments?: number;
   changes: PlaudWritebackChange[];
   state: PlaudWritebackState;
   lastAttemptAt: number | null;
@@ -410,6 +415,8 @@ export interface PlaudWritebackPendingResponse {
   enabled: boolean;
   protocol: number;
   recordings: PlaudWritebackRecording[];
+  /** Recordings whose confirmed names can't be sent (no `segment_uid`), with segment counts. */
+  unsendable?: Record<string, number>;
 }
 
 export type PlaudWritebackOutcome = "planned" | "applied" | "conflict" | "failed" | "abandoned";
