@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Applaud automation",
   "short_name": "Applaud automation",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Runs Applaud's automatic Plaud sync in the Applaud browser container: sends confirmed speaker names and fetches summary cards. Unofficial; not affiliated with Plaud.",
   "icons": {
     "16": "icons/icon-16.png",

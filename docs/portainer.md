@@ -263,6 +263,6 @@ Files are served by Applaud itself (player, downloads, webhook URLs). On the Doc
 
 ## Switching to a released image
 
-Each tagged release publishes a multi-architecture image, for example `ghcr.io/timhayward/applaud:v0.6.1`. To switch, replace `build: .`, `image: applaud:local` and `pull_policy: build` in the stack with `image: ghcr.io/timhayward/applaud:v0.6.1` and redeploy. The volumes, and therefore your sign-in and library, carry over.
+Each tagged release publishes a multi-architecture image, for example `ghcr.io/timhayward/applaud:v0.7.0`. To switch, replace `build: .`, `image: applaud:local` and `pull_policy: build` in the stack with `image: ghcr.io/timhayward/applaud:v0.7.0` and redeploy. The volumes, and therefore your sign-in and library, carry over.
 
-The browser for Automatic Plaud sync is published alongside it as `ghcr.io/timhayward/applaud-browser:v0.6.1`. In the `applaud-browser` service, replace its `build:` block, `image: applaud-browser:local` and `pull_policy: build` with that image, using the same version as Applaud. Its Plaud sign-in, in the `browser` volume, carries over.
+The browser for Automatic Plaud sync is published alongside it as `ghcr.io/timhayward/applaud-browser:v0.7.0`. In the `applaud-browser` service, replace its `build:` block, `image: applaud-browser:local` and `pull_policy: build` with that image, using the same version as Applaud. Its Plaud sign-in, in the `browser` volume, carries over.

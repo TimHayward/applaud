@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Applaud: speaker names to Plaud",
   "short_name": "Applaud",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Sends the speaker names you confirmed in your own Applaud to Plaud. Unofficial; not affiliated with Plaud.",
   "icons": {
     "16": "icons/icon-16.png",
