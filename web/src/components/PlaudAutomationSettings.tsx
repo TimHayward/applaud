@@ -285,7 +285,7 @@ export function PlaudAutomationBanner(): JSX.Element | null {
           Open the browser to sign in
         </a>
       ) : (
-        <Link className="underline" to="/settings">
+        <Link className="underline" to="/settings#automatic-plaud-sync">
           Automatic Plaud sync settings
         </Link>
       )}

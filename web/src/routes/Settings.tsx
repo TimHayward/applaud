@@ -7,6 +7,7 @@ import { ResultCard } from "../components/ResultCard.js";
 import { WebhookDeliveries } from "../components/WebhookDeliveries.js";
 import { SpeakerSettings } from "../components/SpeakerSettings.js";
 import { PlaudAutomationSettings } from "../components/PlaudAutomationSettings.js";
+import { SettingsNav } from "../components/SettingsNav.js";
 import { AuthStep } from "./setup/AuthStep.js";
 import { formatRelative, daysUntil } from "../lib/format.js";
 
@@ -176,15 +177,19 @@ export function Settings(): JSX.Element {
   const installedLabel = c.installedAt ? new Date(c.installedAt).toLocaleDateString() : "setup";
 
   return (
-    <div className="max-w-[48rem] mx-auto space-y-8">
+    <div className="lg:grid lg:grid-cols-[11rem_minmax(0,48rem)] lg:gap-10 lg:justify-center">
+    <SettingsNav variant="side" />
+    <div className="max-w-[48rem] mx-auto lg:mx-0 min-w-0 space-y-8">
       {/* Page Header */}
       <div className="space-y-2 mb-12">
         <h1 className="text-5xl font-extrabold tracking-tighter text-on-surface">Configuration</h1>
         <p className="text-on-surface-variant">Manage your local ingestion engine and cloud synchronization.</p>
       </div>
 
+      <SettingsNav variant="top" />
+
       {/* Sync Status */}
-      <section className="bg-surface-container-low rounded-xl p-8 transition-all hover:bg-surface-container">
+      <section id="sync-status" className="scroll-mt-28 bg-surface-container-low rounded-xl p-8 transition-all hover:bg-surface-container">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="space-y-3">
             {/* Icon + label, not just a colored dot: the shape carries the
@@ -232,7 +237,7 @@ export function Settings(): JSX.Element {
       </section>
 
       {/* Sync maintenance */}
-      <section className="card p-8 space-y-4">
+      <section id="sync-maintenance" className="scroll-mt-28 card p-8 space-y-4">
         <h2 className="text-xl font-bold text-on-surface">Sync maintenance</h2>
         <p className="text-sm text-on-surface-variant max-w-prose">
           After a recording spends 7 days in Trash, Applaud deletes its local files and adds the Plaud id to an internal
@@ -274,7 +279,7 @@ export function Settings(): JSX.Element {
       </section>
 
       {/* Account Details */}
-      <section className="card p-8 space-y-6">
+      <section id="account" className="scroll-mt-28 card p-8 space-y-6">
         <div className="flex items-center gap-3">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -337,7 +342,7 @@ export function Settings(): JSX.Element {
       </section>
 
       {/* LAN access token */}
-      <section className="card p-8 space-y-6">
+      <section id="lan-access" className="scroll-mt-28 card p-8 space-y-6">
         <div className="flex items-center gap-3">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
@@ -408,7 +413,7 @@ export function Settings(): JSX.Element {
       </section>
 
       {/* Webhook Outbound */}
-      <section className="card p-8 space-y-6">
+      <section id="webhook" className="scroll-mt-28 card p-8 space-y-6">
         <div className="flex items-center gap-3">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary">
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -552,7 +557,7 @@ export function Settings(): JSX.Element {
       <WebhookDeliveries />
 
       {/* Poll Interval */}
-      <section className="card p-8 space-y-6">
+      <section id="poll-interval" className="scroll-mt-28 card p-8 space-y-6">
         <div className="flex justify-between items-end">
           <div className="space-y-1">
             <div className="flex items-center gap-3">
@@ -590,7 +595,7 @@ export function Settings(): JSX.Element {
       </section>
 
       {/* History window (saved with Save Settings) */}
-      <section className="card p-8 space-y-4">
+      <section id="history-window" className="scroll-mt-28 card p-8 space-y-4">
         <h2 className="text-xl font-bold text-on-surface">History window</h2>
         <p className="text-sm text-on-surface-variant max-w-prose">
           Applaud downloads every recording from this many days before {installedLabel} onwards. Older recordings are
@@ -615,10 +620,14 @@ export function Settings(): JSX.Element {
       </section>
 
       {/* Speaker identification (saves on change, not with Save Settings) */}
-      <SpeakerSettings />
+      <div id="speakers" className="scroll-mt-28">
+        <SpeakerSettings />
+      </div>
 
       {/* Automatic Plaud sync through the browser container (saves on change) */}
-      <PlaudAutomationSettings />
+      <div id="automatic-plaud-sync" className="scroll-mt-28">
+        <PlaudAutomationSettings />
+      </div>
 
       {/* Save Footer */}
       <footer className="pt-4 flex flex-col items-center">
@@ -636,6 +645,7 @@ export function Settings(): JSX.Element {
           Applaud v{__APP_VERSION__}
         </p>
       </footer>
+    </div>
     </div>
   );
 }
