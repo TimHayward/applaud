@@ -42,6 +42,7 @@ import {
   next as automationNext,
   recordHeartbeat,
   requestRun,
+  requestTest,
   resume as resumeAutomation,
 } from "../plaud-writeback/automation.js";
 import { clientKey, createRateLimiter } from "../security/rate-limit.js";
@@ -432,6 +433,7 @@ const HeartbeatBody = z.object({
   cards: z.number().int().nonnegative().max(10_000),
   error: z.string().max(2000).optional(),
   shapeError: z.boolean().optional(),
+  test: z.boolean().optional(),
 });
 
 plaudWritebackRouter.post("/automation/heartbeat", automationOnly, (req, res) => {
@@ -517,6 +519,17 @@ plaudWritebackRouter.post("/automation/run", uiOnly, (_req, res) => {
     return;
   }
   requestRun();
+  res.json(statusBody());
+});
+
+// "Test connection": the browser opens Plaud and checks its sign-in at its next
+// check-in, sending nothing. Allowed while paused.
+plaudWritebackRouter.post("/automation/test", uiOnly, (_req, res) => {
+  if (!plaudAutomationConfig(loadConfig()).enabled) {
+    res.status(409).json({ error: "automatic Plaud sync is off" });
+    return;
+  }
+  requestTest();
   res.json(statusBody());
 });
 

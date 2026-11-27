@@ -211,6 +211,7 @@ describe("plaudWritebackRouter", () => {
       enabled: boolean;
       due: boolean;
       paused: string | null;
+      test?: boolean;
     };
 
   it("won't turn automatic sync on without the shared folder", async () => {
@@ -318,6 +319,38 @@ describe("plaudWritebackRouter", () => {
       Date.now() - RETRY_BACKOFF_MS - 1000,
     );
     expect(await pending()).toEqual(["f_1"]);
+  });
+
+  it("asks the browser for a connection test and keeps its answer, without moving the run cadence", async () => {
+    const token = await enableAutomation();
+    await heartbeat(token, { ran: true, plaudSignedIn: true, sent: 2 });
+    expect((await nextRun(token)).due).toBe(false);
+
+    // Run now, then a test: the test goes first and the run still follows.
+    expect((await call("POST", "/automation/run", { token: LAN })).status).toBe(200);
+    expect((await call("POST", "/automation/test", { token: LAN })).status).toBe(200);
+    expect(await nextRun(token)).toMatchObject({ due: false, test: true });
+    type Status = {
+      plaudSignedIn: boolean | null;
+      last: { sent: number } | null;
+      test: {
+        requestedAt: number | null;
+        last: { plaudSignedIn: boolean | null; error: string | null } | null;
+      };
+    };
+    const status = async () =>
+      (await (await call("GET", "/automation/status", { token: LAN })).json()) as Status;
+    expect((await status()).test.requestedAt).not.toBeNull();
+
+    await heartbeat(token, { test: true, plaudSignedIn: false, error: "signed out" });
+    const s = await status();
+    expect(s.test).toMatchObject({
+      requestedAt: null,
+      last: { plaudSignedIn: false, error: "signed out" },
+    });
+    expect(s).toMatchObject({ plaudSignedIn: false, last: { sent: 2 } });
+    expect(await nextRun(token)).toMatchObject({ due: true });
+    expect((await nextRun(token)).test).toBeUndefined();
   });
 
   it("runs on Applaud's cadence or on Run now, and pauses on a shape it doesn't recognise", async () => {

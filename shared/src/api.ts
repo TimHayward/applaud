@@ -552,6 +552,11 @@ export interface PlaudAutomationNextResponse {
   names: boolean;
   cards: boolean;
   paused: string | null;
+  /**
+   * Settings asked for a connection test: open Plaud, check the sign-in and
+   * report with `test: true`, sending nothing. Absent from older Applaud.
+   */
+  test?: boolean;
 }
 
 /** `POST /api/plaud-writeback/automation/heartbeat`: what the automation browser did. */
@@ -567,6 +572,15 @@ export interface PlaudAutomationHeartbeat {
   error?: string;
   /** Plaud answered in a shape the extension doesn't recognise: automation pauses (P6). */
   shapeError?: boolean;
+  /** This check-in answers a connection test from Settings. */
+  test?: boolean;
+}
+
+/** The last connection test's result. */
+export interface PlaudAutomationTestResult {
+  at: number;
+  plaudSignedIn: boolean | null;
+  error: string | null;
 }
 
 /** `GET /api/plaud-writeback/automation/status`, for Settings and the Dashboard. */
@@ -588,6 +602,8 @@ export interface PlaudAutomationStatus {
   paused: string | null;
   /** Automation is on and the browser is signed out, or hasn't checked in for 30 minutes. */
   needsAttention: "signed_out" | "not_seen" | "paused" | null;
+  /** Connection test: when one was asked for and not yet answered, and the last answer. */
+  test: { requestedAt: number | null; last: PlaudAutomationTestResult | null };
 }
 
 /** `PUT /api/plaud-writeback/automation`. */

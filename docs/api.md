@@ -110,12 +110,13 @@ The browser container's routes ([Portainer guide](portainer.md#automatic-plaud-s
 
 | Method | Path | Who | Description |
 | --- | --- | --- | --- |
-| GET | `/api/plaud-writeback/automation/next` | automation | `{ enabled, due, names, cards, paused }`: whether to run now. Due every 5 minutes, or after Run now. |
+| GET | `/api/plaud-writeback/automation/next` | automation | `{ enabled, due, names, cards, paused, test? }`: whether to run now. Due every 5 minutes, or after Run now. `test: true` asks for a connection test instead: open Plaud, check the sign-in, send nothing. |
 | GET | `/api/plaud-writeback/automation/pending` | automation | As `/pending`, less recordings sent and awaiting Applaud's re-read, and those that failed or conflicted in the last 6 hours. Empty unless names are on here and under Speaker identification. |
-| POST | `/api/plaud-writeback/automation/heartbeat` | automation | Body: `{ plaudSignedIn, ran, sent, conflicts, failed, cards, error?, shapeError? }`. `shapeError` pauses automatic sync. |
-| GET | `/api/plaud-writeback/automation/status` | web UI | Settings, last check-in, last run, Plaud sign-in state, pause reason, and `needsAttention` (`signed_out`, `not_seen`, `paused` or null). |
+| POST | `/api/plaud-writeback/automation/heartbeat` | automation | Body: `{ plaudSignedIn, ran, sent, conflicts, failed, cards, error?, shapeError?, test? }`. `shapeError` pauses automatic sync; `test` answers a connection test and doesn't count as a run. |
+| GET | `/api/plaud-writeback/automation/status` | web UI | Settings, last check-in, last run, Plaud sign-in state, pause reason, `needsAttention` (`signed_out`, `not_seen`, `paused` or null), and `test` (`requestedAt` while a connection test is waiting, `last` result). |
 | PUT | `/api/plaud-writeback/automation` | web UI | Body: any of `{ enabled, names, cards, viewerUrl }`. Turning it on writes the credential (409 without `APPLAUD_AUTOMATION_DIR`); turning it off deletes it and revokes the token. |
 | POST | `/api/plaud-writeback/automation/run` | web UI | Run at the browser's next check-in. |
+| POST | `/api/plaud-writeback/automation/test` | web UI | Connection test at the browser's next check-in: it opens Plaud, checks the sign-in and reports, sending nothing. Allowed while paused. |
 | POST | `/api/plaud-writeback/automation/resume` | web UI | Clear a pause and run at the next check-in. |
 
 ## Sync

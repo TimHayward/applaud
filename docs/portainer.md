@@ -197,7 +197,7 @@ There is no pairing code. Applaud gives the browser its own credential through t
 2. In Applaud, open **Settings → Automatic Plaud sync** and turn it on. Turn on **Send names to Plaud** under Speaker identification too, if you want names sent.
 3. Choose **Open the browser** (`https://<host>:3001`). Your browser will warn about the viewer's self-signed certificate; accept it. Sign in with `applaud` (or your `APPLAUD_BROWSER_USER`) and the password. A Plaud tab is already open: sign in to Plaud there, then close the viewer.
 
-The card then shows the browser as connected and Plaud as signed in. If Plaud signs the browser out, the card and the Recordings page say so; open the browser and sign in again.
+The card then shows the browser as connected and Plaud as signed in. After you reopen, refresh or reconfigure the browser container, choose **Test connection**: within a minute the browser opens Plaud, checks it is signed in and reports back, without sending anything. If Plaud signs the browser out, the card and the Recordings page say so; open the browser and sign in again.
 
 **Security**
 

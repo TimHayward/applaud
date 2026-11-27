@@ -237,6 +237,8 @@ export const api = {
     jsonFetch<PlaudAutomationStatus>("/api/plaud-writeback/automation/run", { method: "POST", body: "{}" }),
   resumePlaudAutomation: () =>
     jsonFetch<PlaudAutomationStatus>("/api/plaud-writeback/automation/resume", { method: "POST", body: "{}" }),
+  testPlaudAutomation: () =>
+    jsonFetch<PlaudAutomationStatus>("/api/plaud-writeback/automation/test", { method: "POST", body: "{}" }),
   speakerPeople: () => jsonFetch<SpeakerPeopleResponse>("/api/speakers/people"),
   renamePerson: (id: number, name: string) =>
     jsonFetch<SpeakerPeopleResponse>(`/api/speakers/people/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),

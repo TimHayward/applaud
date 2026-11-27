@@ -9,6 +9,7 @@ import {
   type PlaudAutomationHeartbeat,
   type PlaudAutomationNextResponse,
   type PlaudAutomationStatus,
+  type PlaudAutomationTestResult,
   type PlaudWritebackRecording,
 } from "@applaud/shared";
 import { getDb } from "../db.js";
@@ -42,6 +43,9 @@ const CLIENT_NAME = "Applaud browser (automatic)";
 
 let dirOverride: string | null | undefined;
 let runRequestedAt: number | null = null;
+/** "Test connection" in Settings: asked for, not yet answered by the browser. */
+let testRequestedAt: number | null = null;
+let lastTest: PlaudAutomationTestResult | null = null;
 
 function automationDir(): string | null {
   return dirOverride !== undefined ? dirOverride : AUTOMATION_DIR;
@@ -51,6 +55,8 @@ function automationDir(): string | null {
 export function setAutomationDirForTests(dir: string | null | undefined): void {
   dirOverride = dir;
   runRequestedAt = null;
+  testRequestedAt = null;
+  lastTest = null;
 }
 
 export function automationAvailable(): boolean {
@@ -180,12 +186,26 @@ export function next(
     paused === null &&
     (a.names || a.cards) &&
     (requested || last === null || now - last >= RUN_INTERVAL_MS);
-  return { enabled: a.enabled, due, names: a.names, cards: a.cards, paused };
+  // A test goes first, even while paused (it sends nothing); the run waits a check-in.
+  const test = a.enabled && testRequestedAt !== null;
+  return {
+    enabled: a.enabled,
+    due: due && !test,
+    names: a.names,
+    cards: a.cards,
+    paused,
+    ...(test ? { test: true } : {}),
+  };
 }
 
 /** "Run now" in Settings: the browser runs at its next check-in, within a minute. */
 export function requestRun(now = Date.now()): void {
   runRequestedAt = now;
+}
+
+/** "Test connection" in Settings: the browser checks Plaud at its next check-in, within a minute. */
+export function requestTest(now = Date.now()): void {
+  testRequestedAt = now;
 }
 
 export function recordHeartbeat(
@@ -200,12 +220,17 @@ export function recordHeartbeat(
   // check-in only refreshes the sign-in state. Sign-in "unknown" (no Plaud
   // tab was looked at) keeps the last known state.
   const prevRow = getDb()
-    .prepare("SELECT last_heartbeat FROM plaud_writeback_clients WHERE id = ?")
-    .get(clientId) as { last_heartbeat: string | null } | undefined;
+    .prepare("SELECT last_heartbeat, last_heartbeat_at FROM plaud_writeback_clients WHERE id = ?")
+    .get(clientId) as
+    { last_heartbeat: string | null; last_heartbeat_at: number | null } | undefined;
   const prev = lastHeartbeat(prevRow ?? null);
   const plaudSignedIn = hb.plaudSignedIn ?? prev?.plaudSignedIn ?? null;
+  const { test: _test, ...body } = hb;
   const stored: PlaudAutomationHeartbeat =
-    hb.ran || !prev ? { ...hb, plaudSignedIn } : { ...prev, plaudSignedIn };
+    hb.ran || !prev ? { ...body, plaudSignedIn } : { ...prev, plaudSignedIn };
+  // A test answer doesn't count towards the run cadence, so a routine run or a
+  // "Run now" asked for before it still happens on time.
+  const heartbeatAt = hb.test ? (prevRow?.last_heartbeat_at ?? null) : now;
   getDb()
     .prepare(
       `UPDATE plaud_writeback_clients
@@ -214,8 +239,12 @@ export function recordHeartbeat(
            paused_reason = COALESCE(?, paused_reason)
        WHERE id = ?`,
     )
-    .run(now, JSON.stringify(stored), hb.ran ? 1 : 0, now, pause, clientId);
+    .run(heartbeatAt, JSON.stringify(stored), hb.ran ? 1 : 0, now, pause, clientId);
   if (pause) logger.warn({ reason: pause }, "automatic Plaud sync paused");
+  if (hb.test) {
+    testRequestedAt = null;
+    lastTest = { at: now, plaudSignedIn: hb.plaudSignedIn, error: hb.error ?? null };
+  }
 }
 
 export function resume(): void {
@@ -274,5 +303,6 @@ export function automationStatus(
     last,
     paused,
     needsAttention,
+    test: { requestedAt: a.enabled ? testRequestedAt : null, last: a.enabled ? lastTest : null },
   };
 }

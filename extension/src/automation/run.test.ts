@@ -114,6 +114,26 @@ function deps(
 }
 
 describe("runOnce", () => {
+  it("answers a connection test by checking Plaud, sending nothing", async () => {
+    const { d, heartbeats, plaud } = deps({ next: { test: true, due: false }, pending: ["a"] });
+    expect(await runOnce(d)).toBe("tested");
+    expect(plaud).toEqual(["open", "diagnose", "close"]);
+    expect(d.pending).not.toHaveBeenCalled();
+    expect(heartbeats).toEqual([
+      { plaudSignedIn: true, ran: false, test: true, sent: 0, conflicts: 0, failed: 0, cards: 0 },
+    ]);
+  });
+
+  it("reports a failed connection test", async () => {
+    const { d, heartbeats } = deps({ next: { test: true }, signedIn: false });
+    await runOnce(d);
+    expect(heartbeats[0]).toMatchObject({
+      plaudSignedIn: false,
+      test: true,
+      error: expect.any(String),
+    });
+  });
+
   it("does nothing when Applaud says a run isn't due", async () => {
     const { d, heartbeats, plaud } = deps({ next: { due: false }, pending: ["a"] });
     expect(await runOnce(d)).toBe("not_due");

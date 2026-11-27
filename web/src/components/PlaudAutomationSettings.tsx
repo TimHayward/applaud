@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PlaudAutomationStatus, PlaudAutomationUpdate } from "@applaud/shared";
+import type {
+  PlaudAutomationStatus,
+  PlaudAutomationTestResult,
+  PlaudAutomationUpdate,
+} from "@applaud/shared";
 import { api } from "../api.js";
 import { useToast } from "./Toast.js";
 import { formatRelative } from "../lib/format.js";
@@ -19,6 +23,16 @@ function defaultViewerAddress(s: Pick<PlaudAutomationStatus, "viewerPort">): str
 /** The viewer's address: as set, else the default one. */
 export function viewerAddress(s: Pick<PlaudAutomationStatus, "viewerUrl" | "viewerPort">): string {
   return s.viewerUrl || defaultViewerAddress(s);
+}
+
+/** The browser checks in every minute; a test unanswered after this has failed. */
+const TEST_TIMEOUT_MS = 90_000;
+
+/** A failed test, in words. */
+export function testResultText(t: PlaudAutomationTestResult): string {
+  if (t.plaudSignedIn === false)
+    return "the browser is signed out of Plaud. Open the browser and sign in";
+  return t.error ?? "the browser couldn't check Plaud";
 }
 
 /** An API error's message: the server's `error` text when it sent JSON. */
@@ -45,7 +59,8 @@ export function PlaudAutomationSettings(): JSX.Element {
   const status = useQuery({
     queryKey: AUTOMATION_QUERY_KEY,
     queryFn: api.plaudAutomationStatus,
-    refetchInterval: (q) => (q.state.data?.enabled ? 15_000 : 60_000),
+    refetchInterval: (q) =>
+      q.state.data?.test.requestedAt ? 3_000 : q.state.data?.enabled ? 15_000 : 60_000,
   });
   const speakers = useQuery({ queryKey: ["speaker-status"], queryFn: api.speakerStatus });
   const s = status.data;
@@ -70,6 +85,31 @@ export function PlaudAutomationSettings(): JSX.Element {
 
   const sendToPlaud = speakers.data?.enabled === true && speakers.data.sendToPlaud === true;
   const busy = working || !s;
+
+  // Connection test: the browser answers at its next check-in, within a minute.
+  const testing = s?.test.requestedAt ?? null;
+  // Re-render while waiting, so an unanswered test shows as such.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (testing === null) return;
+    const t = setInterval(() => setTick((n) => n + 1), 5_000);
+    return () => clearInterval(t);
+  }, [testing]);
+  const testStale = testing !== null && Date.now() - testing > TEST_TIMEOUT_MS;
+  const testStarted = useRef<number | null>(null);
+  const lastTest = s?.test.last ?? null;
+  useEffect(() => {
+    const started = testStarted.current;
+    if (started === null || !lastTest || lastTest.at < started) return;
+    testStarted.current = null;
+    if (lastTest.plaudSignedIn)
+      toast.success("Test passed: the browser is connected and signed in to Plaud.");
+    else toast.error(`Test failed: ${testResultText(lastTest)}.`);
+  }, [lastTest?.at]); // eslint-disable-line react-hooks/exhaustive-deps
+  const startTest = async (): Promise<void> => {
+    testStarted.current = Date.now();
+    await act(api.testPlaudAutomation, "Testing. The browser answers within a minute.");
+  };
 
   return (
     <section className="card p-8 space-y-6">
@@ -209,6 +249,28 @@ export function PlaudAutomationSettings(): JSX.Element {
                 "none yet"
               )}
             </dd>
+            {(testing !== null || lastTest) && (
+              <>
+                <dt className="text-on-surface-variant">Last test</dt>
+                <dd className="text-on-surface">
+                  {testing !== null && !testStale ? (
+                    "testing… waiting for the browser to check in"
+                  ) : testing !== null ? (
+                    <span className="text-error font-semibold">
+                      no answer: check the applaud-browser container is running, then test again
+                    </span>
+                  ) : lastTest!.plaudSignedIn ? (
+                    <>{formatRelative(lastTest!.at)} · passed: connected and signed in to Plaud</>
+                  ) : (
+                    <>
+                      {formatRelative(lastTest!.at)} ·{" "}
+                      <span className="text-error font-semibold">failed</span>:{" "}
+                      {testResultText(lastTest!)}
+                    </>
+                  )}
+                </dd>
+              </>
+            )}
           </dl>
 
           {s.paused && (
@@ -238,6 +300,15 @@ export function PlaudAutomationSettings(): JSX.Element {
               onClick={() => void act(api.runPlaudAutomation, "It runs within a minute.")}
             >
               Run now
+            </button>
+            <button
+              type="button"
+              className="px-4 py-2 rounded-lg border border-outline-variant text-on-surface text-sm font-semibold hover:bg-surface-container transition-colors disabled:opacity-50"
+              disabled={busy || (testing !== null && !testStale)}
+              title="Check the browser is connected and signed in to Plaud, after reopening, refreshing or reconfiguring it. Sends nothing."
+              onClick={() => void startTest()}
+            >
+              {testing !== null && !testStale ? "Testing…" : "Test connection"}
             </button>
             <label className="space-y-1 flex-grow max-w-md">
               <span className="block font-label text-xs font-semibold text-on-surface-variant uppercase tracking-wider">

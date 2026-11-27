@@ -4,6 +4,9 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+- **Test connection** in **Settings → Automatic Plaud sync**, for after you reopen, refresh or reconfigure the browser container. Within a minute the browser opens Plaud, checks it is signed in and reports back; the card shows whether it passed, and says so if the browser doesn't answer within 90 seconds. Nothing is sent, it works while automatic sync is paused, and it doesn't delay the next run. API: `POST /api/plaud-writeback/automation/test`.
+
 ## [0.7.0] - 2026-11-23
 
 ### Added

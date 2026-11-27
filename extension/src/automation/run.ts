@@ -41,7 +41,7 @@ export interface RunDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-export type RunOutcome = "not_due" | "idle" | "signed_out" | "ran" | "error";
+export type RunOutcome = "not_due" | "idle" | "signed_out" | "ran" | "tested" | "error";
 
 /** Plaud answered in a shape the extension doesn't recognise (plaud.ts): pause, don't guess (P6). */
 const SHAPE_PROBLEM = /reply was not JSON|has no document list|not in the expected shape/i;
@@ -73,8 +73,42 @@ function countBatch(state: BatchState, counts: Counts): string[] {
   return problems;
 }
 
+/**
+ * "Test connection" from Settings: open Plaud if it isn't open, check the
+ * sign-in, report, and close the tab again. Nothing is sent or fetched.
+ */
+async function testOnce(deps: RunDeps): Promise<RunOutcome> {
+  const zero = { sent: 0, conflicts: 0, failed: 0, cards: 0 };
+  let opened = false;
+  try {
+    opened = await deps.openPlaud();
+    const signedIn = await deps.signedIn();
+    await deps.heartbeat({
+      plaudSignedIn: signedIn,
+      ran: false,
+      test: true,
+      ...zero,
+      ...(signedIn ? {} : { error: "The automation browser is signed out of Plaud" }),
+    });
+  } catch (err) {
+    await deps
+      .heartbeat({
+        plaudSignedIn: null,
+        ran: false,
+        test: true,
+        ...zero,
+        error: message(err).slice(0, 2000),
+      })
+      .catch(() => undefined);
+  } finally {
+    if (opened) await deps.closePlaud().catch(() => undefined);
+  }
+  return "tested";
+}
+
 export async function runOnce(deps: RunDeps): Promise<RunOutcome> {
   const n = await deps.next();
+  if (n.test) return testOnce(deps);
   if (!n.due) return "not_due";
   await deps.flushUnreported().catch(() => undefined);
 
