@@ -2,6 +2,7 @@
 // `node build.mjs automation` builds the automation extension for the browser
 // container into dist-automation/ instead; the desktop build is unaffected.
 import { build } from "esbuild";
+import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +38,7 @@ if (automation) {
   cpSync(path.join(here, "static-automation"), out, { recursive: true });
   // Applaud's credential arrives here from the volume the browser container mounts.
   mkdirSync(path.join(out, "secret"), { recursive: true });
-  setVersion();
+  setVersion(automationBuild());
   process.exit(0);
 }
 
@@ -65,10 +66,19 @@ cpSync(path.join(here, "static"), out, { recursive: true });
 setVersion();
 
 // The extension carries the version of the Applaud release it was built with.
-function setVersion() {
+// The automation build adds a fourth part from its code, so Chromium in the
+// browser container sees a new version (and reloads it) whenever the code changes.
+function setVersion(build) {
   const { version } = JSON.parse(readFileSync(path.join(here, "package.json"), "utf8"));
   const manifestPath = path.join(out, "manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  manifest.version = version;
+  manifest.version = build === undefined ? version : `${version}.${build}`;
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/** 0–65535 from the built scripts' content: the same code gives the same number. */
+function automationBuild() {
+  const hash = createHash("sha256");
+  for (const f of ["worker.js", "content.js"]) hash.update(readFileSync(path.join(out, f)));
+  return parseInt(hash.digest("hex").slice(0, 4), 16);
 }

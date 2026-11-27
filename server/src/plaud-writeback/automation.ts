@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import {
   PLAUD_AUTOMATION_CLIENT_FILE,
+  PLAUD_AUTOMATION_FEATURES,
   plaudAutomationConfig,
   type AppConfig,
   type PlaudAutomationClientFile,
@@ -57,6 +58,7 @@ export function setAutomationDirForTests(dir: string | null | undefined): void {
   runRequestedAt = null;
   testRequestedAt = null;
   lastTest = null;
+  browserBuild = null;
 }
 
 export function automationAvailable(): boolean {
@@ -187,6 +189,12 @@ export function next(
     (a.names || a.cards) &&
     (requested || last === null || now - last >= RUN_INTERVAL_MS);
   // A test goes first, even while paused (it sends nothing); the run waits a check-in.
+  // A browser that can't answer a test fails it straight away; otherwise it
+  // would never run again, and Settings would wait for an answer.
+  if (testRequestedAt !== null && !browserSupports("test")) {
+    testRequestedAt = null;
+    lastTest = { at: now, plaudSignedIn: null, error: OUTDATED_BROWSER };
+  }
   const test = a.enabled && testRequestedAt !== null;
   return {
     enabled: a.enabled,
@@ -201,6 +209,30 @@ export function next(
 /** "Run now" in Settings: the browser runs at its next check-in, within a minute. */
 export function requestRun(now = Date.now()): void {
   runRequestedAt = now;
+}
+
+/** What the browser's extension build reported at its last check-in since Applaud started. */
+let browserBuild: { features: Set<string>; version: string | null } | null = null;
+
+export const OUTDATED_BROWSER =
+  "The browser container is running an older build of the automation extension, which can't be tested. Update the stack so the applaud-browser image is rebuilt (or pulled) at the same version as Applaud. If this still shows, open the browser, go to chrome://extensions and reload Applaud automation.";
+
+/** Record the browser's build from its check-in headers (none: a build from before they existed). */
+export function noteBrowserBuild(features: string | null, version: string | null): void {
+  browserBuild = {
+    features: new Set(
+      (features ?? "")
+        .split(",")
+        .map((f) => f.trim())
+        .filter(Boolean),
+    ),
+    version: version?.trim().slice(0, 40) || null,
+  };
+}
+
+/** Whether the browser can do `feature`; true until it has checked in since Applaud started. */
+export function browserSupports(feature: (typeof PLAUD_AUTOMATION_FEATURES)[number]): boolean {
+  return browserBuild === null || browserBuild.features.has(feature);
 }
 
 /** "Test connection" in Settings: the browser checks Plaud at its next check-in, within a minute. */
@@ -304,5 +336,12 @@ export function automationStatus(
     paused,
     needsAttention,
     test: { requestedAt: a.enabled ? testRequestedAt : null, last: a.enabled ? lastTest : null },
+    browser:
+      a.enabled && browserBuild
+        ? {
+            version: browserBuild.version,
+            outdated: PLAUD_AUTOMATION_FEATURES.some((f) => !browserBuild!.features.has(f)),
+          }
+        : null,
   };
 }

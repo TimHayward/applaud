@@ -539,6 +539,17 @@ export type PlaudCardRequest = { status: "found"; png: string } | { status: "non
 /** Where the automation browser's credential is written, inside `APPLAUD_AUTOMATION_DIR`. */
 export const PLAUD_AUTOMATION_CLIENT_FILE = "client.json";
 
+/**
+ * The automation browser lists what its build supports in this header on each
+ * check-in, so Applaud can tell a browser container older than itself. A
+ * build without the header predates all of them.
+ */
+export const PLAUD_AUTOMATION_FEATURES_HEADER = "x-applaud-automation-features";
+/** What this build of the automation extension supports. */
+export const PLAUD_AUTOMATION_FEATURES = ["test"] as const;
+/** The extension's own version, also sent on each check-in. */
+export const PLAUD_AUTOMATION_VERSION_HEADER = "x-applaud-automation-version";
+
 /** The file Applaud writes for the automation browser while automatic sync is on. */
 export interface PlaudAutomationClientFile {
   applaudUrl: string;
@@ -604,6 +615,12 @@ export interface PlaudAutomationStatus {
   needsAttention: "signed_out" | "not_seen" | "paused" | null;
   /** Connection test: when one was asked for and not yet answered, and the last answer. */
   test: { requestedAt: number | null; last: PlaudAutomationTestResult | null };
+  /**
+   * The browser's extension build, as it reported at its last check-in since
+   * Applaud started; null until then. `outdated` means it lacks features this
+   * Applaud uses (an older browser image, or Chromium still running old code).
+   */
+  browser: { version: string | null; outdated: boolean } | null;
 }
 
 /** `PUT /api/plaud-writeback/automation`. */

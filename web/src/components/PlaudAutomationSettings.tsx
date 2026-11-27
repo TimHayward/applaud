@@ -198,6 +198,7 @@ export function PlaudAutomationSettings(): JSX.Element {
                 <>
                   {s.needsAttention === "not_seen" ? "not checking in" : "connected"} · last
                   check-in {formatRelative(s.lastSeenAt)}
+                  {s.browser?.version ? ` · extension ${s.browser.version}` : ""}
                 </>
               ) : (
                 <>
@@ -257,7 +258,8 @@ export function PlaudAutomationSettings(): JSX.Element {
                     "testing… waiting for the browser to check in"
                   ) : testing !== null ? (
                     <span className="text-error font-semibold">
-                      no answer: check the applaud-browser container is running, then test again
+                      no answer: check the applaud-browser container is running and up to date, then
+                      test again
                     </span>
                   ) : lastTest!.plaudSignedIn ? (
                     <>{formatRelative(lastTest!.at)} · passed: connected and signed in to Plaud</>
@@ -272,6 +274,16 @@ export function PlaudAutomationSettings(): JSX.Element {
               </>
             )}
           </dl>
+
+          {s.browser?.outdated && (
+            <p className="text-sm text-error bg-error/10 border border-error/30 rounded-lg px-3 py-2 max-w-prose">
+              The browser container is running an older build of the automation extension than this
+              Applaud, so some features (such as Test connection) don&apos;t work. Update the stack
+              so the <code>applaud-browser</code> image is rebuilt or pulled at the same version. If
+              this still shows, open the browser, go to <code>chrome://extensions</code> and reload{" "}
+              <strong>Applaud automation</strong>.
+            </p>
+          )}
 
           {s.paused && (
             <div className="flex flex-wrap items-center gap-4 text-sm bg-error/10 border border-error/30 rounded-lg px-3 py-2">
@@ -304,7 +316,7 @@ export function PlaudAutomationSettings(): JSX.Element {
             <button
               type="button"
               className="px-4 py-2 rounded-lg border border-outline-variant text-on-surface text-sm font-semibold hover:bg-surface-container transition-colors disabled:opacity-50"
-              disabled={busy || (testing !== null && !testStale)}
+              disabled={busy || (testing !== null && !testStale) || s.browser?.outdated === true}
               title="Check the browser is connected and signed in to Plaud, after reopening, refreshing or reconfiguring it. Sends nothing."
               onClick={() => void startTest()}
             >

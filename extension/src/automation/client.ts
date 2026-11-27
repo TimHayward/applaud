@@ -6,6 +6,9 @@
  */
 import {
   PLAUD_AUTOMATION_CLIENT_FILE,
+  PLAUD_AUTOMATION_FEATURES,
+  PLAUD_AUTOMATION_FEATURES_HEADER,
+  PLAUD_AUTOMATION_VERSION_HEADER,
   PLAUD_WRITEBACK_PROTOCOL,
   PLAUD_WRITEBACK_PROTOCOL_HEADER,
   type PlaudAutomationClientFile,
@@ -41,6 +44,8 @@ export class AutomationClient {
     private readonly origin: string,
     private readonly token: string,
     private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
+    /** The extension's manifest version, reported so Settings can spot an old build. */
+    private readonly version: string | null = null,
   ) {}
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -51,6 +56,8 @@ export class AutomationClient {
         headers: {
           "content-type": "application/json",
           [PLAUD_WRITEBACK_PROTOCOL_HEADER]: String(PLAUD_WRITEBACK_PROTOCOL),
+          [PLAUD_AUTOMATION_FEATURES_HEADER]: PLAUD_AUTOMATION_FEATURES.join(","),
+          ...(this.version ? { [PLAUD_AUTOMATION_VERSION_HEADER]: this.version } : {}),
           authorization: `Bearer ${this.token}`,
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),

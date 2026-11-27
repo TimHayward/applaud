@@ -6,6 +6,7 @@ All notable changes to Applaud are documented here. The format follows [Keep a C
 
 ### Added
 - **Test connection** in **Settings → Automatic Plaud sync**, for after you reopen, refresh or reconfigure the browser container. Within a minute the browser opens Plaud, checks it is signed in and reports back; the card shows whether it passed, and says so if the browser doesn't answer within 90 seconds. Nothing is sent, it works while automatic sync is paused, and it doesn't delay the next run. API: `POST /api/plaud-writeback/automation/test`.
+- **Settings spots a browser container older than Applaud.** The automation browser reports its extension's version and features at each check-in. When it's behind, **Automatic Plaud sync** says so and how to update it, and **Test connection** fails at once instead of waiting. The automation build's version now ends in a number taken from its code (for example `0.7.0.61958`), so Chromium in the container loads new code rather than keeping the old.
 
 ## [0.7.0] - 2026-11-23
 

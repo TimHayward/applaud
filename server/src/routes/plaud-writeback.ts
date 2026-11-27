@@ -1,6 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 import {
+  PLAUD_AUTOMATION_FEATURES_HEADER,
+  PLAUD_AUTOMATION_VERSION_HEADER,
   PLAUD_WRITEBACK_PROTOCOL,
   PLAUD_WRITEBACK_PROTOCOL_HEADER,
   plaudAutomationConfig,
@@ -43,6 +45,9 @@ import {
   recordHeartbeat,
   requestRun,
   requestTest,
+  browserSupports,
+  noteBrowserBuild,
+  OUTDATED_BROWSER,
   resume as resumeAutomation,
 } from "../plaud-writeback/automation.js";
 import { clientKey, createRateLimiter } from "../security/rate-limit.js";
@@ -412,7 +417,11 @@ plaudWritebackRouter.delete("/clients/:id", uiOnly, (req, res) => {
 // ── Automatic Plaud sync (the browser container) ──
 
 /** The automation browser asks every minute whether to run. */
-plaudWritebackRouter.get("/automation/next", automationOnly, (_req, res) => {
+plaudWritebackRouter.get("/automation/next", automationOnly, (req, res) => {
+  noteBrowserBuild(
+    req.get(PLAUD_AUTOMATION_FEATURES_HEADER) ?? null,
+    req.get(PLAUD_AUTOMATION_VERSION_HEADER) ?? null,
+  );
   res.json(automationNext(loadConfig()));
 });
 
@@ -527,6 +536,10 @@ plaudWritebackRouter.post("/automation/run", uiOnly, (_req, res) => {
 plaudWritebackRouter.post("/automation/test", uiOnly, (_req, res) => {
   if (!plaudAutomationConfig(loadConfig()).enabled) {
     res.status(409).json({ error: "automatic Plaud sync is off" });
+    return;
+  }
+  if (!browserSupports("test")) {
+    res.status(409).json({ error: OUTDATED_BROWSER });
     return;
   }
   requestTest();

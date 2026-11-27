@@ -8,6 +8,8 @@ import type Database from "better-sqlite3";
 import {
   DEFAULT_CONFIG,
   DEFAULT_SPEAKER_CONFIG,
+  PLAUD_AUTOMATION_FEATURES,
+  PLAUD_AUTOMATION_FEATURES_HEADER,
   PLAUD_WRITEBACK_PROTOCOL,
   PLAUD_WRITEBACK_PROTOCOL_HEADER,
   type PlaudDocument,
@@ -206,8 +208,20 @@ describe("plaudWritebackRouter", () => {
       },
     });
 
-  const nextRun = async (token: string) =>
-    (await (await call("GET", "/automation/next", { token })).json()) as {
+  /** A check-in from the current automation extension, which lists its features. */
+  const nextRun = async (
+    token: string,
+    features: string | null = PLAUD_AUTOMATION_FEATURES.join(","),
+  ) =>
+    (await (
+      await fetch(`${baseUrl}/automation/next`, {
+        headers: {
+          authorization: `Bearer ${token}`,
+          [PLAUD_WRITEBACK_PROTOCOL_HEADER]: String(PLAUD_WRITEBACK_PROTOCOL),
+          ...(features !== null ? { [PLAUD_AUTOMATION_FEATURES_HEADER]: features } : {}),
+        },
+      })
+    ).json()) as {
       enabled: boolean;
       due: boolean;
       paused: string | null;
@@ -351,6 +365,33 @@ describe("plaudWritebackRouter", () => {
     expect(s).toMatchObject({ plaudSignedIn: false, last: { sent: 2 } });
     expect(await nextRun(token)).toMatchObject({ due: true });
     expect((await nextRun(token)).test).toBeUndefined();
+  });
+
+  it("spots a browser older than Applaud, fails its test at once and keeps it running", async () => {
+    const token = await enableAutomation();
+    await heartbeat(token, { ran: true, plaudSignedIn: true });
+    // Asked for while the browser hadn't checked in yet, so allowed.
+    expect((await call("POST", "/automation/test", { token: LAN })).status).toBe(200);
+    // An old build sends no features: the test fails and a due run isn't held back.
+    expect((await call("POST", "/automation/run", { token: LAN })).status).toBe(200);
+    expect(await nextRun(token, null)).toMatchObject({ due: true });
+    type Status = {
+      browser: { outdated: boolean } | null;
+      test: { requestedAt: number | null; last: { error: string | null } | null };
+    };
+    const s = (await (await call("GET", "/automation/status", { token: LAN })).json()) as Status;
+    expect(s.browser).toMatchObject({ outdated: true });
+    expect(s.test.requestedAt).toBeNull();
+    expect(s.test.last?.error).toMatch(/older build/);
+    const res = await call("POST", "/automation/test", { token: LAN });
+    expect(res.status).toBe(409);
+
+    // The current build clears the warning.
+    await nextRun(token);
+    const after = (await (
+      await call("GET", "/automation/status", { token: LAN })
+    ).json()) as Status;
+    expect(after.browser).toMatchObject({ outdated: false });
   });
 
   it("runs on Applaud's cadence or on Run now, and pauses on a shape it doesn't recognise", async () => {

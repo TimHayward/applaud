@@ -150,7 +150,12 @@ async function tick(): Promise<void> {
     const cred = await loadCredential(chrome.runtime.getURL(CREDENTIAL_PATH));
     if (!cred) return; // Automatic sync is off in Applaud.
     const app = new ApplaudClient(cred.applaudUrl, cred.token);
-    const auto = new AutomationClient(cred.applaudUrl, cred.token);
+    const auto = new AutomationClient(
+      cred.applaudUrl,
+      cred.token,
+      undefined,
+      chrome.runtime.getManifest().version,
+    );
     const sendDeps: SendDeps = {
       readPlaud: (fileId) => askPlaud({ type: "plaud.read", fileId }),
       writePlaud: (fileId, writes) => askPlaud({ type: "plaud.write", fileId, writes }),
